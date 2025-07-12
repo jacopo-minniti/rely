@@ -46,8 +46,8 @@ HOST="0.0.0.0"
 PORT="8000"
 
 # --- Parallelism Configuration ---
-TENSOR_PARALLEL_SIZE=4
-DATA_PARALLEL_SIZE=$((NUM_GPUS / TENSOR_PARALLEL_SIZE))
+TENSOR_PARALLEL_SIZE=1
+DATA_PARALLEL_SIZE=8
 
 
 # --- Pre-flight Check ---
