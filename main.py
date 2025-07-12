@@ -142,6 +142,7 @@ def math_shepherd(args):
 
     start_processing_time = time.time()
     completed_steps = 0
+    newly_processed_count = 0
     with ThreadPoolExecutor(max_workers=args.num_workers) as executor:
         futures = [executor.submit(process_example, example) for example in all_examples]
         
@@ -149,8 +150,11 @@ def math_shepherd(args):
             result, duration, is_new = future.result()
             completed_steps += 1
             
+            if is_new:
+                newly_processed_count += 1
+
             total_elapsed_time = time.time() - start_processing_time
-            steps_per_minute = (completed_steps / total_elapsed_time) * 60 if total_elapsed_time > 0 else 0
+            steps_per_minute = (newly_processed_count / total_elapsed_time) * 60 if total_elapsed_time > 0 else 0
             
             tqdm.write(f"Step processed in {duration:.2f} seconds. Rate: {steps_per_minute:.2f} steps/min.")
             if result:
@@ -181,12 +185,12 @@ if __name__ == "__main__":
     parser.add_argument("--inference_model_name", type=str, default="Qwen/Qwen3-30B-A3B", help="Name of the inference model.")
     parser.add_argument("--extractor_model_name", type=str, default="jacopo-minniti/Qwen2.5-7B-base", help="Name of the extractor model.")
     parser.add_argument("--source_dataset_name", type=str, default="jacopo-minniti/s1k-deepseek-base", help="Name of the source dataset.")
-    parser.add_argument("--max_answer_tokens", type=int, default=500, help="Maximum number of tokens for the answer.")
-    parser.add_argument("--max_reasoning_tokens", type=int, default=1000, help="Maximum number of tokens for reasoning.")
+    parser.add_argument("--max_answer_tokens", type=int, default=600, help="Maximum number of tokens for the answer.")
+    parser.add_argument("--max_reasoning_tokens", type=int, default=2000, help="Maximum number of tokens for reasoning.")
     parser.add_argument("--output_dataset_path", type=str, default="./value-head-s1", help="Path to save the output dataset files.")
     parser.add_argument("--inference_mode", type=str, default="vllm", choices=["vllm", "api"], help="Inference mode to use.")
     parser.add_argument("--n", type=int, default=4, help="Number of completions to generate for evaluation.")
-    parser.add_argument("--save_interval", type=int, default=5, help="How many data points to batch before saving to a new file.")
+    parser.add_argument("--save_interval", type=int, default=50, help="How many data points to batch before saving to a new file.")
     parser.add_argument("--mode", type=str, default="both", choices=["both", "eval", "extract"], help="Operation mode: 'both', 'eval', or 'extract'.")
     parser.add_argument("--num_workers", type=int, default=10, help="Number of parallel workers for processing the dataset.")
     
