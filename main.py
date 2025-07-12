@@ -182,7 +182,7 @@ if __name__ == "__main__":
     parser.add_argument("--output_dataset_path", type=str, default="./value-head-s1", help="Path to save the output dataset files.")
     parser.add_argument("--inference_mode", type=str, default="vllm", choices=["vllm", "api"], help="Inference mode to use.")
     parser.add_argument("--n", type=int, default=4, help="Number of completions to generate for evaluation.")
-    parser.add_argument("--save_interval", type=int, default=30, help="How many data points to batch before saving to a new file.")
+    parser.add_argument("--save_interval", type=int, default=50, help="How many data points to batch before saving to a new file.")
     parser.add_argument("--mode", type=str, default="both", choices=["both", "eval", "extract"], help="Operation mode: 'both', 'eval', or 'extract'.")
     
     args = parser.parse_args()

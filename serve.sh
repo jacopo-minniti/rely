@@ -46,8 +46,8 @@ HOST="0.0.0.0"
 PORT="8000"
 
 # --- Parallelism Configuration ---
-TENSOR_PARALLEL_SIZE=2
-DATA_PARALLEL_SIZE=4
+TENSOR_PARALLEL_SIZE=8
+DATA_PARALLEL_SIZE=1
 
 
 # --- Pre-flight Check ---
@@ -79,7 +79,6 @@ SERVER_CMD="vllm serve \"${MODEL}\" \
     --enable-prefix-caching \
     --enable_expert_parallel \
     --generation_config 'auto' \
-    --gpu_memory_utilization 0.95 \
     --dtype 'bfloat16'"
 
 tmux send-keys -t "${SESSION_NAME}:0.0" "${SERVER_CMD}" C-m
