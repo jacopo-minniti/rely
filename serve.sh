@@ -39,7 +39,7 @@ SESSION_NAME="completer"
 MODEL="Qwen/Qwen3-30B-A3B"
 
 # The number of GPUs to use.
-NUM_GPUS=4
+NUM_GPUS=8
 
 # vLLM API server configuration
 HOST="0.0.0.0"

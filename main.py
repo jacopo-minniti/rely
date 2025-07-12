@@ -25,7 +25,10 @@ def math_shepherd(args):
     else:
         raise ValueError(f"Invalid INFERENCE_MODE: {args.inference_mode}")
 
-    activation_extractor = ActivationsExtractor(args.extractor_model_name)
+    # load model only if needed
+    if args.mode in ['extract', 'both']:
+        activation_extractor = ActivationsExtractor(args.extractor_model_name)
+    
     evaluator = Evaluator(inference_engine)
     
     # 2. Load source data
