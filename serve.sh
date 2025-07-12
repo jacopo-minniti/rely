@@ -79,6 +79,7 @@ SERVER_CMD="vllm serve \"${MODEL}\" \
     --enable-prefix-caching \
     --enable_expert_parallel \
     --generation_config 'auto' \
+    --gpu_memory_utilization 0.95 \
     --dtype 'bfloat16'"
 
 tmux send-keys -t "${SESSION_NAME}:0.0" "${SERVER_CMD}" C-m
