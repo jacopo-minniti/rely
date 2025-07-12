@@ -77,7 +77,7 @@ SERVER_CMD="vllm serve \"${MODEL}\" \
     --tensor-parallel-size ${TENSOR_PARALLEL_SIZE} \
     --data-parallel-size ${DATA_PARALLEL_SIZE} \
     --enable-prefix-caching \
-    --enable_expert_parallel \
+    --enable-expert-parallel \
     --generation_config 'auto' \
     --dtype 'bfloat16'"
 

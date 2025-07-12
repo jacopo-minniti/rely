@@ -3,9 +3,11 @@ import time
 import random
 import os
 import hashlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import torch
 from dotenv import load_dotenv
+from tqdm import tqdm
 
 from rely.inference import VLLMInference, APIInference
 from rely.extract import ActivationsExtractor
@@ -28,6 +30,8 @@ def math_shepherd(args):
     # load model only if needed
     if args.mode in ['extract', 'both']:
         activation_extractor = ActivationsExtractor(args.extractor_model_name)
+    else:
+        activation_extractor = None
     
     evaluator = Evaluator(inference_engine)
     
@@ -58,56 +62,48 @@ def math_shepherd(args):
     print(f"Found {len(processed_data)} existing data points.")
     
     # 3. Iterate through the source dataset
+    all_examples = list(source_dataset)
     new_data_points = []
-    for i, example in enumerate(source_dataset):
+
+    def process_example(example):
+        start_time = time.time()
+        is_newly_processed = False
         try:
             problem = example['question']
-            
-            # Generate a unique hash for the problem
             problem_hash = hashlib.sha256(problem.encode()).hexdigest()
 
-            # Initialize variables
             data_point = {}
             score = -1
             activations = torch.Tensor()
 
-            # Load existing data point if it exists in our cache
             if problem_hash in processed_data:
-                print(f"Loading existing data point for problem {i+1}/{len(source_dataset)}")
                 data_point = processed_data[problem_hash]
                 score = data_point.get('prm_score', -1)
                 activations = data_point.get('activations', torch.Tensor())
-            
+            else:
+                is_newly_processed = True
+
             ground_truth = example['cleaned_solution']
             decomposed_cot = example['decomposed_cot']
-            
             steps = parse_decomposed_cot(decomposed_cot)
             
             if not steps:
-                print(f"    -> ⚠️ No steps found for example {i}. Skipping.")
-                continue
+                return None
 
-            # Use existing step index or randomly sample one
             step_idx = data_point.get('step_index')
             if step_idx is None:
                 step_idx = random.randint(0, len(steps) - 1)
                 data_point['step_index'] = step_idx
 
-            print(f"\nProcessing example {i+1}/{len(source_dataset)}: '{problem[:50]}...'\tStep {step_idx + 1}/{len(steps)}")
-            
-            # Reconstruct the continuous CoT prompt up to the sampled step
             continuous_cot_prompt = ""
             for j in range(step_idx + 1):
                 raw_step_content = steps[j].replace("<step>", "").replace("</step>", "").strip()
                 continuous_cot_prompt += ("\n" if continuous_cot_prompt else "") + raw_step_content
 
-            # Convert to discrete CoT for saving and extraction
             discrete_cot_prompt = convert_to_discrete_cot(continuous_cot_prompt)
 
             # --- Evaluation Logic ---
             if args.mode in ['eval', 'both'] and score == -1:
-                print(f"  - Evaluating Step {step_idx + 1}/{len(steps)}...")
-                start = time.time()
                 score = evaluator.evaluate(
                     problem,
                     continuous_cot_prompt,
@@ -117,51 +113,59 @@ def math_shepherd(args):
                     n=args.n,
                     hard=False
                 )
-                print(f"    -> Soft Score: {score:.2f} ({int(time.time() - start)} seconds)")
-            elif score != -1:
-                 print(f"  - Skipping evaluation, score already exists: {score:.2f}")
-
 
             # --- Extraction Logic ---
-            if args.mode in ['extract', 'both'] and activations.numel() == 0:
-                print(f"  - Extracting activations for Step {step_idx + 1}...")
+            if args.mode in ['extract', 'both'] and activations.numel() == 0 and activation_extractor:
                 full_step_prompt_for_extraction = inference_engine._generate_full_prompt(
                     problem, 
                     discrete_cot_prompt
                 )
                 activations = activation_extractor.get_step_activations(full_step_prompt_for_extraction)
-                
                 if activations is None:
-                    print(f"    -> ⚠️ Could not extract activations. Storing empty tensor.")
                     activations = torch.Tensor()
-                else:
-                    print(f"    -> Activations Tensor Shape: {activations.shape}")
-            elif activations.numel() > 0:
-                print(f"  - Skipping extraction, activations already exist. Shape: {activations.shape}")
-
 
             # Update data_point dictionary
             data_point.update({
                 "problem": problem,
                 "step_content": discrete_cot_prompt, # Save the discrete CoT
                 "activations": activations,
-                "prm_score": score
+                "prm_score": score,
+                "step_index": step_idx
             })
-
-            # Add the data point to the batch to be saved
-            new_data_points.append(data_point)
-            processed_data[problem_hash] = data_point # Update cache to avoid reprocessing in same run
-
-            # Save the batch of data points periodically
-            if len(new_data_points) >= args.save_interval:
-                file_path = os.path.join(output_dir, f"batch_{int(time.time())}.pt")
-                torch.save(new_data_points, file_path)
-                print(f"💾 Saved batch of {len(new_data_points)} data points to {file_path}")
-                new_data_points = []
+            duration = time.time() - start_time
+            return data_point, duration, is_newly_processed
 
         except Exception as e:
-            print(f"❌ Error processing example {i+1}. Skipping. Error: {e}")
-            continue
+            print(f"❌ Error processing an example. Skipping. Error: {e}")
+            duration = time.time() - start_time
+            return None, duration, False
+
+    start_processing_time = time.time()
+    completed_steps = 0
+    with ThreadPoolExecutor(max_workers=args.num_workers) as executor:
+        futures = [executor.submit(process_example, example) for example in all_examples]
+        
+        for future in tqdm(as_completed(futures), total=len(all_examples), desc="Processing dataset"):
+            result, duration, is_new = future.result()
+            completed_steps += 1
+            
+            total_elapsed_time = time.time() - start_processing_time
+            steps_per_minute = (completed_steps / total_elapsed_time) * 60 if total_elapsed_time > 0 else 0
+            
+            tqdm.write(f"Step processed in {duration:.2f} seconds. Rate: {steps_per_minute:.2f} steps/min.")
+            if result:
+                if is_new:
+                    new_data_points.append(result)
+                
+                problem_hash = hashlib.sha256(result['problem'].encode()).hexdigest()
+                processed_data[problem_hash] = result
+
+                # Save the batch of data points periodically
+                if len(new_data_points) >= args.save_interval:
+                    file_path = os.path.join(output_dir, f"batch_{int(time.time())}.pt")
+                    torch.save(new_data_points, file_path)
+                    print(f"💾 Saved batch of {len(new_data_points)} data points to {file_path}")
+                    new_data_points = []
 
     # Save any remaining data points
     if new_data_points:
@@ -182,8 +186,9 @@ if __name__ == "__main__":
     parser.add_argument("--output_dataset_path", type=str, default="./value-head-s1", help="Path to save the output dataset files.")
     parser.add_argument("--inference_mode", type=str, default="vllm", choices=["vllm", "api"], help="Inference mode to use.")
     parser.add_argument("--n", type=int, default=4, help="Number of completions to generate for evaluation.")
-    parser.add_argument("--save_interval", type=int, default=50, help="How many data points to batch before saving to a new file.")
+    parser.add_argument("--save_interval", type=int, default=5, help="How many data points to batch before saving to a new file.")
     parser.add_argument("--mode", type=str, default="both", choices=["both", "eval", "extract"], help="Operation mode: 'both', 'eval', or 'extract'.")
+    parser.add_argument("--num_workers", type=int, default=10, help="Number of parallel workers for processing the dataset.")
     
     args = parser.parse_args()
     math_shepherd(args)
