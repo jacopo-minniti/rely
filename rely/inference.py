@@ -132,9 +132,7 @@ class VLLMInference(BaseInference):
         full_prompt = self._generate_full_prompt(problem, current_step_prompt)
 
         try:
-            # Note: vLLM's OpenAI endpoint can take a list of prompts, but we pass one and use n.
-            # If different temperatures per generation are needed, multiple API calls would be required
-            # as the standard completions endpoint doesn't support per-request sampling params in a batch.
+            # First generation call
             completion = self.client.completions.create(
                 model=self.model_name,
                 prompt=full_prompt,
@@ -142,50 +140,51 @@ class VLLMInference(BaseInference):
                 stream=False,
                 temperature=temperature,
                 stop=self.think_end_str,
-                n=n, # Generate n completions
+                n=n,
                 extra_body={'skip_special_tokens': False}
             )
-            
-            final_answers = []
-            for choice in completion.choices:
+
+            final_answers = [None] * n
+            prompts_for_second_call = []
+            indices_for_second_call = []
+
+            # Process first-stage completions
+            for i, choice in enumerate(completion.choices):
                 generated_text = choice.text
-                
-                # The model should generate both reasoning and the final answer.
-                # We split the thinking part from the final answer part.
                 if self.think_end_str in generated_text:
-                    thinking_content, final_answer_part = generated_text.split(self.think_end_str, 1)
+                    _, final_answer_part = generated_text.split(self.think_end_str, 1)
+                    boxed_answer = re.search(r"\\boxed{([^}]+)}", final_answer_part)
+                    final_answers[i] = boxed_answer.group(1) if boxed_answer else final_answer_part.strip()
                 else:
-                    # If the model didn't output </think>, we assume the whole output is reasoning.
-                    # We append </think> and generate the final answer in a second step.
+                    # This generation needs a second step to get the final answer
                     thinking_content = generated_text
-                    
-                    # Construct prompt for the second generation to get the final answer
                     answer_prompt = full_prompt + thinking_content + f"\n{self.think_end_str}\nSo final answer is: "
-                    
-                    answer_completion = self.client.completions.create(
-                        model=self.model_name,
-                        prompt=answer_prompt,
-                        max_tokens=max_answer_tokens,
-                        stream=False,
-                        temperature=temperature,
-                        stop="<|im_end|>", # Stop at the end of the assistant's turn
-                        extra_body={'skip_special_tokens': False}
-                    )
-                    final_answer_part = answer_completion.choices[0].text
+                    prompts_for_second_call.append(answer_prompt)
+                    indices_for_second_call.append(i)
 
-                if not thinking_content:
-                    print("⚠️ Warning: No thinking content was generated.")
+            # If there are any prompts that need a second call, batch them together
+            if prompts_for_second_call:
+                second_completion = self.client.completions.create(
+                    model=self.model_name,
+                    prompt=prompts_for_second_call,
+                    max_tokens=max_answer_tokens,
+                    stream=False,
+                    temperature=temperature,
+                    stop="<|im_end|>",
+                    extra_body={'skip_special_tokens': False}
+                )
+                
+                for i, choice in enumerate(second_completion.choices):
+                    original_index = indices_for_second_call[i]
+                    final_answer_part = choice.text
+                    boxed_answer = re.search(r"\\boxed{([^}]+)}", final_answer_part)
+                    final_answers[original_index] = boxed_answer.group(1) if boxed_answer else final_answer_part.strip()
 
-                # Extract final answer from the 'text' part
-                boxed_answer = re.search(r"\\boxed{([^}]+)}", final_answer_part)
-                final_answer = boxed_answer.group(1) if boxed_answer else final_answer_part.strip()
-
-                if not final_answer:
-                    print(f"⚠️ Error: API returned no content in the final answer part.\n Full generation: {generated_text}")
-                    final_answers.append(None)
-                else:
-                    final_answers.append(final_answer)
-
+            # Validate final answers
+            for i, answer in enumerate(final_answers):
+                if not answer:
+                    print(f"⚠️ Warning: Could not generate a final answer for generation index {i}.")
+            
             return final_answers
 
         except Exception as e:
