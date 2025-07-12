@@ -46,8 +46,8 @@ HOST="0.0.0.0"
 PORT="8000"
 
 # --- Parallelism Configuration ---
-TENSOR_PARALLEL_SIZE=1
-DATA_PARALLEL_SIZE=8
+TENSOR_PARALLEL_SIZE=2
+DATA_PARALLEL_SIZE=4
 
 
 # --- Pre-flight Check ---

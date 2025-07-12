@@ -101,6 +101,9 @@ def math_shepherd(args):
                 raw_step_content = steps[j].replace("<step>", "").replace("</step>", "").strip()
                 continuous_cot_prompt += ("\n" if continuous_cot_prompt else "") + raw_step_content
 
+            # Convert to discrete CoT for saving and extraction
+            discrete_cot_prompt = convert_to_discrete_cot(continuous_cot_prompt)
+
             # --- Evaluation Logic ---
             if args.mode in ['eval', 'both'] and score == -1:
                 print(f"  - Evaluating Step {step_idx + 1}/{len(steps)}...")
@@ -122,7 +125,6 @@ def math_shepherd(args):
             # --- Extraction Logic ---
             if args.mode in ['extract', 'both'] and activations.numel() == 0:
                 print(f"  - Extracting activations for Step {step_idx + 1}...")
-                discrete_cot_prompt = convert_to_discrete_cot(continuous_cot_prompt)
                 full_step_prompt_for_extraction = inference_engine._generate_full_prompt(
                     problem, 
                     discrete_cot_prompt
@@ -141,7 +143,7 @@ def math_shepherd(args):
             # Update data_point dictionary
             data_point.update({
                 "problem": problem,
-                "step_content": continuous_cot_prompt,
+                "step_content": discrete_cot_prompt, # Save the discrete CoT
                 "activations": activations,
                 "prm_score": score
             })
@@ -180,7 +182,7 @@ if __name__ == "__main__":
     parser.add_argument("--output_dataset_path", type=str, default="./value-head-s1", help="Path to save the output dataset files.")
     parser.add_argument("--inference_mode", type=str, default="vllm", choices=["vllm", "api"], help="Inference mode to use.")
     parser.add_argument("--n", type=int, default=4, help="Number of completions to generate for evaluation.")
-    parser.add_argument("--save_interval", type=int, default=5, help="How many data points to batch before saving to a new file.")
+    parser.add_argument("--save_interval", type=int, default=30, help="How many data points to batch before saving to a new file.")
     parser.add_argument("--mode", type=str, default="both", choices=["both", "eval", "extract"], help="Operation mode: 'both', 'eval', or 'extract'.")
     
     args = parser.parse_args()
