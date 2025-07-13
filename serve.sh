@@ -12,7 +12,7 @@ fi
 echo "Checking Python dependencies..."
 
 # List of required packages
-PACKAGES=("vllm" "openai" "datasets" "tqdm" "transformers" "accelerate" "python-dotenv")
+PACKAGES=("vllm" "openai" "datasets" "tqdm" "transformers" "accelerate" "dotenv")
 
 MISSING_PACKAGES=()
 

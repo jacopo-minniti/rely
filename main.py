@@ -122,6 +122,7 @@ def math_shepherd(args):
                 )
                 activations = activation_extractor.get_step_activations(full_step_prompt_for_extraction)
                 if activations is None:
+                    print("⚠️ Skipping activation due to empty tensor")
                     activations = torch.Tensor()
 
             # Update data_point dictionary
@@ -158,8 +159,7 @@ def math_shepherd(args):
             
             tqdm.write(f"Step processed in {duration:.2f} seconds. Rate: {steps_per_minute:.2f} steps/min.")
             if result:
-                if is_new:
-                    new_data_points.append(result)
+                new_data_points.append(result)
                 
                 problem_hash = hashlib.sha256(result['problem'].encode()).hexdigest()
                 processed_data[problem_hash] = result
