@@ -6,7 +6,20 @@ from rely.utils import check_answer, parse_decomposed_cot, convert_to_discrete_c
 from datasets import load_dataset
 import random
 
-# pip install vllm openai datasets tqdm transformers accelerate dotenv "ray[data]"
+'''
+pip install vllm openai datasets tqdm transformers accelerate dotenv "ray[data]" "vllm[runai]"
+engine_kwargs={
+    "tensor_parallel_size": args.num_gpus,
+    "data_parallel_size": 1,
+    "enable_prefix_caching": True,
+    "dtype": "bfloat16",
+    "enable_prefix_caching": True,
+    "enable_expert_parallel": True,
+    "generation_config": "auto",
+    "load_format": "runai_streamer"
+},
+'''
+
 
 def create_full_prompt(problem, previous_steps=""):
     """
@@ -42,9 +55,13 @@ def evaluate_with_ray(args):
         model_source=args.inference_model_name,
         engine_kwargs={
             "tensor_parallel_size": args.num_gpus,
+            "data_parallel_size": 1,
             "enable_prefix_caching": True,
             "dtype": "bfloat16",
-            # Add other vLLM engine arguments from serve.sh if needed
+            "enable_prefix_caching": True,
+            "enable_expert_parallel": True,
+            "generation_config": "auto",
+            "load_format": "runai_streamer"
         },
         # Assuming one model replica that spans all GPUs
         concurrency=1, 
@@ -110,7 +127,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_reasoning_tokens", type=int, default=1200, help="Maximum number of tokens for reasoning.")
     parser.add_argument("--output_dataset_path", type=str, default="./value-head-s1-ray", help="Path to save the output dataset files.")
     parser.add_argument("--n", type=int, default=4, help="Number of completions to generate for evaluation.")
-    parser.add_argument("--num_gpus", type=int, default=8, help="Number of GPUs to use (matches tensor_parallel_size).")
+    parser.add_argument("--num_gpus", type=int, default=4, help="Number of GPUs to use (matches tensor_parallel_size).")
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size for Ray Data processing.")
 
     args = parser.parse_args()
