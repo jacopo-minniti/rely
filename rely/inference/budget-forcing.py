@@ -12,7 +12,7 @@ from transformers import AutoTokenizer
 from rely.utils.text_utils import (
     format_system_prompt,
     ensure_think_ending,
-    DEFAULT_SYSTEM_PROMPT
+    MMLU_SYSTEM_PROMPT
 )
 
 logger = logging.getLogger(__name__)
@@ -265,7 +265,7 @@ def example_usage():
         wait_string="Wait, let me think about this more carefully."
     )
     
-    system_prompt = DEFAULT_SYSTEM_PROMPT
+    system_prompt = MMLU_SYSTEM_PROMPT
     user_question = "What is the capital of France?"
     
     result = run_budget_forcing_inference(system_prompt, user_question, config_num_ignores)

@@ -5,55 +5,60 @@ from typing import List, Dict, Any, Union, Optional
 from pathlib import Path
 
 
-def load_dataset(file_path: Union[str, Path]) -> List[Dict[str, Any]]:
+def load_dataset(file_path: Union[str, Path], *, subset: Optional[str] = None, split: Optional[str] = None, return_hf: bool = False, **hf_kwargs) -> Union[List[Dict[str, Any]], Any]:
     """
-    Load a dataset from either .pt or .jsonl file.
+    Load a dataset from either .pt, .jsonl file, or Hugging Face hub.
     
     Args:
-        file_path: Path to the dataset file
+        file_path: Path to the dataset file or Hugging Face dataset name (str)
+        subset: (Optional) Subset name for Hugging Face datasets
+        split: (Optional) Split name for Hugging Face datasets (e.g., 'train', 'test')
+        **hf_kwargs: Additional keyword arguments for Hugging Face datasets.load_dataset
     
     Returns:
         List[Dict[str, Any]]: The loaded dataset as a list of dictionaries
     
     Raises:
-        FileNotFoundError: If the file doesn't exist
+        FileNotFoundError: If the file doesn't exist (for local files)
         ValueError: If the file format is unsupported or data is invalid
     """
-    file_path = Path(file_path)
+    file_path = Path(file_path) if not isinstance(file_path, str) or os.path.exists(file_path) else file_path
     
-    if not file_path.exists():
-        raise FileNotFoundError(f"File not found: {file_path}")
-    
-    file_ext = file_path.suffix.lower()
-    
-    if file_ext == '.pt':
-        # Load PyTorch file
-        try:
-            data = torch.load(file_path, map_location='cpu')
-        except Exception as e:
-            raise ValueError(f"Error loading PyTorch file {file_path}: {e}")
-    elif file_ext == '.jsonl':
-        # Load JSONL file
-        try:
-            data = []
-            with open(file_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if line:  # Skip empty lines
-                        data.append(json.loads(line))
-        except Exception as e:
-            raise ValueError(f"Error loading JSONL file {file_path}: {e}")
+    # If file_path is a local file
+    if isinstance(file_path, Path) and file_path.exists():
+        file_ext = file_path.suffix.lower()
+        if file_ext == '.pt':
+            try:
+                data = torch.load(file_path, map_location='cpu')
+            except Exception as e:
+                raise ValueError(f"Error loading PyTorch file {file_path}: {e}")
+        elif file_ext == '.jsonl':
+            try:
+                data = []
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:  # Skip empty lines
+                            data.append(json.loads(line))
+            except Exception as e:
+                raise ValueError(f"Error loading JSONL file {file_path}: {e}")
+        else:
+            raise ValueError(f"Unsupported file format: {file_ext}. Only .pt and .jsonl are supported")
     else:
-        raise ValueError(f"Unsupported file format: {file_ext}. Only .pt and .jsonl are supported")
-    
+        # Assume Hugging Face dataset
+        try:
+            from datasets import load_dataset as hf_load_dataset
+        except ImportError:
+            raise ImportError("datasets library is required to load Hugging Face datasets.")
+        ds = hf_load_dataset(file_path, name=subset, split=split, **hf_kwargs)
+        # Convert to list of dicts
+        data = [dict(x) for x in ds]
     # Validate that data is a list of dictionaries
     if not isinstance(data, list):
         raise ValueError(f"File {file_path} does not contain a list. Found: {type(data)}")
-    
     for i, item in enumerate(data):
         if not isinstance(item, dict):
             raise ValueError(f"File {file_path} contains non-dictionary item at index {i}: {type(item)}")
-    
     return data
 
 

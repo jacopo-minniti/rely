@@ -15,38 +15,11 @@ from tqdm import tqdm
 from vllm import LLM, SamplingParams
 from vllm.utils import get_open_port
 from datasets import load_dataset
+from rely.utils.load import load_dataset, save_dataset
+from rely.utils.text_utils import format_prompt, MMLU_SYSTEM_PROMPT
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-# A standard system prompt for multiple choice questions
-SYSTEM_PROMPT = """The following are multiple choice questions (with answers) about general knowledge. Think step by step and then finish your answer with 'The correct answer is (X)' where X is the correct letter choice.
-
-EXAMPLE
-
-Question: The quantum efficiency of a photon detector is 0.1. If 100 photons are sent into the detector, one after the other, the detector will detect photons
-Options:
-(A) an average of 10 times, with an rms deviation of about 4
-(B) an average of 10 times, with an rms deviation of about 3
-(C) an average of 10 times, with an rms deviation of about 1
-(D) an average of 10 times, with an rms deviation of about 0.1
-
-## Your Example Answer
-[...] The correct answer is (B).
-"""
-
-
-def format_prompt(user_prompt: str) -> str:
-    """
-    Formats the user prompt with the system prompt into a single string.
-
-    Args:
-        user_prompt: The user's message to the model.
-
-    Returns:
-        A formatted prompt string ready for the LLM.
-    """
-    return f"<|im_start|>system\n{SYSTEM_PROMPT}<|im_end|>\n<|im_start|>user\n{user_prompt}<|im_end|>\n<|im_start|>assistant\n<think>\n"
 
 
 def generate_from_dataset(
@@ -65,7 +38,9 @@ def generate_from_dataset(
     dp_size: int = 8,
     gpu_memory_utilization: float = 0.90,
     max_num_seqs: int = 512,
-    dtype: str = "bfloat16"
+    dtype: str = "bfloat16",
+    system_prompt: str = MMLU_SYSTEM_PROMPT,
+    prompt_formatter: Optional[callable] = None,
 ) -> None:
     """
     Generate completions from a Hugging Face dataset using vLLM with data parallelism.
@@ -87,6 +62,8 @@ def generate_from_dataset(
         gpu_memory_utilization: GPU memory utilization fraction
         max_num_seqs: Maximum number of sequences per batch
         dtype: Model data type
+        system_prompt: The system prompt to use for formatting prompts.
+        prompt_formatter: A callable that formats the user prompt with the system prompt.
     """
     # Create argument namespace for compatibility with existing code
     class Args:
@@ -106,6 +83,8 @@ def generate_from_dataset(
             self.gpu_memory_utilization = gpu_memory_utilization
             self.max_num_seqs = max_num_seqs
             self.dtype = dtype
+            self.system_prompt = system_prompt
+            self.prompt_formatter = prompt_formatter or (lambda user_prompt: format_prompt(user_prompt, system_prompt))
 
     args = Args()
 
@@ -170,7 +149,11 @@ def _generate_worker(args, dp_size: int, dp_rank: int, dp_master_ip: str, dp_mas
     # Load Hugging Face Dataset
     logging.info(f"[Rank {dp_rank}] Loading dataset '{args.dataset}'...")
     try:
-        dataset = load_dataset(args.dataset, name=args.dataset_subset, split=args.dataset_split)
+        from datasets import load_dataset as hf_load_dataset
+        if args.dataset_subset is not None:
+            dataset = hf_load_dataset(args.dataset, name=args.dataset_subset, split=args.dataset_split)
+        else:
+            dataset = hf_load_dataset(args.dataset, split=args.dataset_split)
     except Exception as e:
         logging.error(f"[Rank {dp_rank}] Failed to load dataset: {e}")
         return
@@ -216,7 +199,7 @@ def _generate_worker(args, dp_size: int, dp_rank: int, dp_master_ip: str, dp_mas
         full_prompt = f"Question: {question}\n\nOptions:\n" + "\n".join(options_str)
         
         full_prompts.append(full_prompt)
-        formatted_llm_prompts.append(format_prompt(full_prompt))
+        formatted_llm_prompts.append(args.prompt_formatter(full_prompt))
         original_records.append(example)
 
     if not formatted_llm_prompts:

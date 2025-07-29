@@ -14,7 +14,7 @@ from rely.utils.text_utils import (
     count_tokens_after_marker, 
     format_system_prompt, 
     ensure_think_ending,
-    DEFAULT_SYSTEM_PROMPT
+    MMLU_SYSTEM_PROMPT
 )
 
 logger = logging.getLogger(__name__)

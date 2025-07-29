@@ -12,14 +12,14 @@ from typing import List, Dict, Optional, Tuple
 from tqdm import tqdm
 
 from ..utils import (
-    DEFAULT_SYSTEM_PROMPT,
+    MMLU_SYSTEM_PROMPT,
     format_system_prompt,
     ensure_think_ending,
     basic_entropy_stats
 )
 
 # Use the system prompt from the main utils module
-SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPT
+SYSTEM_PROMPT = MMLU_SYSTEM_PROMPT
 
 
 def load_prompts(

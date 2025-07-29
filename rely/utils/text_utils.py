@@ -71,9 +71,22 @@ def ensure_think_ending(text: str) -> str:
     return text
 
 
+def format_prompt(user_prompt: str, system_prompt: str = DEFAULT_SYSTEM_PROMPT) -> str:
+    """
+    Formats the user prompt with the system prompt into a single string for LLM chat completion.
+
+    Args:
+        user_prompt: The user's message to the model.
+        system_prompt: The system prompt to prepend (defaults to DEFAULT_SYSTEM_PROMPT).
+
+    Returns:
+        A formatted prompt string ready for the LLM.
+    """
+    return f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{user_prompt}<|im_end|>\n<|im_start|>assistant\n<think>\n"
+
+
 # Default system prompt for MMLU-Pro style questions
-DEFAULT_SYSTEM_PROMPT = (
-    """The following are multiple choice questions (with answers) about science. Think step by step and then finish your answer with 'The correct answer is (X)' where X is the correct letter choice.
+MMLU_SYSTEM_PROMPT = """The following are multiple choice questions (with answers) about science. Think step by step and then finish your answer with 'The correct answer is (X)' where X is the correct letter choice.
 
 EXAMPLE
 
@@ -87,4 +100,3 @@ Options:
 ## Your Example Answer
 [...Explanation...] The correct answer is (B).
 """
-) 
