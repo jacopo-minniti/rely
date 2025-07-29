@@ -1,0 +1,69 @@
+{
+    "config": {
+        "run_name": "unified_run",
+        "task": "classification",
+        "model_type": "mlp",
+        "output_file": "probe.pth",
+        "files": [
+            "data/Qwen3-8B/mmlu/value-activations.pt"
+        ],
+        "activation_field": "activations",
+        "preprocessing": {
+            "percentage_dataset": 1.0,
+            "normalize_inputs": false
+        },
+        "training": {
+            "epochs": 128,
+            "batch_size": 256,
+            "learning_rate": 0.0005,
+            "weight_decay": 0.01,
+            "val_split": 0.15,
+            "patience": 15,
+            "scheduler": {
+                "enabled": true,
+                "factor": 0.5,
+                "patience": 5
+            }
+        },
+        "task_specific": {
+            "classification": {
+                "label_type": "hard",
+                "soft_label_threshold": 0.1,
+                "val_threshold": 0.5,
+                "balance_data": true,
+                "balance_strategy": "smote",
+                "smote_k_neighbors": 5
+            },
+            "regression": {
+                "label_field": "entropy",
+                "use_transformation": false
+            }
+        },
+        "model_specific": {
+            "mlp": {
+                "hidden_dims": [
+                    64
+                ],
+                "dropout_p": 0.5
+            }
+        }
+    },
+    "results": {
+        "auroc": 0.7926246854266759,
+        "f1_score": 0.8132847306601864,
+        "accuracy": 0.7444567627494457,
+        "precision": 0.8169243287225386,
+        "recall": 0.8096774193548387,
+        "confusion_matrix": [
+            [
+                339,
+                225
+            ],
+            [
+                236,
+                1004
+            ]
+        ],
+        "threshold": 0.5
+    }
+}

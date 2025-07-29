@@ -1,0 +1,37 @@
+activation_field: cut_cot_activations
+files:
+- data/Qwen3-1.7B/mmlu/nn-short-100.pt
+model_specific:
+  mlp:
+    dropout_p: 0.7
+    hidden_dims:
+    - 64
+model_type: mlp
+output_file: probe.pth
+preprocessing:
+  normalize_inputs: false
+  percentage_dataset: 1.0
+run_name: unified_run
+task: classification
+task_specific:
+  classification:
+    balance_data: true
+    balance_strategy: smote
+    label_type: entropy
+    smote_k_neighbors: 5
+    soft_label_threshold: 0.1
+    val_threshold: 0.5
+  regression:
+    label_field: entropy
+    use_transformation: false
+training:
+  batch_size: 256
+  epochs: 128
+  learning_rate: 0.0005
+  patience: 15
+  scheduler:
+    enabled: true
+    factor: 0.5
+    patience: 5
+  val_split: 0.15
+  weight_decay: 0.01

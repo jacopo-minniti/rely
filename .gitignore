@@ -1,6 +1,8 @@
-# project testing
+rely/train/
 test.py
 value-head-s1/
+data/
+other/
 
 # PDF files
 *.pdf

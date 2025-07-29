@@ -1,0 +1,62 @@
+# Unified Training Configuration
+# Supports both value head and uncertainty head training
+
+# General Configuration
+run_name: "unified_run"
+task: "regression"  # Options: "classification", "regression"
+model_type: "mlp"       # Options: "linear", "mlp"
+output_file: "probe.pth"
+
+# Data Configuration
+files:
+  # - "data/Qwen3-8B/mmlu/value-activations.pt" # value-head
+  # - "data/Qwen3-1.7B/mmlu/nn-short-100.pt"
+  - "data/Qwen3-1.7B/mmlu/nn-short-100-plus.pt"
+
+# Activation field to use (for compatibility with different data formats)
+activation_field: "cut_cot_activations"  # Options: "activations", "cut_cot_activations"
+
+# Dataset preprocessing
+preprocessing:
+  percentage_dataset: 1  # Use fraction of dataset (0.0-1.0)
+  normalize_inputs: false  # Normalize input features to zero mean, unit variance
+
+# Training Hyperparameters
+training:
+  epochs: 128
+  batch_size: 256    
+  learning_rate: 5.0e-4  
+  weight_decay: 1.0e-2
+  val_split: 0.15
+  patience: 15  # Early stopping patience
+  scheduler:
+    enabled: true
+    factor: 0.5
+    patience: 5
+
+# Task-Specific Settings
+task_specific:
+  classification:
+    # Unified label system - supports both old and new formats
+    # Unified label system
+    label_type: "soft"  # Options: "hard", "soft", "entropy"
+    soft_label_threshold: 0.5  # Threshold for binarizing soft/entropy labels
+    
+    # Evaluation
+    val_threshold: 0.5  # Threshold for validation predictions
+    
+    # Data balancing
+    balance_data: true
+    balance_strategy: 'smote'  # Options: 'undersample', 'oversample', 'smote'
+    smote_k_neighbors: 5
+    
+  regression:
+    # Label configuration
+    label_field: "entropy"  # Field name in data
+    use_transformation: false  # Apply logit transformation
+
+# Model-Specific Settings
+model_specific:
+  mlp:
+    hidden_dims: [64]  # Hidden layer dimensions
+    dropout_p: 0.7          # Dropout probability 

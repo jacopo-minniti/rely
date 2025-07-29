@@ -1,0 +1,56 @@
+{
+    "config": {
+        "run_name": "unified_run",
+        "task": "regression",
+        "model_type": "mlp",
+        "output_file": "probe.pth",
+        "files": [
+            "data/Qwen3-1.7B/mmlu/nn-short-100.pt"
+        ],
+        "activation_field": "cut_cot_activations",
+        "preprocessing": {
+            "percentage_dataset": 1.0,
+            "normalize_inputs": false
+        },
+        "training": {
+            "epochs": 128,
+            "batch_size": 256,
+            "learning_rate": 0.0005,
+            "weight_decay": 0.01,
+            "val_split": 0.15,
+            "patience": 15,
+            "scheduler": {
+                "enabled": true,
+                "factor": 0.5,
+                "patience": 15
+            }
+        },
+        "task_specific": {
+            "classification": {
+                "label_type": "entropy",
+                "soft_label_threshold": 0.1,
+                "val_threshold": 0.5,
+                "balance_data": true,
+                "balance_strategy": "smote",
+                "smote_k_neighbors": 5
+            },
+            "regression": {
+                "label_field": "entropy",
+                "use_transformation": false
+            }
+        },
+        "model_specific": {
+            "mlp": {
+                "hidden_dims": [
+                    64
+                ],
+                "dropout_p": 0.7
+            }
+        }
+    },
+    "results": {
+        "mean_squared_error": 0.16678398847579956,
+        "mean_absolute_error": 0.31388768553733826,
+        "r_squared": 0.271945595741272
+    }
+}
