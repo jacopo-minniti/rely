@@ -1,39 +1,45 @@
-import os
 import logging
 import torch
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Optional, Union
 from dataclasses import dataclass
 from pathlib import Path
 
-from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedModel, PreTrainedTokenizer
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers.generation.stopping_criteria import StopStringCriteria
 
-from rely.utils.probes import UncertaintyProbe, ValueProbe, load_probes, convert_isotropy_to_branches
+from rely.utils.probes import UncertaintyProbe, ValueProbe, load_probes
 from rely.utils.text_utils import (
-    get_last_step_pos, 
-    count_tokens_after_marker, 
-    format_system_prompt, 
+    get_last_step_pos,
+    count_tokens_after_marker,
+    format_system_prompt,
     ensure_think_ending,
-    MMLU_SYSTEM_PROMPT
+    MMLU_SYSTEM_PROMPT,
 )
+
+
+def uncertainty_to_branches(score: float) -> int:
+    """Convert an uncertainty score (expected in [0, 1]) to the number of branches that should be explored. """
+    if score >= 0.5:
+        return 2
+    return 1
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class AUTSConfig:
-    """Configuration for AUTS inference."""
-    model_name: str = "Qwen/Qwen3-8B"
+class UATSConfig:
+    """Configuration for UATS inference."""
+    model_name: str = "unsloth/Qwen3-1.7B-unsloth-bnb-4"
     uncertainty_probe_path: Optional[str] = None
     value_probe_path: Optional[str] = None
     beam_width: int = 3
     n_approx: int = 10
-    max_tokens: int = 1000
+    max_branch_tokens: int = 1024
+    max_step_tokens: int = 256
     device: str = "auto"
     probe_device: str = "cuda"
     temperature: float = 1.0
     top_p: float = 0.95
-    max_new_tokens: int = 500
 
 
 @dataclass
@@ -51,16 +57,23 @@ class Branch:
 
 class GuidedTreeSearch:
     """
-    Guided Tree Search implementation for AUTS (Approximate Uncertainty-guided Tree Search).
+    Guided Tree Search implementation for UATS (Uncertainty Aware Tree Search).
     """
+    
+    @classmethod
+    def uncertainty_to_branches(cls, score: float) -> int:
+        """Convert an uncertainty score (expected in [0, 1]) to the number of branches that should be explored."""
+        if score >= 0.5:
+            return 2
+        return 1
     
     def __init__(
         self,
-        model: PreTrainedModel,
-        tokenizer: PreTrainedTokenizer,
+        model: AutoModelForCausalLM,
+        tokenizer: AutoTokenizer,
         uncertainty_probe: UncertaintyProbe,
         value_probe: ValueProbe,
-        config: AUTSConfig
+        config: UATSConfig
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -79,21 +92,29 @@ class GuidedTreeSearch:
         with torch.no_grad():
             outputs = self.model(ids, attention_mask=attention_mask, output_hidden_states=True)
             hidden_states = outputs.hidden_states[-2]
-            probe_hidden_state = hidden_states[:, last_step_pos:last_step_pos+1, :].squeeze(1)
+            # Extract the hidden state of the first token *after* the last "\n\n"
+            # marker, i.e. the first token generated in the most recent step. This
+            # follows the original design where probes look at the activation that
+            # corresponds exactly to the start of the new reasoning node.
+            probe_hidden_state = hidden_states[:, last_step_pos:last_step_pos + 1, :].squeeze(1)
             value_score = self.value_probe(probe_hidden_state).item()
         
-        return value_score, ids
+        # Move ids to CPU before returning to avoid keeping many full prompts
+        # resident in GPU memory for every explored node.
+        return value_score, ids.cpu()
 
     def _generate_step(self, text: str) -> str:
         """Generate a single reasoning step."""
         gen_inputs = self.tokenizer(text, return_tensors="pt")
         gen_ids = gen_inputs.input_ids.to(self.device)
-        stop_criteria = StopStringCriteria(self.tokenizer, ["\n\n"])
+        # Stop generation when the model emits the double-newline delimiter.
+        # NOTE: Transformers expects the stop string list *first*.
+        stop_criteria = StopStringCriteria(["\n\n"], self.tokenizer)
         
         with torch.no_grad():
             generated = self.model.generate(
                 gen_ids,
-                max_new_tokens=self.config.max_new_tokens,
+                max_new_tokens=self.config.max_step_tokens,
                 do_sample=True,
                 temperature=self.config.temperature,
                 top_p=self.config.top_p,
@@ -112,12 +133,12 @@ class GuidedTreeSearch:
         final_text = ensure_think_ending(branch.text)
         gen_inputs = self.tokenizer(final_text, return_tensors="pt")
         gen_ids = gen_inputs.input_ids.to(self.device)
-        stop_criteria = StopStringCriteria(self.tokenizer, ["\n\n"])
+        stop_criteria = StopStringCriteria(["\n\n"], self.tokenizer)
         
         with torch.no_grad():
             generated = self.model.generate(
                 gen_ids,
-                max_new_tokens=self.config.max_new_tokens,
+                max_new_tokens=self.config.max_step_tokens,
                 do_sample=True,
                 temperature=self.config.temperature,
                 top_p=self.config.top_p,
@@ -131,7 +152,21 @@ class GuidedTreeSearch:
         final_answer = self.tokenizer.decode(new_tokens, skip_special_tokens=False)
         return final_answer
 
-    def search(self, system_prompt: str, user_question: str) -> List[Branch]:
+    def _get_num_branches(self, ids: torch.Tensor, attention_mask: torch.Tensor) -> int:
+        """Compute the number of branches to sample based on uncertainty probe."""
+        with torch.no_grad():
+            outputs = self.model(ids, attention_mask=attention_mask, output_hidden_states=True)
+            hidden_states = outputs.hidden_states[-2]
+            # Extract the hidden state of the first token after the last "\n\n" marker
+            # This assumes ids and attention_mask correspond to the probe_text
+            # The caller must ensure correct slicing if needed
+            # For now, we use the last token
+            probe_hidden_state = hidden_states[:, -1:, :].squeeze(1)
+            approx_I_score = self.uncertainty_probe(probe_hidden_state).item()
+        u = min(self.uncertainty_to_branches(approx_I_score), self.config.beam_width)
+        return u, approx_I_score
+
+    def search(self, user_question: str, system_prompt: str = MMLU_SYSTEM_PROMPT) -> List[Branch]:
         """
         Perform guided tree search.
         
@@ -156,7 +191,7 @@ class GuidedTreeSearch:
         # Initialize beam with first branch
         beam = [Branch(
             text=first_node_text,
-            ids=ids_val,
+            ids=ids_val.cpu(),
             step_count=1,
             score=value_score,
             uncertainty=None,
@@ -174,24 +209,17 @@ class GuidedTreeSearch:
             all_candidates = []
             
             for branch_idx, branch in enumerate(beam):
-                # Get uncertainty score
+                # Get uncertainty score and number of branches
                 last_step_pos, probe_text = get_last_step_pos(branch.text, self.tokenizer)
                 inputs = self.tokenizer(probe_text, return_tensors="pt")
                 ids = inputs.input_ids.to(self.device)
                 attention_mask = inputs.attention_mask.to(self.device)
-                
-                with torch.no_grad():
-                    outputs = self.model(ids, attention_mask=attention_mask, output_hidden_states=True)
-                    hidden_states = outputs.hidden_states[-2]
-                    probe_hidden_state = hidden_states[:, last_step_pos:last_step_pos+1, :].squeeze(1)
-                    approx_I_score = self.uncertainty_probe(probe_hidden_state).item()
-                
-                u = convert_isotropy_to_branches(approx_I_score, self.config.n_approx, self.config.beam_width)
+                u, approx_I_score = self._get_num_branches(ids, attention_mask)
                 logger.info(f"Branch {branch_idx} step {branch.step_count}: Uncertainty score={approx_I_score:.4f}, u={u}")
                 
                 # Generate branches based on uncertainty
-                for i in range(u):
-                    torch.manual_seed(branch_idx * 1000 + i)
+                for _ in range(u):
+                    # Sampling is already stochastic; no manual seeds needed.
                     step_text = self._generate_step(branch.text)
                     new_text = branch.text + step_text
                     total_tokens = count_tokens_after_marker(new_text, self.tokenizer)
@@ -202,7 +230,7 @@ class GuidedTreeSearch:
                     
                     candidate = Branch(
                         text=new_text,
-                        ids=ids_val,
+                        ids=ids_val.cpu(),
                         step_count=branch.step_count + 1,
                         score=value_score,
                         uncertainty=approx_I_score,
@@ -213,21 +241,20 @@ class GuidedTreeSearch:
                     # Check termination conditions
                     if "</think>" in step_text:
                         logger.info(f"Branch {branch_idx} triggered finish condition with '</think>' token.")
-                        triggered_branch_idx = len(all_branches) + len(all_candidates)
-                        triggered_reason = "</think>"
+                        if triggered_branch_idx is None:  # keep the first that triggers
+                            triggered_branch_idx = len(all_branches) + len(all_candidates)
+                            triggered_reason = "</think>"
                         all_candidates.append(candidate)
-                        break
-                    elif total_tokens >= self.config.max_tokens:
-                        logger.info(f"Branch {branch_idx} triggered finish condition: max_tokens reached ({total_tokens} >= {self.config.max_tokens})")
-                        triggered_branch_idx = len(all_branches) + len(all_candidates)
-                        triggered_reason = "max_tokens"
+                        break  # stop generating more continuations for *this* branch
+                    elif total_tokens >= self.config.max_branch_tokens:
+                        logger.info(f"Branch {branch_idx} triggered finish condition: max_branch_tokens reached ({total_tokens} >= {self.config.max_branch_tokens})")
+                        if triggered_branch_idx is None:
+                            triggered_branch_idx = len(all_branches) + len(all_candidates)
+                            triggered_reason = "max_branch_tokens"
                         all_candidates.append(candidate)
-                        break
+                        break  # stop generating more continuations for this branch
                     else:
                         all_candidates.append(candidate)
-                else:
-                    continue
-                break  # If a branch triggered finish, stop expanding further
             
             # Prune to top branches
             if len(all_candidates) > self.config.beam_width:
@@ -252,10 +279,12 @@ class GuidedTreeSearch:
         return all_branches
 
 
-def load_model_and_tokenizer(
-    model_name: str,
-    device: str = "auto"
-) -> tuple[PreTrainedModel, PreTrainedTokenizer]:
+
+# ------------------------------------------------------------
+# UATS utilities
+# ------------------------------------------------------------
+
+def load_model_and_tokenizer(model_name: str, device: str = "auto") -> tuple[AutoModelForCausalLM, AutoTokenizer]:
     """
     Load model and tokenizer.
     
@@ -274,13 +303,12 @@ def load_model_and_tokenizer(
     )
     return model, tokenizer
 
-
-def create_auts_searcher(config: AUTSConfig) -> GuidedTreeSearch:
+def create_uats_searcher(config: UATSConfig) -> GuidedTreeSearch:
     """
-    Create an AUTS searcher with the given configuration.
+    Create a UATS searcher with the given configuration.
     
     Args:
-        config: Configuration for AUTS
+        config: Configuration for UATS
         
     Returns:
         Configured GuidedTreeSearch instance
@@ -312,38 +340,14 @@ def create_auts_searcher(config: AUTSConfig) -> GuidedTreeSearch:
     
     return searcher
 
-
-def run_auts_search(
-    system_prompt: str,
-    user_question: str,
-    config: Optional[AUTSConfig] = None
-) -> List[Branch]:
-    """
-    Run AUTS search with a simple API.
-    
-    Args:
-        system_prompt: System prompt to use
-        user_question: User question to answer
-        config: Optional configuration (uses default if None)
-        
-    Returns:
-        List of all branches explored during search
-    """
-    if config is None:
-        config = AUTSConfig()
-    
-    searcher = create_auts_searcher(config)
-    return searcher.search(system_prompt, user_question)
-
-
-def save_branches(branches: List[Branch], output_dir: Union[str, Path], max_tokens: int) -> None:
+def save_branches(branches: List[Branch], output_dir: Union[str, Path], max_branch_tokens: int) -> None:
     """
     Save branches to files.
     
     Args:
         branches: List of branches to save
         output_dir: Directory to save branches in
-        max_tokens: Maximum tokens threshold
+        max_branch_tokens: Maximum branch tokens threshold
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(exist_ok=True)
@@ -351,7 +355,7 @@ def save_branches(branches: List[Branch], output_dir: Union[str, Path], max_toke
     def is_final_branch(branch: Branch) -> bool:
         text = branch.text
         ends_with_think = text.strip().endswith("</think>") or text.strip().endswith("</think>\n")
-        hit_max_tokens = branch.total_tokens >= max_tokens
+        hit_max_tokens = branch.total_tokens >= max_branch_tokens
         return ends_with_think or hit_max_tokens
     
     final_branches = [b for b in branches if is_final_branch(b)]
@@ -370,3 +374,30 @@ def save_branches(branches: List[Branch], output_dir: Union[str, Path], max_toke
             f.write(branch.text)
             if branch.final_answer:
                 f.write(branch.final_answer) 
+
+def run_uats_search(
+    user_question: str,
+    system_prompt: str = MMLU_SYSTEM_PROMPT,
+    config: Optional[UATSConfig] = None,
+    save_dir: Optional[Union[str, Path]] = None
+) -> List[Branch]:
+    """
+    Run UATS search with a simple API and optionally save branches.
+
+    Args:
+        system_prompt: System prompt to use
+        user_question: User question to answer
+        config: Optional configuration (uses default if None)
+        save_dir: Optional directory to save branches (if provided)
+
+    Returns:
+        List of all branches explored during search
+    """
+    if config is None:
+        config = UATSConfig()
+
+    searcher = create_uats_searcher(config)
+    branches = searcher.search(user_question, system_prompt)
+    if save_dir is not None:
+        save_branches(branches, save_dir, config.max_branch_tokens)
+    return branches

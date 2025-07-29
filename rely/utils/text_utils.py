@@ -1,9 +1,24 @@
 from typing import Tuple
 import torch
-from transformers import PreTrainedTokenizer
+from transformers import AutoTokenizer
 
+# Default system prompt for MMLU-Pro style questions
+MMLU_SYSTEM_PROMPT = """The following are multiple choice questions (with answers) about science. Think step by step and then finish your answer with 'The correct answer is (X)' where X is the correct letter choice.
 
-def get_last_step_pos(text: str, tokenizer: PreTrainedTokenizer) -> Tuple[int, str]:
+EXAMPLE
+
+Question: The quantum efficiency of a photon detector is 0.1. If 100 photons are sent into the detector, one after the other, the detector will detect photons
+Options:
+(A) an average of 10 times, with an rms deviation of about 4
+(B) an average of 10 times, with an rms deviation of about 3
+(C) an average of 10 times, with an rms deviation of about 1
+(D) an average of 10 times, with an rms deviation of about 0.1
+
+## Your Example Answer
+[...Explanation...] The correct answer is (B).
+"""
+
+def get_last_step_pos(text: str, tokenizer: AutoTokenizer) -> Tuple[int, str]:
     """
     Returns the token position after the last '\n\n' in the text.
     If not present, appends '\n\n' and returns the position after that.
@@ -23,7 +38,7 @@ def get_last_step_pos(text: str, tokenizer: PreTrainedTokenizer) -> Tuple[int, s
     return len(prefix_token_ids) - 1, text
 
 
-def count_tokens_after_marker(text: str, tokenizer: PreTrainedTokenizer, marker: str = "<|im_start|>assistant") -> int:
+def count_tokens_after_marker(text: str, tokenizer: AutoTokenizer, marker: str = "<|im_start|>assistant") -> int:
     """
     Count tokens after a specific marker in the text.
     
@@ -71,7 +86,7 @@ def ensure_think_ending(text: str) -> str:
     return text
 
 
-def format_prompt(user_prompt: str, system_prompt: str = DEFAULT_SYSTEM_PROMPT) -> str:
+def format_prompt(user_prompt: str, system_prompt: str = MMLU_SYSTEM_PROMPT) -> str:
     """
     Formats the user prompt with the system prompt into a single string for LLM chat completion.
 
@@ -83,20 +98,3 @@ def format_prompt(user_prompt: str, system_prompt: str = DEFAULT_SYSTEM_PROMPT) 
         A formatted prompt string ready for the LLM.
     """
     return f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{user_prompt}<|im_end|>\n<|im_start|>assistant\n<think>\n"
-
-
-# Default system prompt for MMLU-Pro style questions
-MMLU_SYSTEM_PROMPT = """The following are multiple choice questions (with answers) about science. Think step by step and then finish your answer with 'The correct answer is (X)' where X is the correct letter choice.
-
-EXAMPLE
-
-Question: The quantum efficiency of a photon detector is 0.1. If 100 photons are sent into the detector, one after the other, the detector will detect photons
-Options:
-(A) an average of 10 times, with an rms deviation of about 4
-(B) an average of 10 times, with an rms deviation of about 3
-(C) an average of 10 times, with an rms deviation of about 1
-(D) an average of 10 times, with an rms deviation of about 0.1
-
-## Your Example Answer
-[...Explanation...] The correct answer is (B).
-"""

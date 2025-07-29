@@ -1,21 +1,21 @@
 """
 Inference modules for the rely package.
 
-This package contains inference-related functionality including AUTS (Approximate Uncertainty-guided Tree Search)
+This package contains inference-related functionality including UATS (Uncertainty-guided Approximate Tree Search)
 and Budget Forcing inference strategies.
 """
 
-from .auts import (
-    AUTSConfig,
+from .uats import (
+    UATSConfig,
     Branch,
     GuidedTreeSearch,
-    run_auts_search,
-    create_auts_searcher,
+    create_uats_searcher,
     save_branches,
-    load_model_and_tokenizer
+    load_model_and_tokenizer,
+    run_uats_search
 )
 
-from .auts.budget_forcing import (
+from .budget_forcing import (
     BudgetForcingConfig,
     BudgetForcingResult,
     BudgetForcingInference,
@@ -25,12 +25,12 @@ from .auts.budget_forcing import (
 )
 
 __all__ = [
-    # AUTS exports
-    "AUTSConfig",
+    # UATS exports
+    "UATSConfig",
     "Branch",
     "GuidedTreeSearch", 
-    "run_auts_search",
-    "create_auts_searcher",
+    "run_uats_search",
+    "create_uats_searcher",
     "save_branches",
     "load_model_and_tokenizer",
     # Budget Forcing exports
