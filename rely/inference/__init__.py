@@ -12,7 +12,7 @@ from .uats import (
     create_uats_searcher,
     save_branches,
     load_model_and_tokenizer,
-    run_uats_search
+    run_uats
 )
 
 from .budget_forcing import (
@@ -38,7 +38,7 @@ __all__ = [
     "UATSConfig",
     "Branch",
     "GuidedTreeSearch", 
-    "run_uats_search",
+    "run_uats",
     "create_uats_searcher",
     "save_branches",
     "load_model_and_tokenizer",

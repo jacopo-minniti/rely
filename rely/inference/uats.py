@@ -33,7 +33,6 @@ class UATSConfig:
     uncertainty_probe_path: Optional[str] = None
     value_probe_path: Optional[str] = None
     beam_width: int = 3
-    n_approx: int = 10
     max_branch_tokens: int = 1024
     max_step_tokens: int = 256
     device: str = "auto"
@@ -82,53 +81,79 @@ class GuidedTreeSearch:
         self.config = config
         self.device = next(model.parameters()).device
 
-    def _value_probe(self, text: str) -> tuple[float, torch.Tensor]:
-        """Get value score for a given text."""
-        # Ensure the text ends with \n\n for proper step completion
-        if not text.endswith('\n\n'):
-            text = text + '\n\n'
-        
-        inputs = self.tokenizer(text, return_tensors="pt")
-        ids = inputs.input_ids.to(self.device)
-        attention_mask = inputs.attention_mask.to(self.device)
-        
+    def _value_probe(
+        self,
+        text: Optional[str] = None,
+        ids: Optional[torch.Tensor] = None,
+    ) -> tuple[float, torch.Tensor]:
+        """Get value score for a given text or a pre-tokenised tensor.
+
+        Passing ``ids`` avoids the costly re-tokenisation of the full prompt at
+        every step.  Exactly one of ``text`` or ``ids`` must be provided.
+        """
+
+        if ids is None:
+            if text is None:
+                raise ValueError("Either `text` or `ids` must be provided to _value_probe")
+
+            # Ensure the text ends with the step delimiter so that the probe
+            # attends to the completion token.
+            if not text.endswith("\n\n"):
+                text = text + "\n\n"
+
+            inputs = self.tokenizer(text, return_tensors="pt")  # type: ignore[call-arg]
+            ids_tensor = inputs.input_ids.to(self.device)
+            attention_mask = inputs.attention_mask.to(self.device)
+        else:
+            # ``ids`` already contains the full prompt – just create an
+            # attention mask of ones.
+            ids_tensor = ids if ids.dim() == 2 else ids.unsqueeze(0)
+            ids_tensor = ids_tensor.to(self.device)
+            attention_mask = torch.ones_like(ids_tensor, dtype=torch.long)
+
         with torch.no_grad():
-            outputs = self.model(ids, attention_mask=attention_mask, output_hidden_states=True)
+            outputs = self.model(  # type: ignore[attr-defined]
+                ids_tensor,
+                attention_mask=attention_mask,
+                output_hidden_states=True,
+            )
             hidden_states = outputs.hidden_states[-2]
-            # Extract the hidden state of the last token (which should be \n\n)
-            # This represents the completion of the reasoning step
             probe_hidden_state = hidden_states[:, -1:, :].squeeze(1)
-            # Apply sigmoid to ensure value is between 0-1
             value_logits = self.value_probe(probe_hidden_state)
             value_score = torch.sigmoid(value_logits).item()
-        
-        # Move ids to CPU before returning to avoid keeping many full prompts
-        # resident in GPU memory for every explored node.
-        return value_score, ids.cpu()
 
-    def _generate_step(self, text: str) -> str:
-        """Generate a single reasoning step."""
-        gen_inputs = self.tokenizer(text, return_tensors="pt")
-        gen_ids = gen_inputs.input_ids.to(self.device)
-        # Stop generation when the model emits the double-newline delimiter.
+        return value_score, ids_tensor.cpu()
+
+    def _generate_step(
+        self, ids: torch.Tensor
+    ) -> tuple[str, torch.Tensor]:
+        """Generate a single reasoning step given the *already tokenised* prompt.
+
+        Returns the generated step **text** as well as the **token IDs** for the
+        newly produced tokens.  This enables the caller to append the new IDs
+        to the running prompt without having to re-tokenise the whole string.
+        """
+
+        model_input = ids if ids.dim() == 2 else ids.unsqueeze(0)
+        model_input = model_input.to(self.device)
+
         stop_criteria = StopStringCriteria(self.tokenizer, ["\n\n"])
-        
         with torch.no_grad():
-            generated = self.model.generate(
-                gen_ids,
+            generated = self.model.generate(  # type: ignore[attr-defined]
+                model_input,
                 max_new_tokens=self.config.max_step_tokens,
                 do_sample=True,
                 temperature=self.config.temperature,
                 top_p=self.config.top_p,
-                pad_token_id=self.tokenizer.eos_token_id,
-                eos_token_id=self.tokenizer.eos_token_id,
+                pad_token_id=self.tokenizer.eos_token_id,  # type: ignore[attr-defined]
+                eos_token_id=self.tokenizer.eos_token_id,  # type: ignore[attr-defined]
                 stopping_criteria=[stop_criteria],
-                return_dict_in_generate=True
+                return_dict_in_generate=True,
             )
-        
-        new_tokens = generated.sequences[0][gen_ids.shape[1]:]
-        gen_text = self.tokenizer.decode(new_tokens, skip_special_tokens=False)
-        return gen_text
+
+        new_tokens = generated.sequences[0][model_input.shape[1]:]
+        step_text = self.tokenizer.decode(new_tokens, skip_special_tokens=False)  # type: ignore[attr-defined]
+        return step_text, new_tokens
 
     def _generate_final_answer(self, branch: Branch) -> str:
         """Generate final answer for a completed branch."""
@@ -136,7 +161,7 @@ class GuidedTreeSearch:
         # Determine which header should be added so that the output text explicitly
         # contains the </think> marker and the "## Final Answer" section.
         if not text.endswith("</think>") and not text.endswith("</think>\n"):
-            header = "</think>\n## Final Answer\n"
+            header = "\n</think>\n## Final Answer\n"
         else:
             header = "\n## Final Answer\n"
 
@@ -145,7 +170,6 @@ class GuidedTreeSearch:
         
         gen_inputs = self.tokenizer(final_text, return_tensors="pt")
         gen_ids = gen_inputs.input_ids.to(self.device)
-        stop_criteria = StopStringCriteria(self.tokenizer, ["\n\n"])
         
         with torch.no_grad():
             generated = self.model.generate(
@@ -156,27 +180,36 @@ class GuidedTreeSearch:
                 top_p=self.config.top_p,
                 pad_token_id=self.tokenizer.eos_token_id,
                 eos_token_id=self.tokenizer.eos_token_id,
-                stopping_criteria=[stop_criteria],
                 return_dict_in_generate=True
             )
         
         new_tokens = generated.sequences[0][gen_ids.shape[1]:]
-        generated_answer = self.tokenizer.decode(new_tokens, skip_special_tokens=False)
+        generated_answer = self.tokenizer.decode(new_tokens, skip_special_tokens=False)  # type: ignore[attr-defined]
         # Return the header together with the generated answer so that callers will
         # see </think> and "## Final Answer" in the saved output.
         return header + generated_answer
 
-    def _get_num_branches(self, ids: torch.Tensor, attention_mask: torch.Tensor) -> tuple[int, float]:
-        """Compute the number of branches to sample based on uncertainty probe."""
+    def _get_num_branches(self, ids: torch.Tensor) -> tuple[int, float]:
+        """Compute the number of branches to sample based on the uncertainty probe.
+
+        Accepts a pre-tokenised ``ids`` tensor to avoid repeated calls to the
+        tokenizer.
+        """
+
+        ids_tensor = ids if ids.dim() == 2 else ids.unsqueeze(0)
+        attention_mask = torch.ones_like(ids_tensor, dtype=torch.long)
+
         with torch.no_grad():
-            outputs = self.model(ids, attention_mask=attention_mask, output_hidden_states=True)
+            outputs = self.model(  # type: ignore[attr-defined]
+                ids_tensor,
+                attention_mask=attention_mask,
+                output_hidden_states=True,
+            )
             hidden_states = outputs.hidden_states[-2]
-            # Extract the hidden state of the last token (which should be \n\n)
-            # This represents the completion of the reasoning step
             probe_hidden_state = hidden_states[:, -1:, :].squeeze(1)
-            # Apply sigmoid to ensure uncertainty is between 0-1
             uncertainty_logits = self.uncertainty_probe(probe_hidden_state)
             approx_I_score = torch.sigmoid(uncertainty_logits).item()
+
         u = min(self.uncertainty_to_branches(approx_I_score), self.config.beam_width)
         return u, approx_I_score
 
@@ -192,30 +225,47 @@ class GuidedTreeSearch:
             List of all branches explored during search
         """
         prompt = format_system_prompt(system_prompt, user_question)
-        initial_text = prompt
-        
-        # Generate first step
-        first_step_text = self._generate_step(initial_text)
-        first_node_text = initial_text + first_step_text
+
+        # ------------------------------------------------------------------
+        # Initial prompt tokenisation (performed **once**).
+        # ------------------------------------------------------------------
+        prompt_inputs = self.tokenizer(prompt, return_tensors="pt")  # type: ignore[call-arg]
+        prompt_ids = prompt_inputs.input_ids  # (1, L)
+
+        # ------------------------------------------------------------------
+        # Generate the very first reasoning step.
+        # ------------------------------------------------------------------
+        first_step_text, new_tokens = self._generate_step(prompt_ids.to(self.device))
+
+        # Concatenate the newly generated token IDs to obtain the full prompt
+        # for the first branch.
+        first_ids = torch.cat([prompt_ids[0].to(self.device), new_tokens]).unsqueeze(0)
+
+        first_node_text = prompt + first_step_text
         total_tokens = count_tokens_after_marker(first_node_text, self.tokenizer)
-        value_score, ids_val = self._value_probe(first_node_text)
+
+        value_score, _ = self._value_probe(ids=first_ids)
+
+        # Normalise by sequence length to mitigate length bias.
+        norm_score = value_score / max(total_tokens, 1)
         
         logger.info(f"[Branch 0 | Step 1] Generated step content:\n{first_step_text}\n{'='*40}")
         
         # Initialize beam with first branch
         beam = [Branch(
             text=first_node_text,
-            ids=ids_val.cpu(),
+            ids=first_ids.cpu(),
             step_count=1,
-            score=value_score,
+            score=norm_score,
             uncertainty=None,
             value=value_score,
             total_tokens=total_tokens
         )]
 
         step = 0
-        triggered = False
-        triggered_reason: Optional[str] = None
+        # Keep track of branches that have finished (either by emitting the
+        # closing tag or by exceeding the token budget).
+        finished: List[Branch] = []
         
         while beam:
             logger.info(f"Step {step}: Expanding {len(beam)} branches.")
@@ -223,74 +273,82 @@ class GuidedTreeSearch:
             
             for branch_idx, branch in enumerate(beam):
                 # Get uncertainty score and number of branches
-                # Ensure the text ends with \n\n for proper step completion
-                probe_text = branch.text
-                if not probe_text.endswith('\n\n'):
-                    probe_text = probe_text + '\n\n'
-                inputs = self.tokenizer(probe_text, return_tensors="pt")
-                ids = inputs.input_ids.to(self.device)
-                attention_mask = inputs.attention_mask.to(self.device)
-                u, approx_I_score = self._get_num_branches(ids, attention_mask)
+                u, approx_I_score = self._get_num_branches(branch.ids.to(self.device))
                 logger.info(f"Branch {branch_idx} step {branch.step_count}: Uncertainty score={approx_I_score:.4f}, u={u}")
                 
                 # Generate branches based on uncertainty
                 for _ in range(u):
                     # Sampling is already stochastic; no manual seeds needed.
-                    step_text = self._generate_step(branch.text)
+                    step_text, new_tokens = self._generate_step(branch.ids.to(self.device))
+
+                    new_ids_1d = torch.cat([
+                        branch.ids[0].to(self.device) if branch.ids.dim() == 2 else branch.ids.to(self.device),
+                        new_tokens,
+                    ])
+                    new_ids = new_ids_1d.unsqueeze(0)
+
                     new_text = branch.text + step_text
                     total_tokens = count_tokens_after_marker(new_text, self.tokenizer)
-                    value_score, ids_val = self._value_probe(new_text)
+
+                    value_score, _ = self._value_probe(ids=new_ids)
+
+                    norm_score = value_score / max(total_tokens, 1)
                     
                     logger.info(f"[Branch {branch_idx} | Step {branch.step_count+1}] Generated step content:\n{step_text}\n{'='*40}")
                     logger.info(f"Generated node: Value score={value_score:.4f}")
                     
                     candidate = Branch(
                         text=new_text,
-                        ids=ids_val.cpu(),
+                        ids=new_ids.cpu(),
                         step_count=branch.step_count + 1,
-                        score=value_score,
+                        score=norm_score,
                         uncertainty=approx_I_score,
                         value=value_score,
                         total_tokens=total_tokens
                     )
                     
                     # Check termination conditions
+                    finished_here = False
                     if "</think>" in step_text:
-                        logger.info(f"Branch {branch_idx} triggered finish condition with '</think>' token.")
-                        if not triggered:  # keep the first that triggers
-                            triggered = True
-                            triggered_reason = "</think>"
-                        all_candidates.append(candidate)
-                        break  # stop generating more continuations for *this* branch
+                        logger.info(
+                            f"Branch {branch_idx} finished with '</think>' token.")
+                        finished_here = True
                     elif total_tokens >= self.config.max_branch_tokens:
-                        logger.info(f"Branch {branch_idx} triggered finish condition: max_branch_tokens reached ({total_tokens} >= {self.config.max_branch_tokens})")
-                        if not triggered:
-                            triggered = True
-                            triggered_reason = "max_branch_tokens"
-                        all_candidates.append(candidate)
-                        break  # stop generating more continuations for this branch
+                        logger.info(
+                            f"Branch {branch_idx} reached max_branch_tokens ({total_tokens} >= {self.config.max_branch_tokens})")
+                        finished_here = True
+
+                    if finished_here:
+                        finished.append(candidate)
+                        break  # stop generating further continuations for this branch
                     else:
                         all_candidates.append(candidate)
             
-            # Prune to top branches
+            # --------------------------------------------------------------
+            # Prune to top-k by *normalised* score.
+            # --------------------------------------------------------------
             if len(all_candidates) > self.config.beam_width:
-                all_candidates = sorted(all_candidates, key=lambda x: x.score, reverse=True)[:self.config.beam_width]
-                logger.info(f"Pruned to top {self.config.beam_width} branches by value score.")
-            
+                all_candidates = sorted(
+                    all_candidates,
+                    key=lambda x: x.score,
+                    reverse=True,
+                )[: self.config.beam_width]
+
             beam = all_candidates
             logger.info(f"After pruning: {len(beam)} active branches so far.")
+
             step += 1
             
-            if triggered:
-                break
-        
-        logger.info(f"Search finished. Triggered finish condition: {triggered_reason}")
+        logger.info("Search finished – all branches have terminated.")
 
-        # Ensure every active branch provides a final answer section.
-        for branch in beam:
+        # Final branches comprise both those naturally finished *and* any that
+        # were still in the beam when the optional safety net triggered.
+        final_branches = finished if not beam else finished + beam
+
+        for branch in final_branches:
             branch.final_answer = self._generate_final_answer(branch)
 
-        return beam
+        return final_branches
 
 
 
@@ -412,11 +470,11 @@ def save_branches(
             f.write(f"Value: {branch.value:.4f}\n")
             f.write(f"Total tokens: {branch.total_tokens}\n")
             f.write("\n--- Branch Text ---\n")
-            f.write(branch.text)
+            f.write(branch.text.strip())
             if branch.final_answer:
-                f.write(branch.final_answer)
+                f.write(branch.final_answer.strip())
 
-def run_uats_search(
+def run_uats(
     user_question: str,
     system_prompt: str = MMLU_SYSTEM_PROMPT,
     config: Optional[UATSConfig] = None,

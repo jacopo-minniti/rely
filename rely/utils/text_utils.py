@@ -82,7 +82,7 @@ def ensure_think_ending(text: str) -> str:
         Text with proper think ending
     """
     if not text.strip().endswith("</think>") and not text.strip().endswith("</think>\n"):
-        return text.rstrip() + "\n</think>\n"
+        return text.rstrip() + "\n</think>\n## Final Answer\n"
     return text
 
 

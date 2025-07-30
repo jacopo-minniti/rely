@@ -4,6 +4,8 @@ value-head-s1/
 data/
 other/
 unsloth_compiled_cache
+uats_results/
+self_consistency_results/
 
 # PDF files
 *.pdf
