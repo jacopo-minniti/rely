@@ -37,11 +37,11 @@ training:
 # Task-Specific Settings
 task_specific:
   classification:
-    label_type: "variance"  # Options: "hard", "soft", "entropy", "variance"
-    soft_label_threshold: 0.01  # Threshold for binarizing soft/entropy labels
+    label_type: "hard"  # Options: "hard", "soft", "entropy", "variance"
+    soft_label_threshold: 0.1  # Threshold for binarizing soft/entropy labels
     
     # Evaluation
-    val_threshold: 0.5  # Threshold for validation predictions
+    val_threshold: 0.45  # Threshold for validation predictions
     
     # Data balancing
     balance_data: true
@@ -50,11 +50,11 @@ task_specific:
     
   regression:
     # Label configuration
-    label_field: "variance"  # Field name in data
+    label_field: "soft_label"  # Field name in data
     use_transformation: false  # Apply logit transformation
 
 # Model-Specific Settings
 model_specific:
   mlp:
     hidden_dims: [64]  # Hidden layer dimensions
-    dropout_p: 0.5          # Dropout probability 
+    dropout_p: 0.7          # Dropout probability 
