@@ -8,16 +8,18 @@ output_file: "probe.pth"
 files:
   # - "data/Qwen3-8B/mmlu/value-activations.pt" # value-head
   # - "data/Qwen3-1.7B/mmlu/nn-short-100.pt"
-  # - "data/Qwen3-1.7B/mmlu/nn-long-4.pt"
-  - "data/Qwen3-8B/mmlu/value-activations.pt"
+  - "data/Qwen3-1.7B/mmlu/nn-long-4.pt"
+  # - "data/Qwen3-8B/mmlu/value-activations.pt"
 
 # Activation field to use 
-activation_field: "activations"  # Options: "activations", "cut_cot_activations"
+activation_field: "cut_cot_activations"  # Options: "activations", "cut_cot_activations"
 
 # Dataset preprocessing
 preprocessing:
   percentage_dataset: 1  # Use fraction of dataset (0.0-1.0)
   normalize_inputs: false  # Normalize input features to zero mean, unit variance
+  remove_zeroes: false
+  zero_tolerance: 0.01
 
 # Training Hyperparameters
 training:
@@ -35,8 +37,8 @@ training:
 # Task-Specific Settings
 task_specific:
   classification:
-    label_type: "hard"  # Options: "hard", "soft", "entropy"
-    soft_label_threshold: 0.1  # Threshold for binarizing soft/entropy labels
+    label_type: "variance"  # Options: "hard", "soft", "entropy", "variance"
+    soft_label_threshold: 0.01  # Threshold for binarizing soft/entropy labels
     
     # Evaluation
     val_threshold: 0.5  # Threshold for validation predictions
@@ -48,7 +50,7 @@ task_specific:
     
   regression:
     # Label configuration
-    label_field: "entropy"  # Field name in data
+    label_field: "variance"  # Field name in data
     use_transformation: false  # Apply logit transformation
 
 # Model-Specific Settings

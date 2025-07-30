@@ -150,6 +150,12 @@ class Trainer:
             return {}
         train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
         print(f"Split dataset into {len(train_dataset)} training and {len(val_dataset)} validation samples.")
+    
+        # ---- 4b. Optional removal of near-zero labels from TRAINING set ----
+        if preprocess_cfg.get('remove_zeroes', False):
+            epsilon = float(preprocess_cfg.get('zero_tolerance', 0.01))  # tolerance window around 0
+            train_dataset = self._remove_zeroes(full_dataset, train_dataset, epsilon)
+            print(f"🧹 Removed samples with |label| <= {epsilon} from training set. New train size: {len(train_dataset)}")
 
         # ---- 5. Balance training set (optional) ----
         if config['task'] == 'classification' and config['task_specific']['classification'].get('balance_data', False):
@@ -242,8 +248,11 @@ class Trainer:
         elif label_type == 'entropy':
             y = torch.tensor([1.0 if entry['entropy'] >= threshold else 0.0 for entry in dataset_list]).float()
             print(f"  - Using 'entropy' binarized at threshold {threshold}.")
+        elif label_type == 'variance':
+            y = torch.tensor([1.0 if entry['variance'] >= threshold else 0.0 for entry in dataset_list]).float()
+            print(f"  - Using 'variance' binarized at threshold {threshold}.")
         else:
-            raise ValueError(f"Unknown label_type: {label_type}. Must be one of: 'hard', 'soft', 'entropy'")
+            raise ValueError(f"Unknown label_type: {label_type}. Must be one of: 'hard', 'soft', 'entropy', 'variance'")
         
         # Print distribution
         positive_indices = (y == 1).nonzero(as_tuple=True)[0]
@@ -329,6 +338,44 @@ class Trainer:
 
         else:
             print(f"⚠️ Warning: Unknown balance_strategy '{strategy}'. Using original training data.")
+            return train_dataset
+
+    def _remove_zeroes(self, full_dataset, train_dataset, epsilon: float = 0.01):
+        """Remove training samples whose labels are approximately zero.
+
+        Args:
+            full_dataset (TensorDataset): The complete dataset (needed to reference original indices).
+            train_dataset (Subset): Current training subset.
+            epsilon (float): Samples with |label| <= epsilon will be discarded.
+
+        Returns:
+            Subset: A new training subset without near-zero-label samples.
+        """
+        if hasattr(train_dataset, 'indices'):
+            # Standard case: `train_dataset` is a Subset produced by `random_split`
+            train_indices = train_dataset.indices
+            y_all = full_dataset.tensors[1].squeeze()
+            train_y = y_all[train_indices]
+
+            keep_mask = torch.abs(train_y) > epsilon
+            if keep_mask.sum() == 0:
+                print(f"⚠️ Warning: All training samples had |label| <= {epsilon}. Keeping original training set.")
+                return train_dataset
+
+            kept_indices = [train_indices[i] for i in keep_mask.nonzero(as_tuple=True)[0]]
+            return Subset(full_dataset, kept_indices)
+
+        # Fallback: if `train_dataset` is already a TensorDataset (e.g., after earlier processing)
+        try:
+            X_train, y_train = train_dataset.tensors  # type: ignore
+            keep_mask = torch.abs(y_train.squeeze()) > epsilon
+            if keep_mask.sum() == 0:
+                print(f"⚠️ Warning: All training samples had |label| <= {epsilon}. Keeping original training set.")
+                return train_dataset
+            return TensorDataset(X_train[keep_mask], y_train[keep_mask])
+        except AttributeError:
+            # As a safety net, return the dataset unchanged if structure is unexpected
+            print("⚠️ Warning: Could not apply zero-removal due to unexpected dataset structure.")
             return train_dataset
 
     def _evaluate_model(self, model, val_loader, config, device):
