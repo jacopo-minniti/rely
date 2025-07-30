@@ -4,13 +4,12 @@ from typing import List, Optional, Union
 from dataclasses import dataclass
 from pathlib import Path
 
+from unsloth import FastLanguageModel
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers.generation.stopping_criteria import StopStringCriteria
-from unsloth import FastLanguageModel
 
 from rely.utils.probes import UncertaintyProbe, ValueProbe, load_probes
 from rely.utils.text_utils import (
-    get_last_step_pos,
     count_tokens_after_marker,
     format_system_prompt,
     ensure_think_ending,
@@ -85,20 +84,23 @@ class GuidedTreeSearch:
 
     def _value_probe(self, text: str) -> tuple[float, torch.Tensor]:
         """Get value score for a given text."""
-        last_step_pos, probe_text = get_last_step_pos(text, self.tokenizer)
-        inputs = self.tokenizer(probe_text, return_tensors="pt")
+        # Ensure the text ends with \n\n for proper step completion
+        if not text.endswith('\n\n'):
+            text = text + '\n\n'
+        
+        inputs = self.tokenizer(text, return_tensors="pt")
         ids = inputs.input_ids.to(self.device)
         attention_mask = inputs.attention_mask.to(self.device)
         
         with torch.no_grad():
             outputs = self.model(ids, attention_mask=attention_mask, output_hidden_states=True)
             hidden_states = outputs.hidden_states[-2]
-            # Extract the hidden state of the first token *after* the last "\n\n"
-            # marker, i.e. the first token generated in the most recent step. This
-            # follows the original design where probes look at the activation that
-            # corresponds exactly to the start of the new reasoning node.
-            probe_hidden_state = hidden_states[:, last_step_pos:last_step_pos + 1, :].squeeze(1)
-            value_score = self.value_probe(probe_hidden_state).item()
+            # Extract the hidden state of the last token (which should be \n\n)
+            # This represents the completion of the reasoning step
+            probe_hidden_state = hidden_states[:, -1:, :].squeeze(1)
+            # Apply sigmoid to ensure value is between 0-1
+            value_logits = self.value_probe(probe_hidden_state)
+            value_score = torch.sigmoid(value_logits).item()
         
         # Move ids to CPU before returning to avoid keeping many full prompts
         # resident in GPU memory for every explored node.
@@ -109,8 +111,7 @@ class GuidedTreeSearch:
         gen_inputs = self.tokenizer(text, return_tensors="pt")
         gen_ids = gen_inputs.input_ids.to(self.device)
         # Stop generation when the model emits the double-newline delimiter.
-        # NOTE: Transformers expects the stop string list *first*.
-        stop_criteria = StopStringCriteria(["\n\n"], self.tokenizer)
+        stop_criteria = StopStringCriteria(self.tokenizer, ["\n\n"])
         
         with torch.no_grad():
             generated = self.model.generate(
@@ -131,10 +132,20 @@ class GuidedTreeSearch:
 
     def _generate_final_answer(self, branch: Branch) -> str:
         """Generate final answer for a completed branch."""
-        final_text = ensure_think_ending(branch.text)
+        text = branch.text.strip()
+        # Determine which header should be added so that the output text explicitly
+        # contains the </think> marker and the "## Final Answer" section.
+        if not text.endswith("</think>") and not text.endswith("</think>\n"):
+            header = "</think>\n## Final Answer\n"
+        else:
+            header = "\n## Final Answer\n"
+
+        # Prompt fed to the language model consists of the reasoning trace plus the header.
+        final_text = text.rstrip() + header
+        
         gen_inputs = self.tokenizer(final_text, return_tensors="pt")
         gen_ids = gen_inputs.input_ids.to(self.device)
-        stop_criteria = StopStringCriteria(["\n\n"], self.tokenizer)
+        stop_criteria = StopStringCriteria(self.tokenizer, ["\n\n"])
         
         with torch.no_grad():
             generated = self.model.generate(
@@ -150,20 +161,22 @@ class GuidedTreeSearch:
             )
         
         new_tokens = generated.sequences[0][gen_ids.shape[1]:]
-        final_answer = self.tokenizer.decode(new_tokens, skip_special_tokens=False)
-        return final_answer
+        generated_answer = self.tokenizer.decode(new_tokens, skip_special_tokens=False)
+        # Return the header together with the generated answer so that callers will
+        # see </think> and "## Final Answer" in the saved output.
+        return header + generated_answer
 
-    def _get_num_branches(self, ids: torch.Tensor, attention_mask: torch.Tensor) -> int:
+    def _get_num_branches(self, ids: torch.Tensor, attention_mask: torch.Tensor) -> tuple[int, float]:
         """Compute the number of branches to sample based on uncertainty probe."""
         with torch.no_grad():
             outputs = self.model(ids, attention_mask=attention_mask, output_hidden_states=True)
             hidden_states = outputs.hidden_states[-2]
-            # Extract the hidden state of the first token after the last "\n\n" marker
-            # This assumes ids and attention_mask correspond to the probe_text
-            # The caller must ensure correct slicing if needed
-            # For now, we use the last token
+            # Extract the hidden state of the last token (which should be \n\n)
+            # This represents the completion of the reasoning step
             probe_hidden_state = hidden_states[:, -1:, :].squeeze(1)
-            approx_I_score = self.uncertainty_probe(probe_hidden_state).item()
+            # Apply sigmoid to ensure uncertainty is between 0-1
+            uncertainty_logits = self.uncertainty_probe(probe_hidden_state)
+            approx_I_score = torch.sigmoid(uncertainty_logits).item()
         u = min(self.uncertainty_to_branches(approx_I_score), self.config.beam_width)
         return u, approx_I_score
 
@@ -211,7 +224,10 @@ class GuidedTreeSearch:
             
             for branch_idx, branch in enumerate(beam):
                 # Get uncertainty score and number of branches
-                last_step_pos, probe_text = get_last_step_pos(branch.text, self.tokenizer)
+                # Ensure the text ends with \n\n for proper step completion
+                probe_text = branch.text
+                if not probe_text.endswith('\n\n'):
+                    probe_text = probe_text + '\n\n'
                 inputs = self.tokenizer(probe_text, return_tensors="pt")
                 ids = inputs.input_ids.to(self.device)
                 attention_mask = inputs.attention_mask.to(self.device)
@@ -323,13 +339,16 @@ def create_uats_searcher(config: UATSConfig) -> GuidedTreeSearch:
     Returns:
         Configured GuidedTreeSearch instance
     """
+    logger.info(f"Loading model: {config.model_name}")
     # Load model and tokenizer
     model, tokenizer = load_model_and_tokenizer(config.model_name)
+    logger.info("Model and tokenizer loaded successfully")
     
     # Get model properties
     hidden_size = model.config.hidden_size
     model_dtype = model.dtype if hasattr(model, "dtype") else next(model.parameters()).dtype
     
+    logger.info(f"Loading probes (hidden_size={hidden_size}, dtype={model_dtype})")
     # Load probes
     uncertainty_probe, value_probe = load_probes(
         hidden_size=hidden_size,
@@ -338,6 +357,7 @@ def create_uats_searcher(config: UATSConfig) -> GuidedTreeSearch:
         value_probe_path=config.value_probe_path,
         device=config.probe_device
     )
+    logger.info("Probes loaded successfully")
     
     # Create searcher
     searcher = GuidedTreeSearch(
@@ -347,33 +367,45 @@ def create_uats_searcher(config: UATSConfig) -> GuidedTreeSearch:
         value_probe=value_probe,
         config=config
     )
+    logger.info("UATS searcher created successfully")
     
     return searcher
 
-def save_branches(branches: List[Branch], output_dir: Union[str, Path], max_branch_tokens: int) -> None:
+def save_branches(
+    branches: List[Branch],
+    output_dir: Union[str, Path],
+    max_branch_tokens: int,
+    beam_width: Optional[int] | None = None,
+) -> None:
     """
-    Save branches to files.
-    
-    Args:
-        branches: List of branches to save
-        output_dir: Directory to save branches in
-        max_branch_tokens: Maximum branch tokens threshold
+    Save only *final* branches to disk.
+
+    A branch is considered final if it either:
+    1. Ends with the </think> token (meaning the model explicitly finished reasoning), or
+    2. Hit the `max_branch_tokens` limit.
+
+    If `beam_width` is supplied, at most that many highest-scoring final branches
+    are kept (mirrors the behaviour of beam search pruning).
     """
+
     output_dir = Path(output_dir)
     output_dir.mkdir(exist_ok=True)
-    
-    def is_final_branch(branch: Branch) -> bool:
-        text = branch.text
-        ends_with_think = text.strip().endswith("</think>") or text.strip().endswith("</think>\n")
-        hit_max_tokens = branch.total_tokens >= max_branch_tokens
+
+    def is_final_branch(b: Branch) -> bool:
+        ends_with_think = b.text.strip().endswith("</think>") or b.text.strip().endswith("</think>\n")
+        hit_max_tokens = b.total_tokens >= max_branch_tokens
         return ends_with_think or hit_max_tokens
-    
+
     final_branches = [b for b in branches if is_final_branch(b)]
-    
+
+    # Keep only the top-scoring branches if a limit is provided
+    if beam_width is not None and len(final_branches) > beam_width:
+        final_branches = sorted(final_branches, key=lambda b: b.score, reverse=True)[:beam_width]
+
+    logger.debug(f"Saving {len(final_branches)} final branches")
     for i, branch in enumerate(final_branches):
-        filename = f"branch_{i}.txt"
-        filepath = output_dir / filename
-        
+        filepath = output_dir / f"branch_{i}.txt"
+
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(f"Step count: {branch.step_count}\n")
             f.write(f"Score: {branch.score:.4f}\n")
@@ -383,7 +415,7 @@ def save_branches(branches: List[Branch], output_dir: Union[str, Path], max_bran
             f.write("\n--- Branch Text ---\n")
             f.write(branch.text)
             if branch.final_answer:
-                f.write(branch.final_answer) 
+                f.write(branch.final_answer)
 
 def run_uats_search(
     user_question: str,
@@ -406,8 +438,19 @@ def run_uats_search(
     if config is None:
         config = UATSConfig()
 
+    logger.info("Creating UATS searcher...")
     searcher = create_uats_searcher(config)
+    logger.info("Starting UATS search...")
     branches = searcher.search(user_question, system_prompt)
+    logger.info(f"UATS search completed with {len(branches)} branches explored")
+    
     if save_dir is not None:
-        save_branches(branches, save_dir, config.max_branch_tokens)
+        logger.info(f"Saving branches to {save_dir}")
+        save_branches(
+            branches,
+            save_dir,
+            max_branch_tokens=config.max_branch_tokens,
+            beam_width=config.beam_width,
+        )
+    
     return branches

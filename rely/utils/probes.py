@@ -17,6 +17,29 @@ class UncertaintyProbe(nn.Module):
         return self.linear(x)
 
 
+class MLPProbe(nn.Module):
+    """A more advanced MLP probe with configurable depth, width, dropout, and batch norm."""
+    def __init__(self, input_dim, hidden_dims=[512, 128], dropout_p=0.3):
+        super(MLPProbe, self).__init__()
+        
+        layers = []
+        current_dim = input_dim
+        
+        for h_dim in hidden_dims:
+            layers.append(nn.Linear(current_dim, h_dim))
+            layers.append(nn.BatchNorm1d(h_dim))  # Batch norm before activation
+            layers.append(nn.ReLU())
+            layers.append(nn.Dropout(dropout_p))
+            current_dim = h_dim
+            
+        self.hidden_layers = nn.Sequential(*layers)
+        self.output_layer = nn.Linear(current_dim, 1)  # Final layer to produce logits
+
+    def forward(self, x):
+        x = self.hidden_layers(x)
+        return self.output_layer(x)
+
+
 class ValueProbe(nn.Module):
     """
     MLP probe to predict a value score for a given sequence.
@@ -46,7 +69,7 @@ def load_probes(
     uncertainty_probe_path: Optional[str] = None,
     value_probe_path: Optional[str] = None,
     device: str = "cuda"
-) -> Tuple[UncertaintyProbe, ValueProbe]:
+) -> Tuple[nn.Module, nn.Module]:
     """
     Load uncertainty and value probes from saved checkpoints.
     
@@ -60,26 +83,58 @@ def load_probes(
     Returns:
         Tuple of (uncertainty_probe, value_probe)
     """
-    # Load uncertainty probe
-    uncertainty_probe = UncertaintyProbe(hidden_size).to(device).to(model_dtype)
+    # Load uncertainty probe - try MLPProbe first, fallback to linear
+    uncertainty_probe = None
     if uncertainty_probe_path and Path(uncertainty_probe_path).exists():
         try:
+            # Try loading as MLPProbe with one hidden layer of 64 neurons
+            uncertainty_probe = MLPProbe(hidden_size, hidden_dims=[64]).to(device).to(model_dtype)
             uncertainty_probe.load_state_dict(
                 torch.load(uncertainty_probe_path, map_location=device)
             )
+            print(f"Successfully loaded uncertainty probe as MLPProbe from {uncertainty_probe_path}")
         except Exception as e:
-            print(f"Warning: Could not load uncertainty probe from {uncertainty_probe_path}: {e}")
+            print(f"Warning: Could not load uncertainty probe as MLPProbe from {uncertainty_probe_path}: {e}")
+            try:
+                # Fallback to linear probe
+                uncertainty_probe = UncertaintyProbe(hidden_size).to(device).to(model_dtype)
+                uncertainty_probe.load_state_dict(
+                    torch.load(uncertainty_probe_path, map_location=device)
+                )
+                print(f"Successfully loaded uncertainty probe as linear probe from {uncertainty_probe_path}")
+            except Exception as e2:
+                print(f"Warning: Could not load uncertainty probe from {uncertainty_probe_path}: {e2}")
+                uncertainty_probe = UncertaintyProbe(hidden_size).to(device).to(model_dtype)
+    else:
+        uncertainty_probe = UncertaintyProbe(hidden_size).to(device).to(model_dtype)
+    
     uncertainty_probe.eval()
 
-    # Load value probe
-    value_probe = ValueProbe(hidden_size).to(device).to(model_dtype)
+    # Load value probe - try MLPProbe first, fallback to ValueProbe
+    value_probe = None
     if value_probe_path and Path(value_probe_path).exists():
         try:
+            # Try loading as MLPProbe with one hidden layer of 64 neurons
+            value_probe = MLPProbe(hidden_size, hidden_dims=[64]).to(device).to(model_dtype)
             value_probe.load_state_dict(
                 torch.load(value_probe_path, map_location=device)
             )
+            print(f"Successfully loaded value probe as MLPProbe from {value_probe_path}")
         except Exception as e:
-            print(f"Warning: Could not load value probe from {value_probe_path}: {e}")
+            print(f"Warning: Could not load value probe as MLPProbe from {value_probe_path}: {e}")
+            try:
+                # Fallback to ValueProbe
+                value_probe = ValueProbe(hidden_size).to(device).to(model_dtype)
+                value_probe.load_state_dict(
+                    torch.load(value_probe_path, map_location=device)
+                )
+                print(f"Successfully loaded value probe as ValueProbe from {value_probe_path}")
+            except Exception as e2:
+                print(f"Warning: Could not load value probe from {value_probe_path}: {e2}")
+                value_probe = ValueProbe(hidden_size).to(device).to(model_dtype)
+    else:
+        value_probe = ValueProbe(hidden_size).to(device).to(model_dtype)
+    
     value_probe.eval()
     
     return uncertainty_probe, value_probe

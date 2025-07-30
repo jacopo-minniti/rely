@@ -3,6 +3,7 @@ test.py
 value-head-s1/
 data/
 other/
+unsloth_compiled_cache
 
 # PDF files
 *.pdf
