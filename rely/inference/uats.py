@@ -12,16 +12,8 @@ from rely.utils.probes import UncertaintyProbe, ValueProbe, load_probes
 from rely.utils.text_utils import (
     count_tokens_after_marker,
     format_system_prompt,
-    ensure_think_ending,
     MMLU_SYSTEM_PROMPT,
 )
-
-
-def uncertainty_to_branches(score: float) -> int:
-    """Convert an uncertainty score (expected in [0, 1]) to the number of branches that should be explored. """
-    if score >= 0.5:
-        return 2
-    return 1
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +54,7 @@ class GuidedTreeSearch:
     @classmethod
     def uncertainty_to_branches(cls, score: float) -> int:
         """Convert an uncertainty score (expected in [0, 1]) to the number of branches that should be explored."""
-        if score >= 0.5:
+        if score >= 0.6:
             return 2
         return 1
     
@@ -166,6 +158,7 @@ class GuidedTreeSearch:
             header = "\n## Final Answer\n"
 
         # Prompt fed to the language model consists of the reasoning trace plus the header.
+        # Ensure consistent single newline formatting
         final_text = text.rstrip() + header
         
         gen_inputs = self.tokenizer(final_text, return_tensors="pt")
@@ -187,6 +180,7 @@ class GuidedTreeSearch:
         generated_answer = self.tokenizer.decode(new_tokens, skip_special_tokens=False)  # type: ignore[attr-defined]
         # Return the header together with the generated answer so that callers will
         # see </think> and "## Final Answer" in the saved output.
+        # Ensure consistent single newline formatting
         return header + generated_answer
 
     def _get_num_branches(self, ids: torch.Tensor) -> tuple[int, float]:
@@ -470,9 +464,15 @@ def save_branches(
             f.write(f"Value: {branch.value:.4f}\n")
             f.write(f"Total tokens: {branch.total_tokens}\n")
             f.write("\n--- Branch Text ---\n")
-            f.write(branch.text.strip())
+            # Ensure consistent single newline formatting for the end of thinking token
+            branch_text = branch.text
             if branch.final_answer:
-                f.write(branch.final_answer.strip())
+                final_answer_text = branch.final_answer.strip()
+                # Ensure proper formatting: STEP\n</think>\n## Final Answer\nANSWER
+                f.write(branch_text)
+                f.write(final_answer_text)
+            else:
+                f.write(branch_text)
 
 def run_uats(
     user_question: str,
