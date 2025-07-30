@@ -7,8 +7,10 @@ fork points based on entropy thresholds.
 
 from .fork import create_forks_from_dataset
 from .activations import extract_activations
+from .score import score
 
 __all__ = [
     'create_forks_from_dataset',
-    'extract_activations'
+    'extract_activations',
+    'score'
 ] 

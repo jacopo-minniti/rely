@@ -6,11 +6,6 @@ from collections import Counter
 import math
 import numpy as np
 
-# --- Configuration ---
-INPUT_FILE = "100-activations-mmlu-qwen3-1.7B-v2.pt"
-OUTPUT_FILE = "100-scores-mmlu-qwen3-1.7B-v2.pt"
-DATASET_PERCENTAGE = 1
-
 def calculate_semantic_isotropy(embeddings: torch.Tensor) -> float:
     """
     Calculates the semantic isotropy score for a given set of embeddings.
@@ -188,24 +183,32 @@ def calculate_variance(completions, correct_answer):
     
     return variance
 
-if __name__ == "__main__":
+def score(input_file, output_file, dataset_percentage=1.0):
     """
-    Main function to process the dataset and add entropy, hard_label, soft_label, and variance scores.
+    Process the dataset and add entropy, hard_label, soft_label, and variance scores.
+    
+    Args:
+        input_file (str): Path to the input dataset file (.pt format)
+        output_file (str): Path to save the processed dataset (.pt format)
+        dataset_percentage (float): Percentage of dataset to process (0.0 to 1.0)
+    
+    Returns:
+        dict: Statistics about the processed data
     """
-    print(f"Loading dataset from {INPUT_FILE}...")
+    print(f"Loading dataset from {input_file}...")
     
     # Load the dataset
     try:
-        data = torch.load(INPUT_FILE)
+        data = torch.load(input_file)
         print(f"Loaded {len(data)} items from dataset")
     except Exception as e:
         print(f"Error loading dataset: {e}")
-        exit()
+        raise
     
     # Take only a percentage of the dataset
-    num_items_to_process = int(len(data) * DATASET_PERCENTAGE)
+    num_items_to_process = int(len(data) * dataset_percentage)
     data = data[:num_items_to_process]
-    print(f"Processing {len(data)} items ({DATASET_PERCENTAGE*100:.1f}% of dataset)")
+    print(f"Processing {len(data)} items ({dataset_percentage*100:.1f}% of dataset)")
     
     # Process each item and add entropy
     processed_data = []
@@ -243,43 +246,70 @@ if __name__ == "__main__":
             continue
     
     # Save the processed data
-    print(f"Saving processed data to {OUTPUT_FILE}...")
+    print(f"Saving processed data to {output_file}...")
     try:
-        torch.save(processed_data, OUTPUT_FILE)
+        torch.save(processed_data, output_file)
         print(f"Successfully saved {len(processed_data)} items with entropy, hard_label, soft_label, and variance scores")
     except Exception as e:
         print(f"Error saving dataset: {e}")
-        exit()
+        raise
+    
+    # Calculate statistics
+    stats = {}
     
     # Print some statistics
     valid_entropies = [item['entropy'] for item in processed_data if item['entropy'] != -1]
     if valid_entropies:
+        stats['entropy'] = {
+            'mean': sum(valid_entropies) / len(valid_entropies),
+            'min': min(valid_entropies),
+            'max': max(valid_entropies),
+            'valid_items': len(valid_entropies),
+            'total_items': len(processed_data)
+        }
         print(f"Entropy statistics:")
-        print(f"  Mean: {sum(valid_entropies) / len(valid_entropies):.4f}")
-        print(f"  Min: {min(valid_entropies):.4f}")
-        print(f"  Max: {max(valid_entropies):.4f}")
-        print(f"  Valid items: {len(valid_entropies)}/{len(processed_data)}")
+        print(f"  Mean: {stats['entropy']['mean']:.4f}")
+        print(f"  Min: {stats['entropy']['min']:.4f}")
+        print(f"  Max: {stats['entropy']['max']:.4f}")
+        print(f"  Valid items: {stats['entropy']['valid_items']}/{stats['entropy']['total_items']}")
     else:
         print("No valid entropy scores found")
     
     # Print statistics for new metrics
     valid_hard_labels = [item['hard_label'] for item in processed_data if 'hard_label' in item and item['hard_label'] != -1]
     if valid_hard_labels:
+        stats['hard_label'] = {
+            'mean': sum(valid_hard_labels) / len(valid_hard_labels),
+            'correct_predictions': sum(valid_hard_labels),
+            'total_predictions': len(valid_hard_labels),
+            'accuracy': sum(valid_hard_labels) / len(valid_hard_labels)
+        }
         print(f"\nHard Label statistics:")
-        print(f"  Mean: {sum(valid_hard_labels) / len(valid_hard_labels):.4f}")
-        print(f"  Correct predictions: {sum(valid_hard_labels)}/{len(valid_hard_labels)} ({sum(valid_hard_labels)/len(valid_hard_labels)*100:.1f}%)")
+        print(f"  Mean: {stats['hard_label']['mean']:.4f}")
+        print(f"  Correct predictions: {stats['hard_label']['correct_predictions']}/{stats['hard_label']['total_predictions']} ({stats['hard_label']['accuracy']*100:.1f}%)")
     
     valid_soft_labels = [item['soft_label'] for item in processed_data if 'soft_label' in item and item['soft_label'] != -1]
     if valid_soft_labels:
+        stats['soft_label'] = {
+            'mean': sum(valid_soft_labels) / len(valid_soft_labels),
+            'min': min(valid_soft_labels),
+            'max': max(valid_soft_labels)
+        }
         print(f"\nSoft Label statistics:")
-        print(f"  Mean: {sum(valid_soft_labels) / len(valid_soft_labels):.4f}")
-        print(f"  Min: {min(valid_soft_labels):.4f}")
-        print(f"  Max: {max(valid_soft_labels):.4f}")
+        print(f"  Mean: {stats['soft_label']['mean']:.4f}")
+        print(f"  Min: {stats['soft_label']['min']:.4f}")
+        print(f"  Max: {stats['soft_label']['max']:.4f}")
     
     valid_variances = [item['variance'] for item in processed_data if 'variance' in item and item['variance'] != -1]
     if valid_variances:
+        stats['variance'] = {
+            'mean': sum(valid_variances) / len(valid_variances),
+            'min': min(valid_variances),
+            'max': max(valid_variances)
+        }
         print(f"\nVariance statistics:")
-        print(f"  Mean: {sum(valid_variances) / len(valid_variances):.4f}")
-        print(f"  Min: {min(valid_variances):.4f}")
-        print(f"  Max: {max(valid_variances):.4f}")
-
+        print(f"  Mean: {stats['variance']['mean']:.4f}")
+        print(f"  Min: {stats['variance']['min']:.4f}")
+        print(f"  Max: {stats['variance']['max']:.4f}")
+    
+    return stats

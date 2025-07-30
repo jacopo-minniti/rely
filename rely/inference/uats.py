@@ -213,10 +213,9 @@ class GuidedTreeSearch:
             total_tokens=total_tokens
         )]
 
-        all_branches = []
         step = 0
-        triggered_branch_idx = None
-        triggered_reason = None
+        triggered = False
+        triggered_reason: Optional[str] = None
         
         while beam:
             logger.info(f"Step {step}: Expanding {len(beam)} branches.")
@@ -258,15 +257,15 @@ class GuidedTreeSearch:
                     # Check termination conditions
                     if "</think>" in step_text:
                         logger.info(f"Branch {branch_idx} triggered finish condition with '</think>' token.")
-                        if triggered_branch_idx is None:  # keep the first that triggers
-                            triggered_branch_idx = len(all_branches) + len(all_candidates)
+                        if not triggered:  # keep the first that triggers
+                            triggered = True
                             triggered_reason = "</think>"
                         all_candidates.append(candidate)
                         break  # stop generating more continuations for *this* branch
                     elif total_tokens >= self.config.max_branch_tokens:
                         logger.info(f"Branch {branch_idx} triggered finish condition: max_branch_tokens reached ({total_tokens} >= {self.config.max_branch_tokens})")
-                        if triggered_branch_idx is None:
-                            triggered_branch_idx = len(all_branches) + len(all_candidates)
+                        if not triggered:
+                            triggered = True
                             triggered_reason = "max_branch_tokens"
                         all_candidates.append(candidate)
                         break  # stop generating more continuations for this branch
@@ -278,22 +277,20 @@ class GuidedTreeSearch:
                 all_candidates = sorted(all_candidates, key=lambda x: x.score, reverse=True)[:self.config.beam_width]
                 logger.info(f"Pruned to top {self.config.beam_width} branches by value score.")
             
-            all_branches.extend(beam)
             beam = all_candidates
-            logger.info(f"After pruning: {len(beam)} active, {len(all_branches)} total branches so far.")
+            logger.info(f"After pruning: {len(beam)} active branches so far.")
             step += 1
             
-            if triggered_branch_idx is not None:
+            if triggered:
                 break
         
-        all_branches.extend(beam)
-        logger.info(f"Search finished. Branch {triggered_branch_idx} triggered finish condition: {triggered_reason}")
-        
-        # Generate final answers for all branches
-        for branch in all_branches:
+        logger.info(f"Search finished. Triggered finish condition: {triggered_reason}")
+
+        # Ensure every active branch provides a final answer section.
+        for branch in beam:
             branch.final_answer = self._generate_final_answer(branch)
-        
-        return all_branches
+
+        return beam
 
 
 
@@ -378,27 +375,29 @@ def save_branches(
     beam_width: Optional[int] | None = None,
 ) -> None:
     """
-    Save only *final* branches to disk.
+    Save the *active* branches at the end of the search to disk.
 
-    A branch is considered final if it either:
-    1. Ends with the </think> token (meaning the model explicitly finished reasoning), or
-    2. Hit the `max_branch_tokens` limit.
+    Active branches correspond to those that remain in the beam after the final
+    expansion.  In this implementation they are identified as the branches
+    that have the **maximum `step_count`** among all recorded branches, because
+    the search appends the current beam to the results after every expansion.
 
-    If `beam_width` is supplied, at most that many highest-scoring final branches
-    are kept (mirrors the behaviour of beam search pruning).
+    If more than `beam_width` active branches somehow exist (should not happen
+    because the beam is already capped), the highest-scoring ones are kept.
     """
 
     output_dir = Path(output_dir)
     output_dir.mkdir(exist_ok=True)
 
-    def is_final_branch(b: Branch) -> bool:
-        ends_with_think = b.text.strip().endswith("</think>") or b.text.strip().endswith("</think>\n")
-        hit_max_tokens = b.total_tokens >= max_branch_tokens
-        return ends_with_think or hit_max_tokens
+    # ------------------------------------------------------------------
+    # Identify the active branches (those with the greatest step_count).
+    # ------------------------------------------------------------------
+    if not branches:
+        return
 
-    final_branches = [b for b in branches if is_final_branch(b)]
+    max_step_count = max(b.step_count for b in branches)
+    final_branches = [b for b in branches if b.step_count == max_step_count]
 
-    # Keep only the top-scoring branches if a limit is provided
     if beam_width is not None and len(final_branches) > beam_width:
         final_branches = sorted(final_branches, key=lambda b: b.score, reverse=True)[:beam_width]
 

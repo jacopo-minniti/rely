@@ -24,6 +24,15 @@ from .budget_forcing import (
     save_budget_forcing_result
 )
 
+from .self_consistency import (
+    SelfConsistencyConfig,
+    SelfConsistencyResult,
+    SelfConsistencyInference,
+    run_self_consistency_inference,
+    create_self_consistency_inference,
+    save_self_consistency_result
+)
+
 __all__ = [
     # UATS exports
     "UATSConfig",
@@ -39,7 +48,14 @@ __all__ = [
     "BudgetForcingInference",
     "run_budget_forcing_inference",
     "create_budget_forcing_inference",
-    "save_budget_forcing_result"
+    "save_budget_forcing_result",
+    # Self-Consistency exports
+    "SelfConsistencyConfig",
+    "SelfConsistencyResult",
+    "SelfConsistencyInference",
+    "run_self_consistency_inference",
+    "create_self_consistency_inference",
+    "save_self_consistency_result"
 ]
 
 __version__ = "1.0.0" 
