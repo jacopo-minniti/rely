@@ -4,6 +4,7 @@ from tqdm import tqdm
 import re
 from collections import Counter
 import math
+import numpy as np
 
 # --- Configuration ---
 INPUT_FILE = "100-activations-mmlu-qwen3-1.7B-v2.pt"
@@ -95,9 +96,101 @@ def calculate_entropy_from_completions(completions):
     entropy = -sum(p * math.log(p) for p in probs)
     return entropy
 
+def calculate_hard_label(completions, correct_answer):
+    """
+    Calculates hard_label which is 1 if at least one completion is correct, otherwise 0.
+    
+    Args:
+        completions: List of completion strings
+        correct_answer: The correct answer letter (e.g., 'A', 'B', 'C', 'D')
+    
+    Returns:
+        Hard label (int): 1 if at least one completion is correct, 0 otherwise
+    """
+    if not isinstance(completions, list) or len(completions) == 0:
+        return -1
+    
+    # Regex to find the last (A), (B), ... in each string
+    pattern = re.compile(r"\(([A-Z])\)")
+    
+    for completion in completions:
+        matches = pattern.findall(completion)
+        if matches:
+            predicted_answer = matches[-1]
+            if predicted_answer == correct_answer:
+                return 1
+    
+    return 0
+
+def calculate_soft_label(completions, correct_answer):
+    """
+    Calculates soft_label which is the percentage of correct completions.
+    
+    Args:
+        completions: List of completion strings
+        correct_answer: The correct answer letter (e.g., 'A', 'B', 'C', 'D')
+    
+    Returns:
+        Soft label (float): Percentage of correct completions (0.0 to 1.0)
+    """
+    if not isinstance(completions, list) or len(completions) == 0:
+        return -1
+    
+    # Regex to find the last (A), (B), ... in each string
+    pattern = re.compile(r"\(([A-Z])\)")
+    correct_count = 0
+    valid_count = 0
+    
+    for completion in completions:
+        matches = pattern.findall(completion)
+        if matches:
+            valid_count += 1
+            predicted_answer = matches[-1]
+            if predicted_answer == correct_answer:
+                correct_count += 1
+    
+    if valid_count == 0:
+        return -1
+    
+    return correct_count / valid_count
+
+def calculate_variance(completions, correct_answer):
+    """
+    Calculates variance of zeros/ones based on correctness.
+    
+    Args:
+        completions: List of completion strings
+        correct_answer: The correct answer letter (e.g., 'A', 'B', 'C', 'D')
+    
+    Returns:
+        Variance (float): Variance of the binary correctness values
+    """
+    if not isinstance(completions, list) or len(completions) == 0:
+        return -1
+    
+    # Regex to find the last (A), (B), ... in each string
+    pattern = re.compile(r"\(([A-Z])\)")
+    correctness_values = []
+    
+    for completion in completions:
+        matches = pattern.findall(completion)
+        if matches:
+            predicted_answer = matches[-1]
+            # 1 if correct, 0 if incorrect
+            correctness_values.append(1 if predicted_answer == correct_answer else 0)
+    
+    if len(correctness_values) == 0:
+        return -1
+    
+    # Calculate variance
+    correctness_array = np.array(correctness_values)
+    variance = np.var(correctness_array)
+    
+    return variance
+
 if __name__ == "__main__":
     """
-    Main function to process the dataset and add entropy scores.
+    Main function to process the dataset and add entropy, hard_label, soft_label, and variance scores.
     """
     print(f"Loading dataset from {INPUT_FILE}...")
     
@@ -126,6 +219,22 @@ if __name__ == "__main__":
             entropy_score = calculate_entropy_from_completions(item['completions'])
             processed_item['entropy'] = entropy_score
             
+            # Get correct answer from the data
+            correct_answer = None
+            if 'solution' in item:
+                correct_answer = item['solution']
+            
+            # Calculate additional metrics if we have the correct answer
+            if correct_answer is not None:
+                hard_label = calculate_hard_label(item['completions'], correct_answer)
+                soft_label = calculate_soft_label(item['completions'], correct_answer)
+                variance = calculate_variance(item['completions'], correct_answer)
+                
+                processed_item['hard_label'] = hard_label
+                processed_item['soft_label'] = soft_label
+                processed_item['variance'] = variance
+                processed_item['correct_answer'] = correct_answer
+            
             # Only add items with valid entropy scores (not -1)
             if entropy_score != -1:
                 processed_data.append(processed_item)
@@ -137,7 +246,7 @@ if __name__ == "__main__":
     print(f"Saving processed data to {OUTPUT_FILE}...")
     try:
         torch.save(processed_data, OUTPUT_FILE)
-        print(f"Successfully saved {len(processed_data)} items with entropy scores")
+        print(f"Successfully saved {len(processed_data)} items with entropy, hard_label, soft_label, and variance scores")
     except Exception as e:
         print(f"Error saving dataset: {e}")
         exit()
@@ -152,4 +261,25 @@ if __name__ == "__main__":
         print(f"  Valid items: {len(valid_entropies)}/{len(processed_data)}")
     else:
         print("No valid entropy scores found")
+    
+    # Print statistics for new metrics
+    valid_hard_labels = [item['hard_label'] for item in processed_data if 'hard_label' in item and item['hard_label'] != -1]
+    if valid_hard_labels:
+        print(f"\nHard Label statistics:")
+        print(f"  Mean: {sum(valid_hard_labels) / len(valid_hard_labels):.4f}")
+        print(f"  Correct predictions: {sum(valid_hard_labels)}/{len(valid_hard_labels)} ({sum(valid_hard_labels)/len(valid_hard_labels)*100:.1f}%)")
+    
+    valid_soft_labels = [item['soft_label'] for item in processed_data if 'soft_label' in item and item['soft_label'] != -1]
+    if valid_soft_labels:
+        print(f"\nSoft Label statistics:")
+        print(f"  Mean: {sum(valid_soft_labels) / len(valid_soft_labels):.4f}")
+        print(f"  Min: {min(valid_soft_labels):.4f}")
+        print(f"  Max: {max(valid_soft_labels):.4f}")
+    
+    valid_variances = [item['variance'] for item in processed_data if 'variance' in item and item['variance'] != -1]
+    if valid_variances:
+        print(f"\nVariance statistics:")
+        print(f"  Mean: {sum(valid_variances) / len(valid_variances):.4f}")
+        print(f"  Min: {min(valid_variances):.4f}")
+        print(f"  Max: {max(valid_variances):.4f}")
 

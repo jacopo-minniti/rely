@@ -20,13 +20,12 @@ class CompleterConfig(BaseModel):
     dp_size: int = 8
     max_num_seqs: int = 512
     forking_strategy: Literal["entropy", "newline"] = "newline"
-    completion_type: Literal["short", "long"] = "short"
+    completion_type: Literal["short", "long"] = "long"
     system_prompt: str = MMLU_SYSTEM_PROMPT
     dataset: str  # Can be local file path or HF dataset name
     subset: Optional[str] = None  # For HF datasets
     split: str = "train"  # For HF datasets
     question_field: str = "question"
-    options_field: str = "options"
     answer_index_field: str = "answer_index"
 
 
@@ -168,7 +167,6 @@ class Completer:
             subset=self.config.subset,
             split=self.config.split,
             question_field=self.config.question_field,
-            options_field=self.config.options_field,
             answer_index_field=self.config.answer_index_field
         )
         if all_data is None:

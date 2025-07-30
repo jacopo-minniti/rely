@@ -3,7 +3,7 @@
 # Configuration
 INPUT_FILE="nn-long-4.jsonl"
 MODEL_NAME="unsloth/Qwen3-1.7B-unsloth-bnb-4bit"
-NUM_GPUS=8
+NUM_GPUS=4
 SESSION_NAME="activations_extraction"
 
 # Generate output file name based on input file

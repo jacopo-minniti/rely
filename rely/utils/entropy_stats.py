@@ -165,7 +165,7 @@ def print_entropy_stats(data: List[Dict[str, Any]], epsilon: float = 0.1) -> Non
         print()
 
 
-def plot_entropy_distribution(data: List[Dict[str, Any]], epsilon: float = 0.1, 
+def plot_entropy_distribution(data: List[Dict[str, Any]], epsilon: float | None = 0.1, 
                             save_path: Optional[Union[str, Path]] = None, bins: int = 50) -> None:
     """
     Plot histogram of entropy values with threshold line.
@@ -187,7 +187,8 @@ def plot_entropy_distribution(data: List[Dict[str, Any]], epsilon: float = 0.1,
     plt.hist(entropies, bins=bins, color='skyblue', edgecolor='black', alpha=0.7, density=True)
     
     # Threshold line
-    plt.axvline(epsilon, color='red', linestyle='--', linewidth=2, label=f'ε = {epsilon}')
+    if epsilon is not None:
+        plt.axvline(epsilon, color='red', linestyle='--', linewidth=2, label=f'ε = {epsilon}')
     
     # Add mean and median lines
     mean_entropy = np.mean(entropies)
@@ -599,7 +600,7 @@ def ensure_figures_directory() -> Path:
     Returns:
         Path to the figures directory
     """
-    figures_dir = Path("figures")
+    figures_dir = Path("assets/figures")
     figures_dir.mkdir(exist_ok=True)
     return figures_dir
 

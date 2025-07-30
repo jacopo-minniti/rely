@@ -6,6 +6,7 @@ from pathlib import Path
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers.generation.stopping_criteria import StopStringCriteria
+from unsloth import FastLanguageModel
 
 from rely.utils.probes import UncertaintyProbe, ValueProbe, load_probes
 from rely.utils.text_utils import (
@@ -284,23 +285,32 @@ class GuidedTreeSearch:
 # UATS utilities
 # ------------------------------------------------------------
 
-def load_model_and_tokenizer(model_name: str, device: str = "auto") -> tuple[AutoModelForCausalLM, AutoTokenizer]:
+def load_model_and_tokenizer(
+    model_name: str,
+    max_seq_length: int = 4096,
+    dtype: str = "bfloat16",
+    load_in_4bit: bool = True,
+) -> tuple:
     """
-    Load model and tokenizer.
-    
+    Load Unsloth model and tokenizer for fast inference.
+
     Args:
         model_name: Name of the model to load
-        device: Device to load model on
-        
+        device: Device to load model on (unused, Unsloth handles device)
+        max_seq_length: Maximum sequence length for the model
+        dtype: Data type for model weights
+        load_in_4bit: Whether to load model in 4-bit quantization
+
     Returns:
         Tuple of (model, tokenizer)
     """
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype="auto",
-        device_map=device
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name = model_name,
+        max_seq_length = max_seq_length,
+        dtype = dtype,
+        load_in_4bit = load_in_4bit,
     )
+    FastLanguageModel.for_inference(model)  # Enable native 2x faster inference
     return model, tokenizer
 
 def create_uats_searcher(config: UATSConfig) -> GuidedTreeSearch:
@@ -314,7 +324,7 @@ def create_uats_searcher(config: UATSConfig) -> GuidedTreeSearch:
         Configured GuidedTreeSearch instance
     """
     # Load model and tokenizer
-    model, tokenizer = load_model_and_tokenizer(config.model_name, config.device)
+    model, tokenizer = load_model_and_tokenizer(config.model_name)
     
     # Get model properties
     hidden_size = model.config.hidden_size

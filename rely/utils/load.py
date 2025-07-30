@@ -29,7 +29,7 @@ def load_dataset(file_path: Union[str, Path], *, subset: Optional[str] = None, s
         file_ext = file_path.suffix.lower()
         if file_ext == '.pt':
             try:
-                data = torch.load(file_path, map_location='cpu')
+                data = torch.load(file_path, map_location='cpu', weights_only=False)
             except Exception as e:
                 raise ValueError(f"Error loading PyTorch file {file_path}: {e}")
         elif file_ext == '.jsonl':

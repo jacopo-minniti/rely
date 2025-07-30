@@ -261,7 +261,8 @@ class Trainer:
         print(f"  - Using '{label_field}' for regression training.")
         
         if reg_cfg.get('use_transformation', False):
-            y = logit_transform(y)
+            # y = logit_transform(y)
+            y = torch.log(1 + y)
             print("  - Applied logit transformation to labels.")
         
         return y
@@ -359,8 +360,8 @@ class Trainer:
             with torch.no_grad():
                 for batch_X, batch_y in val_loader:
                     outputs = model(batch_X.to(device)).cpu()
-                    preds_original = inverse_logit_transform(outputs) if use_transform else outputs
-                    labels_original = inverse_logit_transform(batch_y) if use_transform else batch_y
+                    preds_original = (torch.exp(outputs) - 1) if use_transform else outputs
+                    labels_original = (torch.exp(batch_y) - 1) if use_transform else batch_y
                     preds.extend(preds_original.numpy())
                     labels.extend(labels_original.numpy())
             preds = np.array(preds).flatten()

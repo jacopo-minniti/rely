@@ -1,9 +1,6 @@
-# Unified Training Configuration
-# Supports both value head and uncertainty head training
-
 # General Configuration
 run_name: "uncertainty_run"
-task: "regression"  # Options: "classification", "regression"
+task: "classification"  # Options: "classification", "regression"
 model_type: "mlp"       # Options: "linear", "mlp"
 output_file: "probe.pth"
 
@@ -11,10 +8,11 @@ output_file: "probe.pth"
 files:
   # - "data/Qwen3-8B/mmlu/value-activations.pt" # value-head
   # - "data/Qwen3-1.7B/mmlu/nn-short-100.pt"
-  - "data/Qwen3-1.7B/mmlu/entropy-short-10.pt"
+  # - "data/Qwen3-1.7B/mmlu/nn-long-4.pt"
+  - "data/Qwen3-8B/mmlu/value-activations.pt"
 
-# Activation field to use (for compatibility with different data formats)
-activation_field: "cut_cot_activations"  # Options: "activations", "cut_cot_activations"
+# Activation field to use 
+activation_field: "activations"  # Options: "activations", "cut_cot_activations"
 
 # Dataset preprocessing
 preprocessing:
@@ -37,9 +35,7 @@ training:
 # Task-Specific Settings
 task_specific:
   classification:
-    # Unified label system - supports both old and new formats
-    # Unified label system
-    label_type: "entropy"  # Options: "hard", "soft", "entropy"
+    label_type: "hard"  # Options: "hard", "soft", "entropy"
     soft_label_threshold: 0.1  # Threshold for binarizing soft/entropy labels
     
     # Evaluation
@@ -59,4 +55,4 @@ task_specific:
 model_specific:
   mlp:
     hidden_dims: [64]  # Hidden layer dimensions
-    dropout_p: 0.3          # Dropout probability 
+    dropout_p: 0.5          # Dropout probability 
