@@ -5,6 +5,7 @@ import re
 from collections import Counter
 import math
 import numpy as np
+from rely.utils import load_dataset, save_dataset
 
 def calculate_semantic_isotropy(embeddings: torch.Tensor) -> float:
     """
@@ -198,12 +199,7 @@ def score(input_file, output_file, dataset_percentage=1.0):
     print(f"Loading dataset from {input_file}...")
     
     # Load the dataset
-    try:
-        data = torch.load(input_file)
-        print(f"Loaded {len(data)} items from dataset")
-    except Exception as e:
-        print(f"Error loading dataset: {e}")
-        raise
+    data = load_dataset(input_file)
     
     # Take only a percentage of the dataset
     num_items_to_process = int(len(data) * dataset_percentage)
@@ -247,12 +243,7 @@ def score(input_file, output_file, dataset_percentage=1.0):
     
     # Save the processed data
     print(f"Saving processed data to {output_file}...")
-    try:
-        torch.save(processed_data, output_file)
-        print(f"Successfully saved {len(processed_data)} items with entropy, hard_label, soft_label, and variance scores")
-    except Exception as e:
-        print(f"Error saving dataset: {e}")
-        raise
+    save_dataset(processed_data, output_file)
     
     # Calculate statistics
     stats = {}

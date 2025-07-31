@@ -10,6 +10,9 @@ self_consistency_results/
 # PDF files
 *.pdf
 
+# JSONL files
+*.jsonl
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

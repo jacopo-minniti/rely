@@ -5,9 +5,14 @@ This module contains functions for calculating entropy scores, semantic isotropy
 and other metrics from model completions and activations.
 """
 
-from .entropy import calculate_entropy_scores, calculate_semantic_isotropy
+from .score import (
+    score,
+    calculate_semantic_isotropy,
+    calculate_entropy_from_completions
+)
 
 __all__ = [
-    'calculate_entropy_scores',
-    'calculate_semantic_isotropy'
+    'score',
+    'calculate_semantic_isotropy',
+    'calculate_entropy_from_completions'
 ] 
