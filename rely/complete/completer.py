@@ -26,7 +26,7 @@ class CompleterConfig(BaseModel):
     subset: Optional[str] = None  # For HF datasets
     split: str = "train"  # For HF datasets
     question_field: str = "question"
-    answer_index_field: str = "answer_index"
+    cot_percentage: float = 1.0  # Max percentage of CoT to sample from (0.0 to 1.0)
 
 
 class Completer:
@@ -47,7 +47,9 @@ class Completer:
                 return attempt
             
             max_step = len(steps) - 1
-            sampled_step = random.randint(0, max_step) if max_step > 0 else 0
+            # Calculate the maximum step based on cot_percentage
+            max_sampled_step = int(max_step * self.config.cot_percentage)
+            sampled_step = random.randint(0, max_sampled_step) if max_sampled_step > 0 else 0
             cut_steps = steps[:sampled_step + 1]
 
             return "\n\n".join(cut_steps)
@@ -167,7 +169,6 @@ class Completer:
             subset=self.config.subset,
             split=self.config.split,
             question_field=self.config.question_field,
-            answer_index_field=self.config.answer_index_field
         )
         if all_data is None:
             return

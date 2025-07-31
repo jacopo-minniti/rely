@@ -11,7 +11,8 @@ from pathlib import Path
 import random
 from sklearn.metrics import (
     mean_squared_error, mean_absolute_error, r2_score,
-    accuracy_score, f1_score, roc_auc_score, precision_score, recall_score, confusion_matrix
+    accuracy_score, f1_score, roc_auc_score, precision_score, recall_score, confusion_matrix,
+    precision_recall_curve
 )
 from collections import Counter
 from imblearn.over_sampling import SMOTE
@@ -378,11 +379,31 @@ class Trainer:
             print("⚠️ Warning: Could not apply zero-removal due to unexpected dataset structure.")
             return train_dataset
 
+    def _find_optimal_threshold(self, labels, probs):
+        """Find the optimal threshold that maximizes F1 score using precision-recall curve."""
+        precision, recall, thresholds = precision_recall_curve(labels, probs)
+        
+        # Calculate F1 score for each threshold, avoiding division by zero
+        f1_scores = 2 * (precision * recall) / (precision + recall + 1e-9)
+        
+        # Find the threshold that gives the best F1 score
+        # Note: thresholds array is 1 shorter than precision/recall arrays
+        optimal_idx = np.argmax(f1_scores[:-1])  # Exclude the last element of f1_scores
+        optimal_threshold = thresholds[optimal_idx]
+        best_f1 = f1_scores[optimal_idx]
+        
+        print(f"🔍 Auto-threshold optimization:")
+        print(f"  - Optimal threshold: {optimal_threshold:.4f}")
+        print(f"  - Best F1 score: {best_f1:.4f}")
+        
+        return float(optimal_threshold)
+
     def _evaluate_model(self, model, val_loader, config, device):
         """Evaluate model performance with unified metrics."""
         if config['task'] == 'classification':
             clf_cfg = config['task_specific']['classification']
-            threshold = float(clf_cfg.get('val_threshold', 0.5))
+            val_threshold = clf_cfg.get('val_threshold', 0.5)
+            
             probs, labels = [], []
             with torch.no_grad():
                 for batch_X, batch_y in val_loader:
@@ -391,6 +412,17 @@ class Trainer:
                     labels.extend(batch_y.numpy())
             probs = np.array(probs).flatten()
             labels = np.array(labels).flatten()
+            
+            # Handle automatic threshold selection
+            if val_threshold == "auto":
+                threshold = self._find_optimal_threshold(labels, probs)
+            else:
+                threshold = float(val_threshold)
+                print(f"🔍 Using fixed threshold: {threshold:.4f}")
+            
+            # Ensure threshold is a regular Python float for JSON serialization
+            threshold = float(threshold)
+            
             preds = (probs > threshold).astype(float)
             results = {
                 'auroc': roc_auc_score(labels, probs) if len(np.unique(labels)) > 1 else 0.0,

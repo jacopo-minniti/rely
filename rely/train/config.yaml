@@ -6,10 +6,8 @@ output_file: "probe.pth"
 
 # Data Configuration
 files:
-  # - "data/Qwen3-8B/mmlu/value-activations.pt" # value-head
   # - "data/Qwen3-1.7B/mmlu/nn-short-100.pt"
-  - "data/Qwen3-1.7B/mmlu/nn-long-4.pt"
-  # - "data/Qwen3-8B/mmlu/value-activations.pt"
+  # - "data/Qwen3-1.7B/mmlu/nn-long-4.pt"
 
 # Activation field to use 
 activation_field: "cut_cot_activations"  # Options: "activations", "cut_cot_activations"
@@ -37,24 +35,24 @@ training:
 # Task-Specific Settings
 task_specific:
   classification:
-    label_type: "hard"  # Options: "hard", "soft", "entropy", "variance"
-    soft_label_threshold: 0.1  # Threshold for binarizing soft/entropy labels
+    label_type: "entropy"  # Options: "hard", "soft", "entropy", "variance"
+    soft_label_threshold: 0.01  # Threshold for binarizing soft/entropy labels
     
     # Evaluation
-    val_threshold: 0.45  # Threshold for validation predictions
+    val_threshold: "auto"  # Threshold for validation predictions. Use "auto" for automatic optimization or a float value (e.g., 0.5)
     
     # Data balancing
-    balance_data: true
-    balance_strategy: 'smote'  # Options: 'undersample', 'oversample', 'smote'
+    balance_data: false
+    balance_strategy: 'undersample'  # Options: 'undersample', 'oversample', 'smote'
     smote_k_neighbors: 5
     
   regression:
     # Label configuration
-    label_field: "soft_label"  # Field name in data
+    label_field: "entropy"  # Field name in data
     use_transformation: false  # Apply logit transformation
 
 # Model-Specific Settings
 model_specific:
   mlp:
     hidden_dims: [64]  # Hidden layer dimensions
-    dropout_p: 0.7          # Dropout probability 
+    dropout_p: 0.5          # Dropout probability 
