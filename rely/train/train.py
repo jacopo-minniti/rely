@@ -89,7 +89,12 @@ class Trainer:
             try:
                 data_from_file = torch.load(file_path, weights_only=False)
                 if isinstance(data_from_file, list):
-                    all_entries.extend(data_from_file)
+                    # Tag each entry with its originating file so we can exclude certain files from validation
+                    for entry in data_from_file:
+                        if isinstance(entry, dict):
+                            entry = dict(entry)  # Shallow copy to avoid mutating the original object
+                            entry["__source_file__"] = file_path
+                        all_entries.append(entry)
                 else:
                     print(f"⚠️ Warning: File {Path(file_path).name} did not contain a list. Skipping.")
             except Exception as e:
@@ -142,14 +147,40 @@ class Trainer:
             y = self._prepare_regression_labels(dataset_list, reg_cfg)
             full_dataset = TensorDataset(X, y.unsqueeze(1))
 
-        # ---- 4. Train/Val split ----
+        # ---- 4. Train/Val split with optional file exclusion ----
         val_ratio = config['training']['val_split']
-        val_size = int(val_ratio * len(full_dataset))
-        train_size = len(full_dataset) - val_size
-        if train_size <= 0 or val_size <= 0:
-            print("❌ Error: Not enough data for train/validation splits. Exiting.")
+        raw_exclude = config.get('exclude_val', [])
+        if raw_exclude is None:
+            raw_exclude = []
+        exclude_files = set(raw_exclude)
+
+        # Separate indices based on whether their source file should be excluded from validation
+        excluded_indices = [
+            idx for idx, entry in enumerate(dataset_list)
+            if entry.get("__source_file__") and (
+                entry["__source_file__"] in exclude_files
+                or Path(entry["__source_file__"]).name in exclude_files
+            )
+        ]
+        eligible_indices = [idx for idx in range(len(dataset_list)) if idx not in excluded_indices]
+
+        val_size = int(val_ratio * len(dataset_list))
+        if val_size > len(eligible_indices):
+            print(
+                f"⚠️ Warning: Requested validation size ({val_size}) exceeds eligible samples "
+                f"({len(eligible_indices)}). Reducing val_size to {len(eligible_indices)}."
+            )
+            val_size = len(eligible_indices)
+
+        if val_size == 0:
+            print("❌ Error: Validation set size is zero. Check 'val_split' or 'exclude_val' settings.")
             return {}
-        train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
+
+        val_indices = random.sample(eligible_indices, val_size)
+        train_indices = [idx for idx in range(len(dataset_list)) if idx not in val_indices]
+
+        train_dataset = Subset(full_dataset, train_indices)
+        val_dataset = Subset(full_dataset, val_indices)
         print(f"Split dataset into {len(train_dataset)} training and {len(val_dataset)} validation samples.")
     
         # ---- 4b. Optional removal of near-zero labels from TRAINING set ----

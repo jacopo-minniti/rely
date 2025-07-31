@@ -6,10 +6,13 @@ output_file: "probe.pth"
 
 # Data Configuration
 files:
-  # - "data/Qwen3-1.7B/mmlu/nn-short-100.pt"
-  - "data/Qwen3-1.7B/mmlu/nn-long-4.pt"
-  # - "data/Qwen3-8B/mmlu/value-activations.pt"
-  # - "data/Qwen3-8B/mathX/activation-mathX-10k-qwen3-8B.pt"
+  - "data/Qwen3-1.7B/mmlu/nn-short-100.pt"
+  - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy.pt"
+
+# List of file paths whose samples should be EXCLUDED from the validation split
+# (they will still be used for training). Provide full paths or just the filename.
+exclude_val:
+  # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy.pt"
 
 
 # Activation field to use 
@@ -38,7 +41,7 @@ training:
 # Task-Specific Settings
 task_specific:
   classification:
-    label_type: "hard"  # Options: "hard", "soft", "entropy", "variance"
+    label_type: "entropy"  # Options: "hard", "soft", "entropy", "variance"
     soft_label_threshold: 0.01  # Threshold for binarizing soft/entropy labels
     
     # Evaluation
@@ -57,5 +60,5 @@ task_specific:
 # Model-Specific Settings
 model_specific:
   mlp:
-    hidden_dims: [64]  # Hidden layer dimensions
-    dropout_p: 0.5          # Dropout probability 
+    hidden_dims: [128, 64]  # Hidden layer dimensions
+    dropout_p: 0.6          # Dropout probability 
