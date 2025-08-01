@@ -65,10 +65,25 @@ class Completer:
         self,
         output_file: str,
         n_completions_per_item: int = 100,
+        n_items_per_cot: int = 1,  # Number of random samples per CoT
         max_new_tokens: int = 512,
         temperature: float = 1.0,
         cot_percentage: float = 1.0,  # Max percentage of CoT to sample from (0.0 to 1.0)
     ):
+        """
+        Generate completions from the dataset with support for multiple random samples per CoT.
+        
+        Args:
+            output_file: Path to save the generated completions
+            n_completions_per_item: Number of completions to generate per prompt
+            n_items_per_cot: Number of random samples to generate from each CoT. 
+                           Each sample will have n_completions_per_item completions.
+                           For example, if n_items_per_cot=3 and n_completions_per_item=100,
+                           each CoT will generate 3 different random cuts, each with 100 completions.
+            max_new_tokens: Maximum number of new tokens to generate
+            temperature: Sampling temperature for generation
+            cot_percentage: Maximum percentage of CoT steps to sample from (0.0 to 1.0)
+        """
         node_size = 1
         node_rank = 0
         master_addr = "127.0.0.1"
@@ -99,6 +114,7 @@ class Completer:
                     args=(
                         output_file,
                         n_completions_per_item,
+                        n_items_per_cot,
                         max_new_tokens,
                         temperature,
                         cot_percentage,
@@ -137,6 +153,7 @@ class Completer:
             self._worker(
                 output_file,
                 n_completions_per_item,
+                n_items_per_cot,
                 max_new_tokens,
                 temperature,
                 cot_percentage,
@@ -156,7 +173,7 @@ class Completer:
             logging.info(f"Processing complete! Output written to {output_file}")
 
 
-    def _worker(self, output_file, n_completions_per_item, max_new_tokens, temperature, cot_percentage, model, trust_remote_code, dp_size, tp_size, gpu_memory_utilization, max_num_seqs, global_dp_rank, local_dp_rank, master_addr, master_port):
+    def _worker(self, output_file, n_completions_per_item, n_items_per_cot, max_new_tokens, temperature, cot_percentage, model, trust_remote_code, dp_size, tp_size, gpu_memory_utilization, max_num_seqs, global_dp_rank, local_dp_rank, master_addr, master_port):
 
         logging.info(f"Starting worker: global_rank={global_dp_rank}, local_rank={local_dp_rank}")
         os.environ["VLLM_DP_RANK"] = str(global_dp_rank)
@@ -195,17 +212,25 @@ class Completer:
         source_metadata = []
 
         for item in data_chunk:
-            cut_cot = self.split_attempt(item, cot_percentage)
             question = item.get("question", "")
-            if not question or not cut_cot:
-                logging.warning(f"Skipping item on rank {global_dp_rank}: missing question or cut_cot")
+            if not question:
+                logging.warning(f"Skipping item on rank {global_dp_rank}: missing question")
                 continue
-            prompt = self.build_prompt(question, cut_cot)
-            prompts_to_process.append(prompt)
-            source_metadata.append({
-                "original_item": item,
-                "cut_cot": cut_cot,
-            })
+            
+            # Generate n_items_per_cot random samples from this CoT
+            for sample_idx in range(n_items_per_cot):
+                cut_cot = self.split_attempt(item, cot_percentage)
+                if not cut_cot:
+                    logging.warning(f"Skipping sample {sample_idx} for item on rank {global_dp_rank}: missing cut_cot")
+                    continue
+                
+                prompt = self.build_prompt(question, cut_cot)
+                prompts_to_process.append(prompt)
+                source_metadata.append({
+                    "original_item": item,
+                    "cut_cot": cut_cot,
+                    "sample_idx": sample_idx,
+                })
         if not prompts_to_process:
             logging.warning(f"DP rank {global_dp_rank} has no valid prompts to process after filtering. Exiting.")
             return
@@ -232,12 +257,31 @@ class Completer:
         processed_count = 0
         output_data = []
 
+        # Group outputs by original item
+        # Each original item will have multiple samples, each with multiple completions
+        # Output structure: {original_item, samples: [{sample_idx, cut_cot, completions}, ...]}
+        item_outputs = {}
         for source_info, output_group in zip(source_metadata, all_outputs):
+            original_item = source_info["original_item"]
+            sample_idx = source_info["sample_idx"]
+            cut_cot = source_info["cut_cot"]
             completions = [out.text for out in output_group.outputs]
-            out_data = source_info["original_item"].copy()
-            out_data["cut_cot"] = source_info["cut_cot"]
-            out_data["completions"] = completions
-            output_data.append(out_data)
+            
+            if original_item not in item_outputs:
+                item_outputs[original_item] = {
+                    "original_item": original_item,
+                    "samples": []
+                }
+            
+            item_outputs[original_item]["samples"].append({
+                "sample_idx": sample_idx,
+                "cut_cot": cut_cot,
+                "completions": completions
+            })
+        
+        # Convert grouped outputs to final format
+        for item_key, item_data in item_outputs.items():
+            output_data.append(item_data)
             processed_count += 1
 
         save_dataset(output_data, output_file_path)

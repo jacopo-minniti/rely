@@ -6,10 +6,9 @@ output_file: "probe.pth"
 
 
 files:
-  # - "data/Qwen3-1.7B/mmlu/nn-short-100.pt"
+  - "data/Qwen3-1.7B/mmlu/nn-short-100.pt"
   # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-1k.pt"
   # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-6k.pt"
-  - "train.pt"
 
 exclude_val:
   # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-1k.pt"
