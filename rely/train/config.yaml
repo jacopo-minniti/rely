@@ -7,34 +7,29 @@ output_file: "probe.pth"
 
 files:
   # - "data/Qwen3-1.7B/mmlu/nn-short-100.pt"
-  # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy.pt"
-  # - "data/Qwen3-1.7B/mmlu/nn-long-4.pt"
-  - "half-normal.pt"
-  - "half-high.pt"
+  # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-1k.pt"
+  # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-6k.pt"
+  - "train.pt"
 
-# List of file paths whose samples should be EXCLUDED from the validation split
 exclude_val:
-  # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy.pt"
-  # - "half.pt"
-  - "half-high.pt"
+  # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-1k.pt"
+  # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-6k.pt"
 
 
-# Activation field to use 
 activation_field: "cut_cot_activations"  # Options: "activations", "cut_cot_activations"
 
-# Dataset preprocessing
 preprocessing:
-  percentage_dataset: 1  # Use fraction of dataset (0.0-1.0)
-  normalize_inputs: true  # Normalize input features to zero mean, unit variance
+  percentage_dataset: 1  # 0.0-1.0
+  normalize_inputs: false  # Normalize input features to zero mean, unit variance
   remove_zeroes: false
   zero_tolerance: 0.01
 
 # Training Hyperparameters
 training:
-  epochs: 128
+  epochs: 256
   batch_size: 4096
   learning_rate: 5.0e-5  
-  weight_decay: 1.0e-1
+  weight_decay: 1.0e-2
   val_split: 0.15
   patience: 15  # Early stopping patience
   scheduler:
@@ -48,11 +43,14 @@ task_specific:
     label_type: "entropy"  # Options: "hard", "soft", "entropy", "variance"
     soft_label_threshold: 0.01  # Threshold for binarizing soft/entropy labels
     
+    # Class weighting for imbalanced datasets
+    class_weight: "balanced"  # Options: "none", "balanced", "inverse", "sqrt_inverse"
+    
     # Evaluation
     val_threshold: "auto"  # Threshold for validation predictions. Use "auto" for automatic optimization.
     
     # Data balancing
-    balance_data: true
+    balance_data: false
     balance_strategy: 'smote'  # Options: 'undersample', 'oversample', 'smote'
     smote_k_neighbors: 5
     
@@ -65,4 +63,4 @@ task_specific:
 model_specific:
   mlp:
     hidden_dims: [64]  # Hidden layer dimensions
-    dropout_p: 0.6          # Dropout probability 
+    dropout_p: 0.5          # Dropout probability 

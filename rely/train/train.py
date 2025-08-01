@@ -204,7 +204,17 @@ class Trainer:
             mlp_cfg = config['model_specific']['mlp']
             model = MLPProbe(input_dim, hidden_dims=mlp_cfg['hidden_dims'], dropout_p=mlp_cfg['dropout_p']).to(device)
 
-        criterion = nn.BCEWithLogitsLoss() if config['task'] == 'classification' else nn.MSELoss()
+        # Calculate class weights for classification if specified
+        class_weights = None
+        if config['task'] == 'classification':
+            clf_cfg = config['task_specific']['classification']
+            class_weight_config = clf_cfg.get('class_weight', None)
+            if class_weight_config:
+                class_weights = self._calculate_class_weights(y, class_weight_config)
+                if class_weights is not None:
+                    class_weights = class_weights.to(device)
+        
+        criterion = nn.BCEWithLogitsLoss(pos_weight=class_weights[1] if class_weights is not None else None) if config['task'] == 'classification' else nn.MSELoss()
         optimizer = optim.Adam(model.parameters(), lr=config['training']['learning_rate'], weight_decay=config['training'].get('weight_decay', 0))
 
         scheduler = None
@@ -307,6 +317,51 @@ class Trainer:
             print("  - Applied logit transformation to labels.")
         
         return y
+
+    def _calculate_class_weights(self, y: torch.Tensor, class_weight_config: str) -> Optional[torch.Tensor]:
+        """Calculate class weights for imbalanced datasets.
+        
+        Args:
+            y: Tensor of labels (0s and 1s)
+            class_weight_config: String specifying the weighting strategy
+            
+        Returns:
+            Tensor of class weights [weight_for_class_0, weight_for_class_1] or None
+        """
+        if class_weight_config is None or class_weight_config == "none":
+            return None
+            
+        # Count samples per class
+        n_samples = len(y)
+        n_negative = (y == 0).sum().item()
+        n_positive = (y == 1).sum().item()
+        
+        if class_weight_config == "balanced":
+            # Balanced weights: inverse of class frequency
+            weight_negative = n_samples / (2 * n_negative) if n_negative > 0 else 1.0
+            weight_positive = n_samples / (2 * n_positive) if n_positive > 0 else 1.0
+            weights = torch.tensor([weight_negative, weight_positive], dtype=torch.float32)
+            print(f"  - Using balanced class weights: [negative={weight_negative:.3f}, positive={weight_positive:.3f}]")
+            
+        elif class_weight_config == "inverse":
+            # Inverse frequency weights
+            weight_negative = n_positive / n_negative if n_negative > 0 else 1.0
+            weight_positive = n_negative / n_positive if n_positive > 0 else 1.0
+            weights = torch.tensor([weight_negative, weight_positive], dtype=torch.float32)
+            print(f"  - Using inverse frequency weights: [negative={weight_negative:.3f}, positive={weight_positive:.3f}]")
+            
+        elif class_weight_config == "sqrt_inverse":
+            # Square root of inverse frequency weights
+            weight_negative = (n_positive / n_negative) ** 0.5 if n_negative > 0 else 1.0
+            weight_positive = (n_negative / n_positive) ** 0.5 if n_positive > 0 else 1.0
+            weights = torch.tensor([weight_negative, weight_positive], dtype=torch.float32)
+            print(f"  - Using sqrt inverse frequency weights: [negative={weight_negative:.3f}, positive={weight_positive:.3f}]")
+            
+        else:
+            print(f"⚠️ Warning: Unknown class_weight '{class_weight_config}'. Using no class weights.")
+            return None
+            
+        return weights
 
     def _balance_training_set(self, full_dataset, train_dataset, clf_cfg):
         """Balance training set using various strategies."""
