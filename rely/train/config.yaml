@@ -4,15 +4,19 @@ task: "classification"  # Options: "classification", "regression"
 model_type: "mlp"       # Options: "linear", "mlp"
 output_file: "probe.pth"
 
-# Data Configuration
+
 files:
-  - "data/Qwen3-1.7B/mmlu/nn-short-100.pt"
-  - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy.pt"
+  # - "data/Qwen3-1.7B/mmlu/nn-short-100.pt"
+  # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy.pt"
+  # - "data/Qwen3-1.7B/mmlu/nn-long-4.pt"
+  - "half-normal.pt"
+  - "half-high.pt"
 
 # List of file paths whose samples should be EXCLUDED from the validation split
-# (they will still be used for training). Provide full paths or just the filename.
 exclude_val:
   # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy.pt"
+  # - "half.pt"
+  - "half-high.pt"
 
 
 # Activation field to use 
@@ -21,16 +25,16 @@ activation_field: "cut_cot_activations"  # Options: "activations", "cut_cot_acti
 # Dataset preprocessing
 preprocessing:
   percentage_dataset: 1  # Use fraction of dataset (0.0-1.0)
-  normalize_inputs: false  # Normalize input features to zero mean, unit variance
+  normalize_inputs: true  # Normalize input features to zero mean, unit variance
   remove_zeroes: false
   zero_tolerance: 0.01
 
 # Training Hyperparameters
 training:
   epochs: 128
-  batch_size: 256    
-  learning_rate: 5.0e-4  
-  weight_decay: 1.0e-2
+  batch_size: 4096
+  learning_rate: 5.0e-5  
+  weight_decay: 1.0e-1
   val_split: 0.15
   patience: 15  # Early stopping patience
   scheduler:
@@ -45,7 +49,7 @@ task_specific:
     soft_label_threshold: 0.01  # Threshold for binarizing soft/entropy labels
     
     # Evaluation
-    val_threshold: "auto"  # Threshold for validation predictions. Use "auto" for automatic optimization or a float value (e.g., 0.5)
+    val_threshold: "auto"  # Threshold for validation predictions. Use "auto" for automatic optimization.
     
     # Data balancing
     balance_data: true
@@ -60,5 +64,5 @@ task_specific:
 # Model-Specific Settings
 model_specific:
   mlp:
-    hidden_dims: [128, 64]  # Hidden layer dimensions
+    hidden_dims: [64]  # Hidden layer dimensions
     dropout_p: 0.6          # Dropout probability 

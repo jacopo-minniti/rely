@@ -26,7 +26,6 @@ class CompleterConfig(BaseModel):
     subset: Optional[str] = None  # For HF datasets
     split: str = "train"  # For HF datasets
     question_field: str = "question"
-    cot_percentage: float = 1.0  # Max percentage of CoT to sample from (0.0 to 1.0)
 
 
 class Completer:
@@ -35,7 +34,7 @@ class Completer:
         self.config = config
 
 
-    def split_attempt(self, item: dict) -> str:
+    def split_attempt(self, item: dict, cot_percentage: float = 1.0) -> str:
         if self.config.forking_strategy == "entropy":
             return item.get("cut_cot", "")
         else:
@@ -48,7 +47,7 @@ class Completer:
             
             max_step = len(steps) - 1
             # Calculate the maximum step based on cot_percentage
-            max_sampled_step = int(max_step * self.config.cot_percentage)
+            max_sampled_step = int(max_step * cot_percentage)
             sampled_step = random.randint(0, max_sampled_step) if max_sampled_step > 0 else 0
             cut_steps = steps[:sampled_step + 1]
 
@@ -68,6 +67,7 @@ class Completer:
         n_completions_per_item: int = 100,
         max_new_tokens: int = 512,
         temperature: float = 1.0,
+        cot_percentage: float = 1.0,  # Max percentage of CoT to sample from (0.0 to 1.0)
     ):
         node_size = 1
         node_rank = 0
@@ -101,6 +101,7 @@ class Completer:
                         n_completions_per_item,
                         max_new_tokens,
                         temperature,
+                        cot_percentage,
                         model,
                         trust_remote_code,
                         dp_size,
@@ -138,6 +139,7 @@ class Completer:
                 n_completions_per_item,
                 max_new_tokens,
                 temperature,
+                cot_percentage,
                 model,
                 trust_remote_code,
                 dp_size,
@@ -154,7 +156,7 @@ class Completer:
             logging.info(f"Processing complete! Output written to {output_file}")
 
 
-    def _worker(self, output_file, n_completions_per_item, max_new_tokens, temperature, model, trust_remote_code, dp_size, tp_size, gpu_memory_utilization, max_num_seqs, global_dp_rank, local_dp_rank, master_addr, master_port):
+    def _worker(self, output_file, n_completions_per_item, max_new_tokens, temperature, cot_percentage, model, trust_remote_code, dp_size, tp_size, gpu_memory_utilization, max_num_seqs, global_dp_rank, local_dp_rank, master_addr, master_port):
 
         logging.info(f"Starting worker: global_rank={global_dp_rank}, local_rank={local_dp_rank}")
         os.environ["VLLM_DP_RANK"] = str(global_dp_rank)
@@ -193,7 +195,7 @@ class Completer:
         source_metadata = []
 
         for item in data_chunk:
-            cut_cot = self.split_attempt(item)
+            cut_cot = self.split_attempt(item, cot_percentage)
             question = item.get("question", "")
             if not question or not cut_cot:
                 logging.warning(f"Skipping item on rank {global_dp_rank}: missing question or cut_cot")
