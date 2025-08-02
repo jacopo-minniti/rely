@@ -6,13 +6,14 @@ output_file: "probe.pth"
 
 
 files:
-  - "data/Qwen3-1.7B/mmlu/nn-short-100.pt"
-  # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-1k.pt"
+  # - "data/Qwen3-1.7B/mmlu/nn-short-100.pt"
+  # - "nn-short-100-high-entropy-new.pt"
+  # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-6k.pt"
+  - "data/Qwen3-1.7B/mmlu/nn-long-4.pt"
+exclude_val:
+  # - "nn-short-100-high-entropy-new.pt"
   # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-6k.pt"
 
-exclude_val:
-  # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-1k.pt"
-  # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-6k.pt"
 
 
 activation_field: "cut_cot_activations"  # Options: "activations", "cut_cot_activations"
@@ -27,7 +28,7 @@ preprocessing:
 training:
   epochs: 256
   batch_size: 4096
-  learning_rate: 5.0e-5  
+  learning_rate: 5.0e-4  
   weight_decay: 1.0e-2
   val_split: 0.15
   patience: 15  # Early stopping patience
@@ -39,11 +40,11 @@ training:
 # Task-Specific Settings
 task_specific:
   classification:
-    label_type: "entropy"  # Options: "hard", "soft", "entropy", "variance"
-    soft_label_threshold: 0.01  # Threshold for binarizing soft/entropy labels
+    label_type: "hard"  # Options: "hard", "soft", "entropy", "variance"
+    soft_label_threshold: 0.1  # Threshold for binarizing soft/entropy labels
     
     # Class weighting for imbalanced datasets
-    class_weight: "balanced"  # Options: "none", "balanced", "inverse", "sqrt_inverse"
+    class_weight: "none"  # Options: "none", "balanced", "inverse", "sqrt_inverse"
     
     # Evaluation
     val_threshold: "auto"  # Threshold for validation predictions. Use "auto" for automatic optimization.
@@ -61,5 +62,5 @@ task_specific:
 # Model-Specific Settings
 model_specific:
   mlp:
-    hidden_dims: [64]  # Hidden layer dimensions
-    dropout_p: 0.5          # Dropout probability 
+    hidden_dims: [256, 128]  # Hidden layer dimensions
+    dropout_p: 0.7          # Dropout probability 
