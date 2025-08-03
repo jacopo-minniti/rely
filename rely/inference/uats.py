@@ -194,7 +194,7 @@ class GuidedTreeSearch:
         attention_mask = torch.ones_like(ids_tensor, dtype=torch.long)
 
         with torch.no_grad():
-            outputs = self.model(  # type: ignore[attr-defined]
+            outputs = self.model( 
                 ids_tensor,
                 attention_mask=attention_mask,
                 output_hidden_states=True,

@@ -1,18 +1,17 @@
 # General Configuration
 run_name: "uncertainty_run"
-task: "classification"  # Options: "classification", "regression"
+task: "regression"  # Options: "classification", "regression"
 model_type: "mlp"       # Options: "linear", "mlp"
 output_file: "probe.pth"
 
 
 files:
   # - "data/Qwen3-1.7B/mmlu/nn-short-100.pt"
-  # - "nn-short-100-high-entropy-new.pt"
-  # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-6k.pt"
-  - "data/Qwen3-1.7B/mmlu/nn-long-4.pt"
+  # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-05.pt"
+  - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-1k.pt"
 exclude_val:
-  # - "nn-short-100-high-entropy-new.pt"
-  # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-6k.pt"
+  # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-05.pt"
+  # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-1k.pt"
 
 
 
@@ -40,8 +39,8 @@ training:
 # Task-Specific Settings
 task_specific:
   classification:
-    label_type: "hard"  # Options: "hard", "soft", "entropy", "variance"
-    soft_label_threshold: 0.1  # Threshold for binarizing soft/entropy labels
+    label_type: "entropy"  # Options: "hard", "soft", "entropy", "variance"
+    soft_label_threshold: 0.01  # Threshold for binarizing soft/entropy labels
     
     # Class weighting for imbalanced datasets
     class_weight: "none"  # Options: "none", "balanced", "inverse", "sqrt_inverse"
