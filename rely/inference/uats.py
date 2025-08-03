@@ -7,13 +7,15 @@ from pathlib import Path
 from unsloth import FastLanguageModel
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers.generation.stopping_criteria import StopStringCriteria
+from ete3 import Tree, TreeStyle
 
-from rely.utils.probes import UncertaintyProbe, ValueProbe, load_probes
+from rely.utils.probes import load_probes, MLPProbe
 from rely.utils.text_utils import (
     count_tokens_after_marker,
     format_system_prompt,
     MMLU_SYSTEM_PROMPT,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +27,7 @@ class UATSConfig:
     uncertainty_probe_path: Optional[str] = None
     value_probe_path: Optional[str] = None
     beam_width: int = 3
-    max_branch_tokens: int = 1024
+    budget: int = 1024  # Total token budget across all branches during reasoning
     max_step_tokens: int = 256
     device: str = "auto"
     probe_device: str = "cuda"
@@ -54,7 +56,7 @@ class GuidedTreeSearch:
     @classmethod
     def uncertainty_to_branches(cls, score: float) -> int:
         """Convert an uncertainty score (expected in [0, 1]) to the number of branches that should be explored."""
-        if score >= 0.5:
+        if score >= 0.7:
             return 2
         return 1
     
@@ -62,8 +64,8 @@ class GuidedTreeSearch:
         self,
         model: AutoModelForCausalLM,
         tokenizer: AutoTokenizer,
-        uncertainty_probe: UncertaintyProbe,
-        value_probe: ValueProbe,
+        uncertainty_probe: MLPProbe,
+        value_probe: MLPProbe,
         config: UATSConfig
     ):
         self.model = model
@@ -230,6 +232,8 @@ class GuidedTreeSearch:
         # Generate the very first reasoning step.
         # ------------------------------------------------------------------
         first_step_text, new_tokens = self._generate_step(prompt_ids.to(self.device))
+        # Track overall token usage across all branches (reasoning phase only)
+        tokens_used = len(new_tokens)
 
         # Concatenate the newly generated token IDs to obtain the full prompt
         # for the first branch.
@@ -262,6 +266,13 @@ class GuidedTreeSearch:
         finished: List[Branch] = []
         
         while beam:
+            # Stop if the global token budget has been exhausted
+            if tokens_used >= self.config.budget:
+                logger.info(
+                    f"Token budget reached: {tokens_used} >= {self.config.budget}. Stopping search."
+                )
+                break
+
             logger.info(f"Step {step}: Expanding {len(beam)} branches.")
             all_candidates = []
             
@@ -271,9 +282,12 @@ class GuidedTreeSearch:
                 logger.info(f"Branch {branch_idx} step {branch.step_count}: Uncertainty score={approx_I_score:.4f}, u={u}")
                 
                 # Generate branches based on uncertainty
+                budget_exceeded = False
                 for _ in range(u):
                     # Sampling is already stochastic; no manual seeds needed.
                     step_text, new_tokens = self._generate_step(branch.ids.to(self.device))
+                    # Update global token budget usage
+                    tokens_used += len(new_tokens)
 
                     new_ids_1d = torch.cat([
                         branch.ids[0].to(self.device) if branch.ids.dim() == 2 else branch.ids.to(self.device),
@@ -307,16 +321,24 @@ class GuidedTreeSearch:
                         logger.info(
                             f"Branch {branch_idx} finished with '</think>' token.")
                         finished_here = True
-                    elif total_tokens >= self.config.max_branch_tokens:
+                    # Check if the global token budget has been exhausted after this generation
+                    if tokens_used >= self.config.budget:
                         logger.info(
-                            f"Branch {branch_idx} reached max_branch_tokens ({total_tokens} >= {self.config.max_branch_tokens})")
+                            f"Global token budget exhausted ({tokens_used} >= {self.config.budget})." )
                         finished_here = True
+                        budget_exceeded = True
 
                     if finished_here:
                         finished.append(candidate)
                         break  # stop generating further continuations for this branch
                     else:
                         all_candidates.append(candidate)
+
+                    if budget_exceeded:
+                        break  # Exit inner branch-generation loop
+
+                if budget_exceeded:
+                    break  # Exit branch expansion loop
             
             # --------------------------------------------------------------
             # Prune to top-k by *normalised* score.
@@ -329,7 +351,10 @@ class GuidedTreeSearch:
                 )[: self.config.beam_width]
 
             beam = all_candidates
-            logger.info(f"After pruning: {len(beam)} active branches so far.")
+
+            if tokens_used >= self.config.budget:
+                logger.info("Global token budget reached during pruning. Ending search.")
+                break
 
             step += 1
             
@@ -481,6 +506,10 @@ def save_branches(
             else:
                 f.write(branch_text)
 
+    # After saving individual branch files, optionally render a summary tree
+    # visualisation using ETE3 for quick inspection.
+    _generate_tree_image(final_branches, output_dir)
+
 def run_uats(
     user_question: str,
     system_prompt: str = MMLU_SYSTEM_PROMPT,
@@ -513,8 +542,127 @@ def run_uats(
         save_branches(
             branches,
             save_dir,
-            max_branch_tokens=config.max_branch_tokens,
+            max_branch_tokens=config.budget,
             beam_width=config.beam_width,
         )
     
     return branches
+
+
+# ------------------------------------------------------------
+# Tree visualisation helpers (ETE3)
+# ------------------------------------------------------------
+
+
+def _generate_tree_image(branches: list[Branch], output_dir: Path, filename: str = "search_tree.png") -> None:
+    """Generate a PNG image visualising the explored branches using ETE3.
+
+    Creates a proper tree structure showing the actual branching pattern
+    of the UATS search. The function is *best-effort* – if ETE3 is not available 
+    the call silently returns after logging a warning.
+    """
+    if Tree is None or TreeStyle is None:
+        logger.warning("ETE3 library is not installed; skipping tree image generation.")
+        return
+
+    if not branches:
+        return
+
+    try:
+        # Create a proper tree structure based on step counts and branching
+        # Group branches by step count to understand the tree structure
+        step_groups = {}
+        for i, branch in enumerate(branches):
+            step = branch.step_count
+            if step not in step_groups:
+                step_groups[step] = []
+            step_groups[step].append((i, branch))
+        
+        # Sort steps to build tree from root to leaves
+        sorted_steps = sorted(step_groups.keys())
+        
+        # Create the tree structure
+        tree = Tree()
+        
+        # Create a mapping to track parent-child relationships
+        # For simplicity, we'll create a flat structure where each branch is a child of root
+        # but we'll organize them by step count for better visualization
+        for step in sorted_steps:
+            for i, branch in step_groups[step]:
+                # Create child node
+                child = tree.add_child(name=f"B{i}_s{branch.score:.2f}")
+                child.add_features(step_count=branch.step_count, 
+                                 score=branch.score,
+                                 uncertainty=branch.uncertainty,
+                                 value=branch.value,
+                                 total_tokens=branch.total_tokens)
+                
+                # Add step information to the node name for better organization
+                child.name = f"Step{branch.step_count}_B{i}_s{branch.score:.2f}"
+
+        # Create tree style with proper layout
+        ts = TreeStyle()
+        ts.show_leaf_name = True
+        ts.show_branch_length = False
+        ts.show_branch_support = False
+        
+        # Set layout function to customize node appearance
+        def layout(node):
+            if node.is_leaf():
+                # Add score information to leaf nodes
+                score_text = f"Score: {node.score:.3f}"
+                if node.uncertainty is not None:
+                    score_text += f"\nUncertainty: {node.uncertainty:.3f}"
+                score_text += f"\nValue: {node.value:.3f}"
+                score_text += f"\nTokens: {node.total_tokens}"
+                
+                # Create text face for additional information
+                from ete3 import faces, TextFace
+                info_face = TextFace(score_text, fsize=8)
+                info_face.margin_left = 5
+                info_face.margin_right = 5
+                faces.add_face_to_node(info_face, node, 0, position="branch-right")
+                
+                # Style leaf nodes with color based on step count
+                node.img_style["size"] = 10
+                node.img_style["shape"] = "circle"
+                
+                # Color code based on step count
+                step_count = getattr(node, 'step_count', 1)
+                if step_count == 1:
+                    node.img_style["fgcolor"] = "darkgreen"
+                elif step_count == 2:
+                    node.img_style["fgcolor"] = "darkblue"
+                elif step_count == 3:
+                    node.img_style["fgcolor"] = "darkred"
+                elif step_count == 4:
+                    node.img_style["fgcolor"] = "purple"
+                else:
+                    node.img_style["fgcolor"] = "orange"
+            else:
+                # Style root node
+                node.img_style["size"] = 12
+                node.img_style["shape"] = "sphere"
+                node.img_style["fgcolor"] = "black"
+        
+        ts.layout_fn = layout
+        
+        # Add title to the tree
+        from ete3 import faces, TextFace
+        title_face = TextFace(f"UATS Search Tree - {len(branches)} branches explored", fsize=14, fgcolor="black")
+        ts.title.add_face(title_face, column=0)
+        
+        # Set tree mode to circular for better visualization
+        ts.mode = "c"
+        ts.arc_start = -180
+        ts.arc_span = 180
+        
+        # Render to file
+        png_path = output_dir / filename
+        tree.render(str(png_path), w=1000, h=800, units="px", tree_style=ts)
+        logger.info(f"Tree image saved to {png_path}")
+        
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"Failed to generate tree image: {e}")
+        import traceback
+        logger.warning(f"Traceback: {traceback.format_exc()}")

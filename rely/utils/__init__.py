@@ -46,10 +46,9 @@ from .entropy_stats import (
 
 # Import from probes.py
 from .probes import (
-    UncertaintyProbe,
-    ValueProbe,
     load_probes,
-    convert_isotropy_to_branches
+    convert_isotropy_to_branches,
+    MLPProbe
 )
 
 # Import from text_utils.py
