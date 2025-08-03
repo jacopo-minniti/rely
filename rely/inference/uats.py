@@ -54,7 +54,7 @@ class GuidedTreeSearch:
     @classmethod
     def uncertainty_to_branches(cls, score: float) -> int:
         """Convert an uncertainty score (expected in [0, 1]) to the number of branches that should be explored."""
-        if score >= 0.6:
+        if score >= 0.5:
             return 2
         return 1
     
@@ -399,14 +399,21 @@ def create_uats_searcher(config: UATSConfig) -> GuidedTreeSearch:
     
     logger.info(f"Loading probes (hidden_size={hidden_size}, dtype={model_dtype})")
     # Load probes
-    uncertainty_probe, value_probe = load_probes(
-        hidden_size=hidden_size,
-        model_dtype=model_dtype,
-        uncertainty_probe_path=config.uncertainty_probe_path,
-        value_probe_path=config.value_probe_path,
-        device=config.probe_device
-    )
-    logger.info("Probes loaded successfully")
+    try:
+        uncertainty_probe, value_probe = load_probes(
+            hidden_size=hidden_size,
+            model_dtype=model_dtype,
+            uncertainty_probe_path=config.uncertainty_probe_path,
+            value_probe_path=config.value_probe_path,
+            device=config.probe_device
+        )
+        logger.info("Probes loaded successfully")
+    except FileNotFoundError as e:
+        logger.error(f"Probe file not found: {e}")
+        raise
+    except RuntimeError as e:
+        logger.error(f"Failed to load probe: {e}")
+        raise
     
     # Create searcher
     searcher = GuidedTreeSearch(

@@ -4,19 +4,6 @@ import numpy as np
 from typing import Optional, Tuple
 from pathlib import Path
 
-
-class UncertaintyProbe(nn.Module):
-    """
-    Simple linear probe to predict an uncertainty score from hidden states.
-    """
-    def __init__(self, hidden_size):
-        super().__init__()
-        self.linear = nn.Linear(hidden_size, 1)
-
-    def forward(self, x):
-        return self.linear(x)
-
-
 class MLPProbe(nn.Module):
     """A more advanced MLP probe with configurable depth, width, dropout, and batch norm."""
     def __init__(self, input_dim, hidden_dims=[512, 128], dropout_p=0.3):
@@ -40,28 +27,6 @@ class MLPProbe(nn.Module):
         return self.output_layer(x)
 
 
-class ValueProbe(nn.Module):
-    """
-    MLP probe to predict a value score for a given sequence.
-    """
-    def __init__(self, hidden_size, hidden_dims=(512, 128), dropout_p=0.3):
-        super().__init__()
-        layers = []
-        current_dim = hidden_size
-        for h_dim in hidden_dims:
-            layers.append(nn.Linear(current_dim, h_dim))
-            layers.append(nn.BatchNorm1d(h_dim))
-            layers.append(nn.ReLU())
-            layers.append(nn.Dropout(dropout_p))
-            current_dim = h_dim
-        self.hidden_layers = nn.Sequential(*layers)
-        self.output_layer = nn.Linear(current_dim, 1)
-
-    def forward(self, x):
-        x = self.hidden_layers(x)
-        x = self.output_layer(x)
-        return torch.sigmoid(x)
-
 
 def load_probes(
     hidden_size: int, 
@@ -82,58 +47,40 @@ def load_probes(
     
     Returns:
         Tuple of (uncertainty_probe, value_probe)
+        
+    Raises:
+        FileNotFoundError: If either probe file is not found
+        RuntimeError: If probe loading fails
     """
-    # Load uncertainty probe - try MLPProbe first, fallback to linear
+    # Check if uncertainty probe path exists
+    if not uncertainty_probe_path or not Path(uncertainty_probe_path).exists():
+        raise FileNotFoundError(f"Uncertainty probe file not found: {uncertainty_probe_path}")
+    
+    # Check if value probe path exists
+    if not value_probe_path or not Path(value_probe_path).exists():
+        raise FileNotFoundError(f"Value probe file not found: {value_probe_path}")
+    
     uncertainty_probe = None
-    if uncertainty_probe_path and Path(uncertainty_probe_path).exists():
-        try:
-            # Try loading as MLPProbe with one hidden layer of 64 neurons
-            uncertainty_probe = MLPProbe(hidden_size, hidden_dims=[64]).to(device).to(model_dtype)
-            uncertainty_probe.load_state_dict(
-                torch.load(uncertainty_probe_path, map_location=device)
-            )
-            print(f"Successfully loaded uncertainty probe as MLPProbe from {uncertainty_probe_path}")
-        except Exception as e:
-            print(f"Warning: Could not load uncertainty probe as MLPProbe from {uncertainty_probe_path}: {e}")
-            try:
-                # Fallback to linear probe
-                uncertainty_probe = UncertaintyProbe(hidden_size).to(device).to(model_dtype)
-                uncertainty_probe.load_state_dict(
-                    torch.load(uncertainty_probe_path, map_location=device)
-                )
-                print(f"Successfully loaded uncertainty probe as linear probe from {uncertainty_probe_path}")
-            except Exception as e2:
-                print(f"Warning: Could not load uncertainty probe from {uncertainty_probe_path}: {e2}")
-                uncertainty_probe = UncertaintyProbe(hidden_size).to(device).to(model_dtype)
-    else:
-        uncertainty_probe = UncertaintyProbe(hidden_size).to(device).to(model_dtype)
+    try:
+        uncertainty_probe = MLPProbe(hidden_size, hidden_dims=[256, 128]).to(device).to(model_dtype)
+        uncertainty_probe.load_state_dict(
+            torch.load(uncertainty_probe_path, map_location=device)
+        )
+        print(f"Successfully loaded uncertainty probe as MLPProbe from {uncertainty_probe_path}")
+    except Exception as e:
+            raise RuntimeError(f"Failed to load uncertainty probe from {uncertainty_probe_path}: {e}")
     
     uncertainty_probe.eval()
 
-    # Load value probe - try MLPProbe first, fallback to ValueProbe
     value_probe = None
-    if value_probe_path and Path(value_probe_path).exists():
-        try:
-            # Try loading as MLPProbe with one hidden layer of 64 neurons
-            value_probe = MLPProbe(hidden_size, hidden_dims=[64]).to(device).to(model_dtype)
-            value_probe.load_state_dict(
-                torch.load(value_probe_path, map_location=device)
-            )
-            print(f"Successfully loaded value probe as MLPProbe from {value_probe_path}")
-        except Exception as e:
-            print(f"Warning: Could not load value probe as MLPProbe from {value_probe_path}: {e}")
-            try:
-                # Fallback to ValueProbe
-                value_probe = ValueProbe(hidden_size).to(device).to(model_dtype)
-                value_probe.load_state_dict(
-                    torch.load(value_probe_path, map_location=device)
-                )
-                print(f"Successfully loaded value probe as ValueProbe from {value_probe_path}")
-            except Exception as e2:
-                print(f"Warning: Could not load value probe from {value_probe_path}: {e2}")
-                value_probe = ValueProbe(hidden_size).to(device).to(model_dtype)
-    else:
-        value_probe = ValueProbe(hidden_size).to(device).to(model_dtype)
+    try:
+        value_probe = MLPProbe(hidden_size, hidden_dims=[256, 128]).to(device).to(model_dtype)
+        value_probe.load_state_dict(
+            torch.load(value_probe_path, map_location=device)
+        )
+        print(f"Successfully loaded value probe as MLPProbe from {value_probe_path}")
+    except Exception as e:
+            raise RuntimeError(f"Failed to load value probe from {value_probe_path}: {e}")
     
     value_probe.eval()
     
