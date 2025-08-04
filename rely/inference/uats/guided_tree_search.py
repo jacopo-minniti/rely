@@ -23,9 +23,9 @@ class GuidedTreeSearch:
     """
 
     @classmethod
-    def uncertainty_to_branches(cls, score: float) -> int:
-        """Convert an uncertainty score (expected in \[0, 1]) to the number of branches that should be explored."""
-        if score >= 0.7:
+    def uncertainty_to_branches(cls, score: float, uncertainty_threshold: float) -> int:
+        """Convert an uncertainty score (expected in [0, 1]) to the number of branches that should be explored."""
+        if score >= uncertainty_threshold:
             return 2
         return 1
 
@@ -175,7 +175,7 @@ class GuidedTreeSearch:
             uncertainty_logits = self.uncertainty_probe(probe_hidden_state)
             approx_I_score = torch.sigmoid(uncertainty_logits).item()
 
-        u = min(self.uncertainty_to_branches(approx_I_score), self.config.beam_width)
+        u = min(self.uncertainty_to_branches(approx_I_score, self.config.uncertainty_threshold), self.config.beam_width)
         return u, approx_I_score
 
     def search(self, user_question: str, system_prompt: str = MMLU_SYSTEM_PROMPT) -> tuple[list[Branch], list[Branch]]:
@@ -365,6 +365,19 @@ class GuidedTreeSearch:
                 final_branches.append(branch)
                 logger.info(f"Added branch {branch.id} with step count {branch.step_count} to final branches")
         
+        # If we still don't have enough branches to fill beam_width, add branches with fewer steps
+        if len(final_branches) < self.config.beam_width:
+            # Get all branches sorted by step count (descending) and score (descending)
+            remaining_branches = [b for b in all_branches if b not in final_branches]
+            remaining_branches.sort(key=lambda b: (b.step_count, b.score), reverse=True)
+            
+            # Add branches until we reach beam_width or run out of branches
+            for branch in remaining_branches:
+                if len(final_branches) >= self.config.beam_width:
+                    break
+                final_branches.append(branch)
+                logger.info(f"Added additional branch {branch.id} with step count {branch.step_count} to fill beam_width")
+        
         # Ensure we don't have duplicates
         seen_ids = set()
         unique_final_branches = []
@@ -414,7 +427,7 @@ class GuidedTreeSearch:
             # 4. If we still haven't reached beam_width, add remaining branches sorted by step count (descending)
             if len(prioritized_branches) < self.config.beam_width:
                 remaining_branches = [b for b in final_branches if b not in prioritized_branches]
-                remaining_branches.sort(key=lambda b: b.step_count, reverse=True)
+                remaining_branches.sort(key=lambda b: (b.step_count, b.score), reverse=True)
                 prioritized_branches.extend(remaining_branches)
                 logger.debug(f"Added {len(remaining_branches)} remaining branches sorted by step count")
             
@@ -425,6 +438,7 @@ class GuidedTreeSearch:
 
             final_branches = prioritized_branches
             logger.info(f"Applied priority-based selection: selected {len(final_branches)} branches")
+
 
         # Generate final answers only for the branches that will be saved
         for branch in final_branches:

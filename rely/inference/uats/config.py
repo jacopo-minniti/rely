@@ -11,7 +11,8 @@ class UATSConfig:
     uncertainty_probe_path: Optional[str] = None
     value_probe_path: Optional[str] = None
     beam_width: int = 3
-    budget: int = 1024  # Total token budget across all branches during reasoning
+    budget: int = 1024 
+    uncertainty_threshold: float = 0.8
     max_step_tokens: int = 256
     device: str = "auto"
     probe_device: str = "cuda"
@@ -32,4 +33,14 @@ class Branch:
     total_tokens: int
     final_answer: Optional[str] = None
     id: int = -1
-    parent_id: Optional[int] = None 
+    parent_id: Optional[int] = None
+    
+    def __eq__(self, other):
+        """Compare branches by their unique id to avoid tensor comparison issues."""
+        if not isinstance(other, Branch):
+            return False
+        return self.id == other.id
+    
+    def __hash__(self):
+        """Hash based on id for consistent behavior with __eq__."""
+        return hash(self.id) 
