@@ -44,12 +44,21 @@ from .entropy_stats import (
     comprehensive_entropy_analysis
 )
 
-# Import from probes.py
-from .probes import (
-    load_probes,
-    convert_isotropy_to_branches,
-    MLPProbe
-)
+# Probes utilities moved to rely.inference.uats.probes but keep backward compatibility
+try:
+    from .probes import (
+        load_probes,
+        convert_isotropy_to_branches,
+        MLPProbe,
+    )
+except ModuleNotFoundError:  # probes module relocated
+    from importlib import import_module
+
+    _probes_module = import_module("rely.inference.uats.probes")
+
+    load_probes = _probes_module.load_probes
+    convert_isotropy_to_branches = _probes_module.convert_isotropy_to_branches
+    MLPProbe = _probes_module.MLPProbe
 
 # Import from text_utils.py
 from .text_utils import (

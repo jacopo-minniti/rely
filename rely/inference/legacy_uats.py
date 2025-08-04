@@ -1,5 +1,8 @@
 import logging
 import torch
+import json
+import re
+from datetime import datetime
 from typing import List, Optional, Union
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +21,41 @@ from rely.utils.text_utils import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def extract_final_answer(branch_text: str, final_answer_text: str) -> str:
+    """
+    Extract the final answer from the branch text and final answer.
+    
+    Args:
+        branch_text: The reasoning text
+        final_answer_text: The final answer text
+        
+    Returns:
+        The extracted final answer in format like "(A)", "(B)", etc.
+    """
+    # Combine the texts to get the full content
+    full_text = branch_text + final_answer_text
+    
+    # Look for patterns like "(A)", "(B)", "(C)", "(D)" in the final answer section
+    # First, find the final answer section (everything after "## Final Answer")
+    final_answer_section = ""
+    if "## Final Answer" in full_text:
+        final_answer_section = full_text.split("## Final Answer")[-1].strip()
+    else:
+        # If no "## Final Answer" section, look in the entire text
+        final_answer_section = full_text
+    
+    # Look for letter patterns like (A), (B), (C), (D)
+    letter_pattern = r'\([A-D]\)'
+    matches = re.findall(letter_pattern, final_answer_section)
+    
+    if matches:
+        # Return the last match (most recent formatting)
+        return matches[-1]
+    
+    # If no letter pattern found, return the entire final answer section
+    return final_answer_section.strip()
 
 
 @dataclass
@@ -457,6 +495,8 @@ def save_branches(
     output_dir: Union[str, Path],
     max_branch_tokens: int,
     beam_width: Optional[int] | None = None,
+    user_question: Optional[str] = None,
+    system_prompt: Optional[str] = None,
 ) -> None:
     """
     Save the *active* branches at the end of the search to disk.
@@ -470,8 +510,11 @@ def save_branches(
     because the beam is already capped), the highest-scoring ones are kept.
     """
 
-    output_dir = Path(output_dir)
-    output_dir.mkdir(exist_ok=True)
+    # Create timestamped directory structure
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_path = Path(output_dir)
+    run_dir = output_path / f"run_{timestamp}"
+    run_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
     # Identify the active branches (those with the greatest step_count).
@@ -486,8 +529,18 @@ def save_branches(
         final_branches = sorted(final_branches, key=lambda b: b.score, reverse=True)[:beam_width]
 
     logger.debug(f"Saving {len(final_branches)} final branches")
+    
+    # Prepare summary data for JSON
+    summary_data = {
+        "timestamp": timestamp,
+        "user_question": user_question,
+        "system_prompt": system_prompt,
+        "total_branches": len(final_branches),
+        "branches": []
+    }
+    
     for i, branch in enumerate(final_branches):
-        filepath = output_dir / f"branch_{i}.txt"
+        filepath = run_dir / f"branch_{i}.txt"
 
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(f"Step count: {branch.step_count}\n")
@@ -505,25 +558,49 @@ def save_branches(
                 f.write(final_answer_text)
             else:
                 f.write(branch_text)
+        
+        # Extract final answer for summary
+        extracted_answer = ""
+        if branch.final_answer:
+            extracted_answer = extract_final_answer(branch.text, branch.final_answer)
+        
+        # Add branch data to summary
+        branch_summary = {
+            "branch_id": i,
+            "step_count": branch.step_count,
+            "score": branch.score,
+            "uncertainty": branch.uncertainty,
+            "value": branch.value,
+            "total_tokens": branch.total_tokens,
+            "extracted_answer": extracted_answer
+        }
+        summary_data["branches"].append(branch_summary)
+    
+    # Save summary JSON file
+    summary_filepath = run_dir / "results.json"
+    with open(summary_filepath, "w", encoding="utf-8") as f:
+        json.dump(summary_data, f, indent=2, ensure_ascii=False)
+    
+    logger.info(f"Saved {len(final_branches)} branches and summary to {run_dir}")
 
     # After saving individual branch files, optionally render a summary tree
     # visualisation using ETE3 for quick inspection.
-    _generate_tree_image(final_branches, output_dir)
+    _generate_tree_image(final_branches, run_dir)
 
 def run_uats(
     user_question: str,
     system_prompt: str = MMLU_SYSTEM_PROMPT,
     config: Optional[UATSConfig] = None,
-    save_dir: Optional[Union[str, Path]] = None
+    save_dir: Optional[Union[str, Path]] = "uats_results"
 ) -> List[Branch]:
     """
-    Run UATS search with a simple API and optionally save branches.
+    Run UATS search with a simple API and save branches to timestamped directories.
 
     Args:
         system_prompt: System prompt to use
         user_question: User question to answer
         config: Optional configuration (uses default if None)
-        save_dir: Optional directory to save branches (if provided)
+        save_dir: Directory to save branches (defaults to "uats_results")
 
     Returns:
         List of all branches explored during search
@@ -537,14 +614,15 @@ def run_uats(
     branches = searcher.search(user_question, system_prompt)
     logger.info(f"UATS search completed with {len(branches)} branches explored")
     
-    if save_dir is not None:
-        logger.info(f"Saving branches to {save_dir}")
-        save_branches(
-            branches,
-            save_dir,
-            max_branch_tokens=config.budget,
-            beam_width=config.beam_width,
-        )
+    logger.info(f"Saving branches to {save_dir}")
+    save_branches(
+        branches,
+        save_dir,
+        max_branch_tokens=config.budget,
+        beam_width=config.beam_width,
+        user_question=user_question,
+        system_prompt=system_prompt,
+    )
     
     return branches
 

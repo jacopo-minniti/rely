@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Union, Literal
+import json
 import logging
 import re
 from pathlib import Path
@@ -188,29 +189,32 @@ def save_self_consistency_result(
         
         logger.debug(f"Saved generation {i} to {generation_file}")
 
-    # Save summary file
-    summary_file = output_path / "summary.md"
+    # Save summary file as JSON
+    summary_file = output_path / "summary.json"
+    
+    # Prepare summary data
+    summary_data = {
+        "model": result.config.model_name,
+        "num_samples": result.config.num_samples,
+        "temperature": result.config.temperature,
+        "top_p": result.config.top_p,
+        "max_new_tokens": result.config.max_new_tokens,
+        "most_consistent_answer": result.most_consistent_answer,
+        "answer_distribution": {
+            ans: {
+                "count": count,
+                "percentage": (count / result.config.num_samples) * 100
+            }
+            for ans, count in result.distribution.items()
+        },
+        "all_answers": result.answers,
+        "individual_generation_files": [
+            f"generation_{i}.txt" for i in range(result.config.num_samples)
+        ]
+    }
+    
     with open(summary_file, "w") as f:
-        f.write("# Self-Consistency Summary\n\n")
-        f.write(f"**Model:** {result.config.model_name}\n")
-        f.write(f"**Number of Samples:** {result.config.num_samples}\n")
-        f.write(f"**Temperature:** {result.config.temperature}\n")
-        f.write(f"**Top-p:** {result.config.top_p}\n")
-        f.write(f"**Max New Tokens:** {result.config.max_new_tokens}\n\n")
-        
-        f.write(f"**Most Consistent Answer:** {result.most_consistent_answer}\n\n")
-        
-        f.write("## Answer Distribution\n")
-        for ans, count in sorted(result.distribution.items(), key=lambda x: x[1], reverse=True):
-            percentage = (count / result.config.num_samples) * 100
-            f.write(f"- **{ans}**: {count} ({percentage:.1f}%)\n")
-        
-        f.write("\n## All Answers\n")
-        f.write(" ".join(result.answers))
-        
-        f.write("\n\n## Individual Generation Files\n")
-        for i in range(result.config.num_samples):
-            f.write(f"- [generation_{i}.txt](generation_{i}.txt)\n")
+        json.dump(summary_data, f, indent=2)
 
     logger.info(f"Saved self-consistency results to {output_path}")
     logger.info(f"Summary: {summary_file}")
