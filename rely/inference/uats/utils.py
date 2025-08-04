@@ -301,11 +301,7 @@ def _generate_tree_image(
             G.add_node(final_node_id, label=f"Final Answer:\n{final_answer}", is_final_answer=True)
             G.add_edge(branch.id, final_node_id)
     
-    try:
-        pos = nx.nx_agraph.graphviz_layout(G, prog="dot")
-    except Exception:
-        pos = nx.spring_layout(G, k=0.9, iterations=50) # Fallback layout
-    
+    pos = nx.nx_agraph.graphviz_layout(G, prog="dot")
     plt.figure(figsize=(20, 15))
     
     # Separate nodes by type for custom styling
