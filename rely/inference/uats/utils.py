@@ -224,99 +224,84 @@ def _generate_tree_image(
     output_dir: Path,
     filename: str = "search_tree.png",
 ) -> None:
-    """Render a circular tree visualisation of the explored search space."""
-
-    if Tree is None or TreeStyle is None:
-        logger.warning("ETE3 library is not installed; skipping tree image generation.")
-        return
+    """Render a simple tree visualisation of the explored search space using matplotlib and networkx."""
+    import matplotlib.pyplot as plt
+    import networkx as nx
+    import textwrap
 
     if not branches:
         return
 
-    try:
-        # ------------------------------------------------------------------
-        # Build a *hierarchical* tree so that individual branches visibly
-        # diverge from the root and from one another.  Each reasoning step
-        # becomes a level in the tree (depth = step_count).  A unique path
-        # is created for every explored branch, meaning that nodes from
-        # different branches are *not* merged – this guarantees a clear
-        # separation of lines in the rendered image while keeping the logic
-        # simple and deterministic.
-        # ------------------------------------------------------------------
-        root = Tree(name="Start")
+    # Helper to build a tree from branches
+    def add_nodes_edges(branch, graph, parent=None, branch_id=0):
+        # Each node is uniquely identified by (branch_id, step_count)
+        node_id = f"B{branch_id}_S{branch.step_count}"
+        # Shorten text for display
+        text_snippet = branch.text.strip().split(". ")[0][:40] + ("..." if len(branch.text.strip()) > 40 else "")
+        label = f"u={branch.uncertainty:.2f if branch.uncertainty is not None else '?'}\nv={branch.value:.2f}\n{text_snippet}"
+        graph.add_node(node_id, label=label)
+        if parent:
+            graph.add_edge(parent, node_id)
+        # No children in this context; branches are leaves
+        return node_id
 
-        # Helper: create – or fetch if already created – a child with a
-        # specific name under a parent node.  Returns the child node.
-        def _get_or_create_child(parent, child_name):
-            for ch in parent.children:
-                if ch.name == child_name:
-                    return ch
-            return parent.add_child(name=child_name)
-
-        for branch_id, branch in enumerate(branches):
-            current = root
-            # Build the path Step1 -> Step2 -> … -> StepN for this branch.
-            for depth in range(1, branch.step_count + 1):
-                step_node_name = f"B{branch_id}_step{depth}"
-                current = _get_or_create_child(current, step_node_name)
-
-            # Attach the *leaf* information (score, tokens, etc.).
-            current.add_features(
-                step_count=branch.step_count,
-                score=branch.score,
-                uncertainty=branch.uncertainty,
-                value=branch.value,
-                total_tokens=branch.total_tokens,
-            )
-
-        # ------------------------------------------------------------------
-        # Styling – keep it minimal so that the branch structure is the star
-        # ------------------------------------------------------------------
-        ts = TreeStyle()
-        ts.show_leaf_name = False  # We manually draw labels via layout_fn
-        ts.show_branch_length = False
-        ts.show_branch_support = False
-
-        def layout(node):
-            from ete3 import faces, TextFace  # Local import to keep global deps minimal
-            # Root – give it a friendly label
-            if node.is_root():
-                faces.add_face_to_node(TextFace("Start", fsize=10, fgcolor="black"), node, 0)
-                node.img_style["size"] = 12
-                node.img_style["shape"] = "sphere"
-                node.img_style["fgcolor"] = "black"
-                return
-
-            # Leaves – show collected metrics
-            if not node.children:
-                info_lines = [
-                    f"Step: {getattr(node, 'step_count', '?')}",
-                    f"Score: {getattr(node, 'score', 0):.3f}",
-                    f"Tokens: {getattr(node, 'total_tokens', 0)}",
-                ]
-                if getattr(node, 'uncertainty', None) is not None:
-                    info_lines.insert(2, f"Unc.: {getattr(node, 'uncertainty'): .3f}")
-                label = "\n".join(info_lines)
-                faces.add_face_to_node(TextFace(label, fsize=8), node, 0, position="branch-right")
-                node.img_style["size"] = 8
-                node.img_style["shape"] = "circle"
-                node.img_style["fgcolor"] = "darkgreen"
+    # Build a tree: root -> each branch's steps
+    G = nx.DiGraph()
+    root_id = "Start"
+    G.add_node(root_id, label="Start")
+    for branch_id, branch in enumerate(branches):
+        # Reconstruct the path for this branch
+        steps = []
+        # Try to split the text into steps by '\n\n' (node delimiter)
+        step_texts = branch.text.split("\n\n")
+        parent = root_id
+        for step_idx, step_text in enumerate(step_texts):
+            node_id = f"B{branch_id}_S{step_idx+1}"
+            # Only display uncertainty/value for the leaf
+            if step_idx == len(step_texts) - 1:
+                u = branch.uncertainty if branch.uncertainty is not None else 0.0
+                v = branch.value if branch.value is not None else 0.0
+                snippet = step_text.strip().split(". ")[0][:40] + ("..." if len(step_text.strip()) > 40 else "")
+                label = f"u={u:.2f}\nv={v:.2f}\n{snippet}"
             else:
-                # Internal nodes – draw small grey circles.
-                node.img_style["size"] = 4
-                node.img_style["shape"] = "circle"
-                node.img_style["fgcolor"] = "grey"
+                label = textwrap.shorten(step_text.strip(), width=30, placeholder="...")
+            G.add_node(node_id, label=label)
+            G.add_edge(parent, node_id)
+            parent = node_id
 
-        ts.layout_fn = layout
-        ts.mode = "r"  # Rectangular – better for binary-like layouts
-        ts.branch_vertical_margin = 10
+    # Layout
+    try:
+        pos = nx.nx_agraph.graphviz_layout(G, prog="dot")
+    except Exception:
+        pos = nx.spring_layout(G)
 
-        png_path = output_dir / filename
-        root.render(str(png_path), w=1000, units="px", tree_style=ts)
-        logger.info(f"Tree image saved to {png_path}")
-
-    except Exception as e:  # pragma: no cover
-        logger.warning(f"Failed to generate tree image: {e}")
-        import traceback
-
-        logger.warning(f"Traceback: {traceback.format_exc()}") 
+    # Draw
+    plt.figure(figsize=(12, 8))
+    nx.draw(
+        G, pos,
+        with_labels=False,
+        node_size=2500,
+        node_color="lightblue",
+        font_size=9,
+        font_weight="bold",
+        arrows=True,
+        arrowstyle="-|>",
+        arrowsize=12,
+        linewidths=1.5,
+    )
+    # Draw labels
+    node_labels = nx.get_node_attributes(G, 'label')
+    for node, (x, y) in pos.items():
+        plt.text(
+            x, y,
+            node_labels.get(node, node),
+            ha='center', va='center',
+            fontsize=9, bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", lw=0.5),
+            wrap=True
+        )
+    plt.margins(0.2)
+    plt.tight_layout()
+    png_path = output_dir / filename
+    plt.savefig(png_path, bbox_inches='tight')
+    plt.close()
+    logger.info(f"Tree image saved to {png_path}") 
