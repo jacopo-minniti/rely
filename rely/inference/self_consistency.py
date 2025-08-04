@@ -236,7 +236,7 @@ def save_self_consistency_result(
 ) -> None:
     """Persist results to disk for later inspection."""
     output_path = Path(output_path)
-    run_dir = output_path / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    run_dir = output_path
     run_dir.mkdir(parents=True, exist_ok=True)
 
     # Save individual generation files
