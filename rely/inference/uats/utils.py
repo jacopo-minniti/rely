@@ -31,7 +31,7 @@ def extract_final_answer(branch_text: str, final_answer_text: str) -> str:
     else:
         final_answer_section = full_text
 
-    letter_pattern = r"\([A-D]\)"
+    letter_pattern = r"\([A-Z]\)"
     matches = re.findall(letter_pattern, final_answer_section)
 
     if matches:
@@ -237,37 +237,29 @@ def _generate_tree_image(
     
     G = nx.DiGraph()
     root_id = None
-    final_answer_nodes = []
     
     # Add all nodes
     for branch in branches:
         node_id = branch.id
         
-        # Extract only the latest step (split by '\n\n' and take the last part)
-        steps = branch.text.split('\n\n')
-        latest_step = steps[-1].strip() if steps else branch.text.strip()
-        # Remove system prompt if present (look for <|im_start|>system)
-        if '<|im_start|>system' in latest_step:
-            # Find where the actual user content starts
-            if '<|im_start|>user' in latest_step:
-                user_start = latest_step.find('<|im_start|>user')
-                latest_step = latest_step[user_start:]
-            elif '<|im_start|>assistant' in latest_step:
-                assistant_start = latest_step.find('<|im_start|>assistant')
-                latest_step = latest_step[assistant_start:]
+        # Extract only the latest step
+        branch_text = branch.text
+        if branch_text.endswith('<|im_end|>'):
+            branch_text = branch_text[:-len('<|im_end|>')]
+        if branch_text.endswith('\n\n'):
+            branch_text = branch_text[:-2]
         
-        # Clean up the step text
-        if '<|im_start|>assistant' in latest_step:
-            latest_step = latest_step.split('<|im_start|>assistant')[-1].strip()
-        if '<|im_end|>' in latest_step:
-            latest_step = latest_step.split('<|im_end|>')[0].strip()
+        steps = branch_text.split('\n\n')
+        latest_step = steps[-1].strip() if steps else branch_text.strip()
+        # get only first 40 chars and then ellipsis
+        latest_step = latest_step[:40] + '...'
         
-        # Get the first sentence or first 40 chars
-        first_sentence = latest_step.split('. ')[0][:40] + ("..." if len(latest_step.split('. ')[0]) > 40 else "")
+        # Wrap the text for better display in the node
+        wrapped_text = textwrap.fill(latest_step, width=30)
         
         u_str = f"{branch.uncertainty:.2f}" if branch.uncertainty is not None else "?"
         v_str = f"{branch.value:.2f}" if branch.value is not None else "?"
-        label = f"u={u_str}\nv={v_str}\n{first_sentence}"
+        label = f"u={u_str}, v={v_str}\n\n{wrapped_text}"
         
         G.add_node(node_id, label=label, is_final=branch.final_answer is not None)
         
@@ -275,82 +267,54 @@ def _generate_tree_image(
             G.add_edge(branch.parent_id, node_id)
         else:
             root_id = node_id
-    
-    # If no explicit root, add a dummy root
-    if root_id is None:
-        root_id = "Start"
-        G.add_node(root_id, label="Start", is_root=True)
-        for branch in branches:
-            if branch.parent_id is None:
-                G.add_edge(root_id, branch.id)
-    
+            G.nodes[node_id]['is_root'] = True
+
     # Add final answer nodes for branches that have them
     for branch in branches:
         if branch.final_answer:
             final_answer = extract_final_answer(branch.text, branch.final_answer)
             final_node_id = f"final_{branch.id}"
-            final_answer_nodes.append(final_node_id)
             G.add_node(final_node_id, label=f"Final Answer:\n{final_answer}", is_final_answer=True)
             G.add_edge(branch.id, final_node_id)
     
     try:
         pos = nx.nx_agraph.graphviz_layout(G, prog="dot")
     except Exception:
-        pos = nx.spring_layout(G)
+        pos = nx.spring_layout(G, k=0.9, iterations=50) # Fallback layout
     
-    plt.figure(figsize=(15, 10))
+    plt.figure(figsize=(20, 15))
     
-    # Separate nodes by type
-    root_nodes = []
-    final_answer_nodes = []
-    regular_nodes = []
+    # Separate nodes by type for custom styling
+    root_nodes = [node for node, data in G.nodes(data=True) if data.get('is_root')]
+    final_answer_nodes = [node for node, data in G.nodes(data=True) if data.get('is_final_answer')]
+    intermediate_nodes = [node for node in G.nodes() if node not in root_nodes and node not in final_answer_nodes]
+
+    # Draw intermediate nodes as rectangles
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=intermediate_nodes,
+        node_shape="s", # square/rectangle
+        node_color="lightblue",
+        node_size=3500
+    )
     
-    for node in G.nodes():
-        node_data = G.nodes[node]
-        if node_data.get('is_root', False):
-            root_nodes.append(node)
-        elif node_data.get('is_final_answer', False):
-            final_answer_nodes.append(node)
-        else:
-            regular_nodes.append(node)
-    
-    # Draw regular nodes as squares
-    if regular_nodes:
-        nx.draw_networkx_nodes(
-            G, pos,
-            nodelist=regular_nodes,
-            node_shape="s",
-            node_color="lightblue",
-            node_size=3000
-        )
-    
-    # Draw root nodes as circles
-    if root_nodes:
-        nx.draw_networkx_nodes(
-            G, pos,
-            nodelist=root_nodes,
-            node_shape="o",
-            node_color="lightgreen",
-            node_size=3500
-        )
-    
-    # Draw final answer nodes as circles
-    if final_answer_nodes:
-        nx.draw_networkx_nodes(
-            G, pos,
-            nodelist=final_answer_nodes,
-            node_shape="o",
-            node_color="lightcoral",
-            node_size=3000
-        )
-    
+    # Draw root and final answer nodes as green circles
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=root_nodes + final_answer_nodes,
+        node_shape="o", # circle
+        node_color="lightgreen",
+        node_size=3500
+    )
+
     # Draw edges
     nx.draw_networkx_edges(
         G, pos,
         arrows=True,
         arrowstyle="-|>",
-        arrowsize=12,
-        edge_color='gray'
+        arrowsize=15,
+        edge_color='gray',
+        width=1.5
     )
     
     # Draw labels
@@ -359,12 +323,13 @@ def _generate_tree_image(
         G, pos,
         labels=node_labels,
         font_size=8,
-        font_weight="bold"
+        font_weight="bold",
+        horizontalalignment="center"
     )
     
-    plt.margins(0.2)
+    plt.margins(0.05) # Reduced margins
     plt.tight_layout()
     png_path = output_dir / filename
-    plt.savefig(png_path, bbox_inches='tight', dpi=150)
+    plt.savefig(png_path, bbox_inches='tight', dpi=200)
     plt.close()
-    logger.info(f"Tree image saved to {png_path}") 
+    logger.info(f"Tree image saved to {png_path}")
