@@ -1,6 +1,7 @@
 import logging
 from typing import List, Optional
 
+import unsloth
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers.generation.stopping_criteria import StopStringCriteria

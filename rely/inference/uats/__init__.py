@@ -1,7 +1,6 @@
 """UATS subpackage consolidating core classes, configuration and helpers."""
 
-from .config import UATSConfig
-from .branch import Branch
+from .config import UATSConfig, Branch
 from .guided_tree_search import GuidedTreeSearch
 from .utils import (
     load_model_and_tokenizer,

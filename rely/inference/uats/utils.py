@@ -5,19 +5,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Union
 
-import torch
-from ete3 import Tree, TreeStyle
 from unsloth import FastLanguageModel
+from ete3 import Tree, TreeStyle, faces, TextFace
 
-from .branch import Branch
-from .config import UATSConfig
+from .config import UATSConfig, Branch
 from .guided_tree_search import GuidedTreeSearch
-from .probes import load_probes, MLPProbe
-from rely.utils.text_utils import (
-    count_tokens_after_marker,
-    format_system_prompt,
-    MMLU_SYSTEM_PROMPT,
-)
+from .probes import load_probes
+from rely.utils.text_utils import MMLU_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -240,80 +234,85 @@ def _generate_tree_image(
         return
 
     try:
-        # Build a simple flat tree grouped by step count for visual clarity
-        step_groups = {}
-        for i, branch in enumerate(branches):
-            step_groups.setdefault(branch.step_count, []).append((i, branch))
+        # ------------------------------------------------------------------
+        # Build a *hierarchical* tree so that individual branches visibly
+        # diverge from the root and from one another.  Each reasoning step
+        # becomes a level in the tree (depth = step_count).  A unique path
+        # is created for every explored branch, meaning that nodes from
+        # different branches are *not* merged – this guarantees a clear
+        # separation of lines in the rendered image while keeping the logic
+        # simple and deterministic.
+        # ------------------------------------------------------------------
+        root = Tree(name="Start")
 
-        sorted_steps = sorted(step_groups.keys())
-        tree = Tree()
+        # Helper: create – or fetch if already created – a child with a
+        # specific name under a parent node.  Returns the child node.
+        def _get_or_create_child(parent, child_name):
+            for ch in parent.children:
+                if ch.name == child_name:
+                    return ch
+            return parent.add_child(name=child_name)
 
-        for step in sorted_steps:
-            for i, branch in step_groups[step]:
-                child = tree.add_child(name=f"B{i}_s{branch.score:.2f}")
-                child.add_features(
-                    step_count=branch.step_count,
-                    score=branch.score,
-                    uncertainty=branch.uncertainty,
-                    value=branch.value,
-                    total_tokens=branch.total_tokens,
-                )
-                child.name = f"Step{branch.step_count}_B{i}_s{branch.score:.2f}"
+        for branch_id, branch in enumerate(branches):
+            current = root
+            # Build the path Step1 -> Step2 -> … -> StepN for this branch.
+            for depth in range(1, branch.step_count + 1):
+                step_node_name = f"B{branch_id}_step{depth}"
+                current = _get_or_create_child(current, step_node_name)
 
+            # Attach the *leaf* information (score, tokens, etc.).
+            current.add_features(
+                step_count=branch.step_count,
+                score=branch.score,
+                uncertainty=branch.uncertainty,
+                value=branch.value,
+                total_tokens=branch.total_tokens,
+            )
+
+        # ------------------------------------------------------------------
+        # Styling – keep it minimal so that the branch structure is the star
+        # ------------------------------------------------------------------
         ts = TreeStyle()
-        ts.show_leaf_name = True
+        ts.show_leaf_name = False  # We manually draw labels via layout_fn
         ts.show_branch_length = False
         ts.show_branch_support = False
 
         def layout(node):
-            if node.is_leaf():
-                score_text = f"Score: {node.score:.3f}"
-                if node.uncertainty is not None:
-                    score_text += f"\nUncertainty: {node.uncertainty:.3f}"
-                score_text += f"\nValue: {node.value:.3f}"
-                score_text += f"\nTokens: {node.total_tokens}"
-
-                from ete3 import faces, TextFace
-
-                info_face = TextFace(score_text, fsize=8)
-                info_face.margin_left = 5
-                info_face.margin_right = 5
-                faces.add_face_to_node(info_face, node, 0, position="branch-right")
-
-                node.img_style["size"] = 10
-                node.img_style["shape"] = "circle"
-
-                step_count = getattr(node, "step_count", 1)
-                if step_count == 1:
-                    node.img_style["fgcolor"] = "darkgreen"
-                elif step_count == 2:
-                    node.img_style["fgcolor"] = "darkblue"
-                elif step_count == 3:
-                    node.img_style["fgcolor"] = "darkred"
-                elif step_count == 4:
-                    node.img_style["fgcolor"] = "purple"
-                else:
-                    node.img_style["fgcolor"] = "orange"
-            else:
+            from ete3 import faces, TextFace  # Local import to keep global deps minimal
+            # Root – give it a friendly label
+            if node.is_root():
+                faces.add_face_to_node(TextFace("Start", fsize=10, fgcolor="black"), node, 0)
                 node.img_style["size"] = 12
                 node.img_style["shape"] = "sphere"
                 node.img_style["fgcolor"] = "black"
+                return
+
+            # Leaves – show collected metrics
+            if not node.children:
+                info_lines = [
+                    f"Step: {getattr(node, 'step_count', '?')}",
+                    f"Score: {getattr(node, 'score', 0):.3f}",
+                    f"Tokens: {getattr(node, 'total_tokens', 0)}",
+                ]
+                if getattr(node, 'uncertainty', None) is not None:
+                    info_lines.insert(2, f"Unc.: {getattr(node, 'uncertainty'): .3f}")
+                label = "\n".join(info_lines)
+                faces.add_face_to_node(TextFace(label, fsize=8), node, 0, position="branch-right")
+                node.img_style["size"] = 8
+                node.img_style["shape"] = "circle"
+                node.img_style["fgcolor"] = "darkgreen"
+            else:
+                # Internal nodes – draw small grey circles.
+                node.img_style["size"] = 4
+                node.img_style["shape"] = "circle"
+                node.img_style["fgcolor"] = "grey"
 
         ts.layout_fn = layout
-
-        from ete3 import faces, TextFace
-
-        title_face = TextFace(
-            f"UATS Search Tree - {len(branches)} branches explored", fsize=14, fgcolor="black"
-        )
-        ts.title.add_face(title_face, column=0)
-
-        ts.mode = "c"
-        ts.arc_start = -180
-        ts.arc_span = 180
+        ts.mode = "r"  # Rectangular – better for binary-like layouts
+        ts.branch_vertical_margin = 10
 
         png_path = output_dir / filename
-        tree.render(str(png_path), w=1000, h=800, units="px", tree_style=ts)
+        root.render(str(png_path), w=1000, units="px", tree_style=ts)
         logger.info(f"Tree image saved to {png_path}")
 
     except Exception as e:  # pragma: no cover
