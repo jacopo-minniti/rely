@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import List, Optional, Union
 
 from unsloth import FastLanguageModel
-from ete3 import Tree, TreeStyle, faces, TextFace
 
 from .config import UATSConfig, Branch
 from .guided_tree_search import GuidedTreeSearch
@@ -36,7 +35,7 @@ def extract_final_answer(branch_text: str, final_answer_text: str) -> str:
 
     if matches:
         # Return the last match (most recent formatting)
-        return matches[-1]
+        return matches[-1].replace("(", "").replace(")", "")
 
     return final_answer_section.strip()
 
@@ -112,9 +111,9 @@ def save_branches(
     all_branches: List[Branch],
     output_dir: Union[str, Path],
     max_branch_tokens: int,
-    beam_width: Optional[int] | None = None,
     user_question: Optional[str] = None,
     system_prompt: Optional[str] = None,
+    correct_answer: Optional[str] = None,
 ) -> None:
     """Save the *active* branches at the end of the search to disk."""
 
@@ -126,15 +125,17 @@ def save_branches(
     if not branches:
         return
 
-    max_step_count = max(b.step_count for b in branches)
-    final_branches = [b for b in branches if b.step_count == max_step_count]
-
-    if beam_width is not None and len(final_branches) > beam_width:
-        final_branches = sorted(final_branches, key=lambda b: b.score, reverse=True)[
-            :beam_width
-        ]
-
+    # The branches passed here have already been filtered to beam_width in the search function
+    # and have final answers generated, so we just save them as-is
+    final_branches = branches
+    
     logger.debug(f"Saving {len(final_branches)} final branches")
+    
+    # Log summary of selected branches
+    if final_branches:
+        step_counts = [b.step_count for b in final_branches]
+        think_counts = sum(1 for b in final_branches if "</think>" in b.text)
+        logger.info(f"Selected branches: max_step={max(step_counts)}, min_step={min(step_counts)}, with_</think>={think_counts}")
 
     summary_data = {
         "timestamp": timestamp,
@@ -143,6 +144,10 @@ def save_branches(
         "total_branches": len(final_branches),
         "branches": [],
     }
+    
+    # Collect all answers for evaluation
+    all_answers = []
+    correct_count = 0
 
     for i, branch in enumerate(final_branches):
         filepath = run_dir / f"branch_{i}.txt"
@@ -164,6 +169,10 @@ def save_branches(
         extracted_answer = ""
         if branch.final_answer:
             extracted_answer = extract_final_answer(branch.text, branch.final_answer)
+            all_answers.append(extracted_answer)
+            # Check if this answer is correct
+            if correct_answer and extracted_answer.strip().upper() == correct_answer.strip().upper():
+                correct_count += 1
 
         summary_data["branches"].append(
             {
@@ -176,6 +185,18 @@ def save_branches(
                 "extracted_answer": extracted_answer,
             }
         )
+
+    # Add evaluation metrics if correct_answer is provided
+    if correct_answer is not None:
+        hard_label = 1 if correct_count > 0 else 0
+        soft_label = correct_count / len(all_answers) if all_answers else 0.0
+        
+        summary_data["correct_answer"] = correct_answer
+        summary_data["all_answers"] = all_answers
+        summary_data["hard_label"] = hard_label
+        summary_data["soft_label"] = soft_label
+        summary_data["correct_count"] = correct_count
+        summary_data["total_answers"] = len(all_answers)
 
     summary_filepath = run_dir / "results.json"
     with open(summary_filepath, "w", encoding="utf-8") as f:
@@ -191,6 +212,7 @@ def run_uats(
     system_prompt: str = MMLU_SYSTEM_PROMPT,
     config: Optional[UATSConfig] = None,
     save_dir: Optional[Union[str, Path]] = "uats_results",
+    correct_answer: Optional[str] = None,
 ) -> List[Branch]:
     """High-level one-shot helper wrapping search & persistence."""
 
@@ -209,16 +231,16 @@ def run_uats(
         all_branches,
         save_dir,
         max_branch_tokens=config.budget,
-        beam_width=config.beam_width,
         user_question=user_question,
         system_prompt=system_prompt,
+        correct_answer=correct_answer,
     )
 
     return final_branches
 
 
 # -----------------------------------------------------------------------------
-# Tree visualisation helpers (ETE3)
+# Tree visualisation helpers
 # -----------------------------------------------------------------------------
 
 def _generate_tree_image(

@@ -4,6 +4,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from datetime import datetime
 
 import torch
 from vllm import LLM, SamplingParams
@@ -164,19 +165,27 @@ def save_self_consistency_result(
     system_prompt: str,
     user_question: str,
     output_path: Union[str, Path],
+    correct_answer: Optional[str] = None,
 ) -> None:
     """Persist results to disk for later inspection.
     
     Saves:
     1. Individual generation files (generation_0.txt, generation_1.txt, etc.)
-    2. Summary file (summary.md) with results and distribution
+    2. Summary file (summary.json) with results and distribution
+    
+    Creates a timestamped subdirectory: run_{datetime}/
     """
     output_path = Path(output_path)
     output_path.mkdir(parents=True, exist_ok=True)
+    
+    # Create timestamped subdirectory
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = output_path / f"run_{timestamp}"
+    run_dir.mkdir(parents=True, exist_ok=True)
 
     # Save individual generation files
     for i, (answer, generated_text) in enumerate(zip(result.answers, result.generated_texts)):
-        generation_file = output_path / f"generation_{i}.txt"
+        generation_file = run_dir / f"generation_{i}.txt"
         with open(generation_file, "w") as f:
             f.write("# System Prompt\n")
             f.write(system_prompt)
@@ -190,7 +199,7 @@ def save_self_consistency_result(
         logger.debug(f"Saved generation {i} to {generation_file}")
 
     # Save summary file as JSON
-    summary_file = output_path / "summary.json"
+    summary_file = run_dir / "summary.json"
     
     # Prepare summary data
     summary_data = {
@@ -200,6 +209,8 @@ def save_self_consistency_result(
         "top_p": result.config.top_p,
         "max_new_tokens": result.config.max_new_tokens,
         "most_consistent_answer": result.most_consistent_answer,
+        "run_timestamp": timestamp,
+        "run_directory": f"run_{timestamp}",
         "answer_distribution": {
             ans: {
                 "count": count,
@@ -213,10 +224,22 @@ def save_self_consistency_result(
         ]
     }
     
+    # Add evaluation metrics if correct_answer is provided
+    if correct_answer is not None:
+        correct_count = sum(1 for answer in result.answers if answer.strip().upper() == correct_answer.strip().upper())
+        hard_label = 1 if correct_count > 0 else 0
+        soft_label = correct_count / len(result.answers) if result.answers else 0.0
+        
+        summary_data["correct_answer"] = correct_answer
+        summary_data["hard_label"] = hard_label
+        summary_data["soft_label"] = soft_label
+        summary_data["correct_count"] = correct_count
+        summary_data["total_answers"] = len(result.answers)
+    
     with open(summary_file, "w") as f:
         json.dump(summary_data, f, indent=2)
 
-    logger.info(f"Saved self-consistency results to {output_path}")
+    logger.info(f"Saved self-consistency results to {run_dir}")
     logger.info(f"Summary: {summary_file}")
     logger.info(f"Individual generations: {len(result.answers)} files")
 
@@ -226,6 +249,7 @@ def run_self_consistency_inference(
     user_question: str,
     config: Optional[SelfConsistencyConfig] = None,
     save_path: Optional[Union[str, Path]] = None,
+    correct_answer: Optional[str] = None,
 ) -> SelfConsistencyResult:
     """Run self-consistency inference with the given (or default) configuration.
     
@@ -245,6 +269,6 @@ def run_self_consistency_inference(
     
     # Save results if path is provided
     if save_path is not None:
-        save_self_consistency_result(result, system_prompt, user_question, save_path)
+        save_self_consistency_result(result, system_prompt, user_question, save_path, correct_answer)
     
     return result

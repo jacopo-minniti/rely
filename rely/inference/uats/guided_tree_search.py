@@ -343,8 +343,90 @@ class GuidedTreeSearch:
 
         # Final branches comprise both those naturally finished *and* any that
         # were still in the beam when the optional safety net triggered.
-        final_branches = finished if not beam else finished + beam
+        # Also include any branches that were generated in the final iteration
+        # but not yet added to finished due to budget constraints
+        final_branches = finished.copy() if finished else []
+        
+        # Add any branches that were still in the beam
+        if beam:
+            final_branches.extend(beam)
+        
+        # Also include any branches that were generated in the final iteration
+        # but not yet processed due to budget constraints
+        # Find the maximum step count among all branches
+        max_step = max(b.step_count for b in all_branches) if all_branches else 0
+        
+        # Add any branches with the maximum step count that aren't already included
+        max_step_branches = [b for b in all_branches if b.step_count == max_step]
+        logger.info(f"Found {len(max_step_branches)} branches with max step count {max_step}")
+        
+        for branch in max_step_branches:
+            if branch not in final_branches:
+                final_branches.append(branch)
+                logger.info(f"Added branch {branch.id} with step count {branch.step_count} to final branches")
+        
+        # Ensure we don't have duplicates
+        seen_ids = set()
+        unique_final_branches = []
+        for branch in final_branches:
+            if branch.id not in seen_ids:
+                seen_ids.add(branch.id)
+                unique_final_branches.append(branch)
+        
+        final_branches = unique_final_branches
+        
+        logger.info(f"Final branch selection: {len(final_branches)} branches selected from {len(all_branches)} total branches")
+        if final_branches:
+            step_counts = [b.step_count for b in final_branches]
+            logger.info(f"Selected branches have step counts: {step_counts}")
 
+        # Apply sophisticated priority-based selection before beam width limiting
+        if len(final_branches) > self.config.beam_width:
+            # Helper function to check if a branch has the </think> token
+            def has_think_token(branch: Branch) -> bool:
+                return "</think>" in branch.text
+
+            # Get the maximum step count among all branches
+            max_step_count = max(b.step_count for b in final_branches)
+            
+            # Categorize branches by our priority criteria
+            largest_with_think = [b for b in final_branches if b.step_count == max_step_count and has_think_token(b)]
+            largest_without_think = [b for b in final_branches if b.step_count == max_step_count and not has_think_token(b)]
+            think_branches = [b for b in final_branches if has_think_token(b) and b.step_count < max_step_count]
+            
+            # Build prioritized_branches list in priority order
+            prioritized_branches = []
+            
+            # 1. Add largest branches with </think> token
+            prioritized_branches.extend(largest_with_think)
+            logger.debug(f"Added {len(largest_with_think)} largest branches with </think> token")
+            
+            # 2. Add largest branches without </think> token (if we haven't reached beam_width)
+            if len(prioritized_branches) < self.config.beam_width:
+                prioritized_branches.extend(largest_without_think)
+                logger.debug(f"Added {len(largest_without_think)} largest branches without </think> token")
+            
+            # 3. Add branches with </think> token but smaller step count (if we haven't reached beam_width)
+            if len(prioritized_branches) < self.config.beam_width:
+                prioritized_branches.extend(think_branches)
+                logger.debug(f"Added {len(think_branches)} branches with </think> token but smaller step count")
+            
+            # 4. If we still haven't reached beam_width, add remaining branches sorted by step count (descending)
+            if len(prioritized_branches) < self.config.beam_width:
+                remaining_branches = [b for b in final_branches if b not in prioritized_branches]
+                remaining_branches.sort(key=lambda b: b.step_count, reverse=True)
+                prioritized_branches.extend(remaining_branches)
+                logger.debug(f"Added {len(remaining_branches)} remaining branches sorted by step count")
+            
+            # Trim to beam_width if we have more than needed
+            if len(prioritized_branches) > self.config.beam_width:
+                prioritized_branches = prioritized_branches[:self.config.beam_width]
+                logger.debug(f"Trimmed to {self.config.beam_width} branches due to beam_width limit")
+
+            final_branches = prioritized_branches
+            logger.info(f"Applied priority-based selection: selected {len(final_branches)} branches")
+
+        # Generate final answers only for the branches that will be saved
         for branch in final_branches:
             branch.final_answer = self._generate_final_answer(branch)
 
