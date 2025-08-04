@@ -30,4 +30,6 @@ class Branch:
     uncertainty: Optional[float]
     value: float
     total_tokens: int
-    final_answer: Optional[str] = None 
+    final_answer: Optional[str] = None
+    id: int = -1
+    parent_id: Optional[int] = None 

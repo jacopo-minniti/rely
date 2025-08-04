@@ -109,6 +109,7 @@ def create_uats_searcher(config: UATSConfig) -> GuidedTreeSearch:
 
 def save_branches(
     branches: List[Branch],
+    all_branches: List[Branch],
     output_dir: Union[str, Path],
     max_branch_tokens: int,
     beam_width: Optional[int] | None = None,
@@ -182,7 +183,7 @@ def save_branches(
 
     logger.info(f"Saved {len(final_branches)} branches and summary to {run_dir}")
 
-    _generate_tree_image(final_branches, run_dir)
+    _generate_tree_image(all_branches, run_dir)
 
 
 def run_uats(
@@ -199,12 +200,13 @@ def run_uats(
     logger.info("Creating UATS searcher…")
     searcher = create_uats_searcher(config)
     logger.info("Starting UATS search…")
-    branches = searcher.search(user_question, system_prompt)
-    logger.info(f"UATS search completed with {len(branches)} branches explored")
+    final_branches, all_branches = searcher.search(user_question, system_prompt)
+    logger.info(f"UATS search completed with {len(final_branches)} branches explored")
 
     logger.info(f"Saving branches to {save_dir}")
     save_branches(
-        branches,
+        final_branches,
+        all_branches,
         save_dir,
         max_branch_tokens=config.budget,
         beam_width=config.beam_width,
@@ -212,7 +214,7 @@ def run_uats(
         system_prompt=system_prompt,
     )
 
-    return branches
+    return final_branches
 
 
 # -----------------------------------------------------------------------------
@@ -228,80 +230,141 @@ def _generate_tree_image(
     import matplotlib.pyplot as plt
     import networkx as nx
     import textwrap
-
+    from rely.inference.uats.utils import extract_final_answer
+    
     if not branches:
         return
-
-    # Helper to build a tree from branches
-    def add_nodes_edges(branch, graph, parent=None, branch_id=0):
-        # Each node is uniquely identified by (branch_id, step_count)
-        node_id = f"B{branch_id}_S{branch.step_count}"
-        # Shorten text for display
-        text_snippet = branch.text.strip().split(". ")[0][:40] + ("..." if len(branch.text.strip()) > 40 else "")
-        label = f"u={branch.uncertainty:.2f if branch.uncertainty is not None else '?'}\nv={branch.value:.2f}\n{text_snippet}"
-        graph.add_node(node_id, label=label)
-        if parent:
-            graph.add_edge(parent, node_id)
-        # No children in this context; branches are leaves
-        return node_id
-
-    # Build a tree: root -> each branch's steps
+    
     G = nx.DiGraph()
-    root_id = "Start"
-    G.add_node(root_id, label="Start")
-    for branch_id, branch in enumerate(branches):
-        # Reconstruct the path for this branch
-        steps = []
-        # Try to split the text into steps by '\n\n' (node delimiter)
-        step_texts = branch.text.split("\n\n")
-        parent = root_id
-        for step_idx, step_text in enumerate(step_texts):
-            node_id = f"B{branch_id}_S{step_idx+1}"
-            # Only display uncertainty/value for the leaf
-            if step_idx == len(step_texts) - 1:
-                u = branch.uncertainty if branch.uncertainty is not None else 0.0
-                v = branch.value if branch.value is not None else 0.0
-                snippet = step_text.strip().split(". ")[0][:40] + ("..." if len(step_text.strip()) > 40 else "")
-                label = f"u={u:.2f}\nv={v:.2f}\n{snippet}"
-            else:
-                label = textwrap.shorten(step_text.strip(), width=30, placeholder="...")
-            G.add_node(node_id, label=label)
-            G.add_edge(parent, node_id)
-            parent = node_id
-
-    # Layout
+    root_id = None
+    final_answer_nodes = []
+    
+    # Add all nodes
+    for branch in branches:
+        node_id = branch.id
+        
+        # Extract only the latest step (split by '\n\n' and take the last part)
+        steps = branch.text.split('\n\n')
+        latest_step = steps[-1].strip() if steps else branch.text.strip()
+        # Remove system prompt if present (look for <|im_start|>system)
+        if '<|im_start|>system' in latest_step:
+            # Find where the actual user content starts
+            if '<|im_start|>user' in latest_step:
+                user_start = latest_step.find('<|im_start|>user')
+                latest_step = latest_step[user_start:]
+            elif '<|im_start|>assistant' in latest_step:
+                assistant_start = latest_step.find('<|im_start|>assistant')
+                latest_step = latest_step[assistant_start:]
+        
+        # Clean up the step text
+        if '<|im_start|>assistant' in latest_step:
+            latest_step = latest_step.split('<|im_start|>assistant')[-1].strip()
+        if '<|im_end|>' in latest_step:
+            latest_step = latest_step.split('<|im_end|>')[0].strip()
+        
+        # Get the first sentence or first 40 chars
+        first_sentence = latest_step.split('. ')[0][:40] + ("..." if len(latest_step.split('. ')[0]) > 40 else "")
+        
+        u_str = f"{branch.uncertainty:.2f}" if branch.uncertainty is not None else "?"
+        v_str = f"{branch.value:.2f}" if branch.value is not None else "?"
+        label = f"u={u_str}\nv={v_str}\n{first_sentence}"
+        
+        G.add_node(node_id, label=label, is_final=branch.final_answer is not None)
+        
+        if branch.parent_id is not None:
+            G.add_edge(branch.parent_id, node_id)
+        else:
+            root_id = node_id
+    
+    # If no explicit root, add a dummy root
+    if root_id is None:
+        root_id = "Start"
+        G.add_node(root_id, label="Start", is_root=True)
+        for branch in branches:
+            if branch.parent_id is None:
+                G.add_edge(root_id, branch.id)
+    
+    # Add final answer nodes for branches that have them
+    for branch in branches:
+        if branch.final_answer:
+            final_answer = extract_final_answer(branch.text, branch.final_answer)
+            final_node_id = f"final_{branch.id}"
+            final_answer_nodes.append(final_node_id)
+            G.add_node(final_node_id, label=f"Final Answer:\n{final_answer}", is_final_answer=True)
+            G.add_edge(branch.id, final_node_id)
+    
     try:
         pos = nx.nx_agraph.graphviz_layout(G, prog="dot")
     except Exception:
         pos = nx.spring_layout(G)
-
-    # Draw
-    plt.figure(figsize=(12, 8))
-    nx.draw(
+    
+    plt.figure(figsize=(15, 10))
+    
+    # Separate nodes by type
+    root_nodes = []
+    final_answer_nodes = []
+    regular_nodes = []
+    
+    for node in G.nodes():
+        node_data = G.nodes[node]
+        if node_data.get('is_root', False):
+            root_nodes.append(node)
+        elif node_data.get('is_final_answer', False):
+            final_answer_nodes.append(node)
+        else:
+            regular_nodes.append(node)
+    
+    # Draw regular nodes as squares
+    if regular_nodes:
+        nx.draw_networkx_nodes(
+            G, pos,
+            nodelist=regular_nodes,
+            node_shape="s",
+            node_color="lightblue",
+            node_size=3000
+        )
+    
+    # Draw root nodes as circles
+    if root_nodes:
+        nx.draw_networkx_nodes(
+            G, pos,
+            nodelist=root_nodes,
+            node_shape="o",
+            node_color="lightgreen",
+            node_size=3500
+        )
+    
+    # Draw final answer nodes as circles
+    if final_answer_nodes:
+        nx.draw_networkx_nodes(
+            G, pos,
+            nodelist=final_answer_nodes,
+            node_shape="o",
+            node_color="lightcoral",
+            node_size=3000
+        )
+    
+    # Draw edges
+    nx.draw_networkx_edges(
         G, pos,
-        with_labels=False,
-        node_size=2500,
-        node_color="lightblue",
-        font_size=9,
-        font_weight="bold",
         arrows=True,
         arrowstyle="-|>",
         arrowsize=12,
-        linewidths=1.5,
+        edge_color='gray'
     )
+    
     # Draw labels
     node_labels = nx.get_node_attributes(G, 'label')
-    for node, (x, y) in pos.items():
-        plt.text(
-            x, y,
-            node_labels.get(node, node),
-            ha='center', va='center',
-            fontsize=9, bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", lw=0.5),
-            wrap=True
-        )
+    nx.draw_networkx_labels(
+        G, pos,
+        labels=node_labels,
+        font_size=8,
+        font_weight="bold"
+    )
+    
     plt.margins(0.2)
     plt.tight_layout()
     png_path = output_dir / filename
-    plt.savefig(png_path, bbox_inches='tight')
+    plt.savefig(png_path, bbox_inches='tight', dpi=150)
     plt.close()
     logger.info(f"Tree image saved to {png_path}") 

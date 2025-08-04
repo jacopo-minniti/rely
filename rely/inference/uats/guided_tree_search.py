@@ -178,7 +178,7 @@ class GuidedTreeSearch:
         u = min(self.uncertainty_to_branches(approx_I_score), self.config.beam_width)
         return u, approx_I_score
 
-    def search(self, user_question: str, system_prompt: str = MMLU_SYSTEM_PROMPT) -> List[Branch]:
+    def search(self, user_question: str, system_prompt: str = MMLU_SYSTEM_PROMPT) -> tuple[list[Branch], list[Branch]]:
         """
         Perform guided tree search.
 
@@ -219,18 +219,22 @@ class GuidedTreeSearch:
         logger.info(f"[Branch 0 | Step 1] Generated step content:\n{first_step_text}\n{'='*40}")
 
         # Initialize beam with first branch
-        beam = [
-            Branch(
-                text=first_node_text,
-                ids=first_ids.cpu(),
-                step_count=1,
-                score=norm_score,
-                uncertainty=None,
-                value=value_score,
-                total_tokens=total_tokens,
-            )
-        ]
-
+        branch_id_counter = 0
+        all_branches = []
+        root_branch = Branch(
+            text=first_node_text,
+            ids=first_ids.cpu(),
+            step_count=1,
+            score=norm_score,
+            uncertainty=None,
+            value=value_score,
+            total_tokens=total_tokens,
+            id=branch_id_counter,
+            parent_id=None,
+        )
+        beam = [root_branch]
+        all_branches.append(root_branch)
+        branch_id_counter += 1
         step = 0
         # Keep track of branches that have finished (either by emitting the
         # closing tag or by exceeding the token budget).
@@ -286,7 +290,11 @@ class GuidedTreeSearch:
                         uncertainty=approx_I_score,
                         value=value_score,
                         total_tokens=total_tokens,
+                        id=branch_id_counter,
+                        parent_id=branch.id,
                     )
+                    all_branches.append(candidate)
+                    branch_id_counter += 1
 
                     # Check termination conditions
                     finished_here = False
@@ -340,4 +348,4 @@ class GuidedTreeSearch:
         for branch in final_branches:
             branch.final_answer = self._generate_final_answer(branch)
 
-        return final_branches 
+        return final_branches, all_branches 
