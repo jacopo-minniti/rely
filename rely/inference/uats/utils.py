@@ -1,5 +1,6 @@
 import json
 import logging
+import random
 import re
 from datetime import datetime
 from pathlib import Path
@@ -118,8 +119,9 @@ def save_branches(
     """Save the *active* branches at the end of the search to disk."""
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    random_suffix = f"_{random.randint(0, 100):03d}"
     output_path = Path(output_dir)
-    run_dir = output_path / f"run_{timestamp}"
+    run_dir = output_path / f"run_{timestamp}{random_suffix}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
     if not branches:
