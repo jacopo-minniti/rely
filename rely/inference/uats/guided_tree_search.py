@@ -1,5 +1,6 @@
 import logging
-from typing import List, Optional
+import math
+from typing import List, Optional, Union
 
 import unsloth
 import torch
@@ -23,11 +24,20 @@ class GuidedTreeSearch:
     """
 
     @classmethod
-    def uncertainty_to_branches(cls, score: float, uncertainty_threshold: float) -> int:
+    def uncertainty_to_branches(cls, score: float, uncertainty_threshold: Union[float, None]) -> int:
         """Convert an uncertainty score (expected in [0, 1]) to the number of branches that should be explored."""
-        if score >= uncertainty_threshold:
-            return 2
-        return 1
+        branches = 1
+        # classification setting
+        if uncertainty_threshold:
+            branches = 2 if score >= uncertainty_threshold else 1
+        # regression 
+        else:
+            # perplexity
+            branches = round(math.exp(score))
+
+        return branches
+
+        
 
     def __init__(
         self,
@@ -173,7 +183,11 @@ class GuidedTreeSearch:
             hidden_states = outputs.hidden_states[-2]
             probe_hidden_state = hidden_states[:, -1:, :].squeeze(1)
             uncertainty_logits = self.uncertainty_probe(probe_hidden_state)
-            approx_I_score = torch.sigmoid(uncertainty_logits).item()
+            
+            approx_I_score = uncertainty_logits.item()
+            # if classification, then take sigmoid
+            if self.config.uncertainty_threshold:
+                approx_I_score = torch.sigmoid(uncertainty_logits).item()
 
         u = min(self.uncertainty_to_branches(approx_I_score, self.config.uncertainty_threshold), self.config.beam_width)
         return u, approx_I_score

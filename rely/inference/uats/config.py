@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Union
 import torch
 
 
@@ -12,7 +12,7 @@ class UATSConfig:
     value_probe_path: Optional[str] = None
     beam_width: int = 3
     budget: int = 1024 
-    uncertainty_threshold: float = 0.8
+    uncertainty_threshold: Union[float, None] = 0.8
     max_step_tokens: int = 256
     device: str = "auto"
     probe_device: str = "cuda"
