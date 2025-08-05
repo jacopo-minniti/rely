@@ -1,6 +1,11 @@
+from typing import Optional, Union
 import logging
 import argparse
 import os
+import sys
+
+# Add the current directory to Python path so we can import rely
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -17,11 +22,11 @@ def main():
     parser.add_argument('--dataset_name', type=str, default="TIGER-Lab/MMLU-Pro", help='Dataset name')
     parser.add_argument('--split', type=str, default="validation", help='Dataset split')
     parser.add_argument('--model_name', type=str, default="unsloth/Qwen3-1.7B-unsloth-bnb-4bit", help='Model name')
-    parser.add_argument('--uncertainty_probe_path', type=str, default="models/uncertainty_probe.pth", help='Path to uncertainty probe')
+    parser.add_argument('--uncertainty_probe_path', type=str, default="models/c_uncertainty_probe.pth", help='Path to uncertainty probe')
     parser.add_argument('--value_probe_path', type=str, default="models/value_probe.pth", help='Path to value probe')
-    parser.add_argument('--budget', type=int, default=1024, help='Token budget')
+    parser.add_argument('--budget', type=int, default=4000, help='Token budget')
     parser.add_argument('--max_step_tokens', type=int, default=512, help='Max tokens per step')
-    parser.add_argument('--beam_width', type=int, default=3, help='Beam width')
+    parser.add_argument('--beam_width', type=int, default=4, help='Beam width')
     parser.add_argument('--temperature', type=float, default=1.0, help='Temperature')
     parser.add_argument('--base_save_dir', type=str, default="uats_results", help='Base directory for saving results')
     
@@ -63,6 +68,7 @@ def main():
                 uncertainty_probe_path=args.uncertainty_probe_path,
                 value_probe_path=args.value_probe_path,
                 budget=args.budget,
+                uncertainty_threshold=0.5,
                 max_step_tokens=args.max_step_tokens,
                 beam_width=args.beam_width,
                 temperature=args.temperature,
