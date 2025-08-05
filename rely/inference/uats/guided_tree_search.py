@@ -355,6 +355,32 @@ class GuidedTreeSearch:
 
         logger.info("Search finished – all branches have terminated.")
 
+
+        
+        # --- NEW LOGIC: Select all leaf nodes as final branches ---
+        # A leaf node is a branch that was never used as a parent for another branch.
+        # This logic finds all paths from the start to a terminal node in the tree.
+
+        # 1. Collect the ID of every branch that served as a parent.
+        #    We filter out `None` which is the parent_id for the initial branches.
+        parent_ids = {branch.parent_id for branch in all_branches if branch.parent_id is not None}
+
+        # 2. A branch is a "leaf" if its own ID never appears in the set of parent IDs.
+        #    These are the terminal nodes of the search tree.
+        final_branches = [branch for branch in all_branches if branch.id not in parent_ids]
+        
+        logger.info(f"Identified {len(final_branches)} leaf nodes as final branches from a total of {len(all_branches)} generated nodes.")
+
+        # final_branches.sort(key=lambda b: b.value, reverse=True)
+        # final_branches = final_branches[:self.config.beam_width]
+
+        # Generate final answers only for the branches that will be saved
+        for branch in final_branches:
+            branch.final_answer = self._generate_final_answer(branch)
+
+        return final_branches, all_branches
+        ''''''
+
         # Final branches comprise both those naturally finished *and* any that
         # were still in the beam when the optional safety net triggered.
         final_branches = finished.copy() if finished else []
@@ -455,4 +481,4 @@ class GuidedTreeSearch:
         for branch in final_branches:
             branch.final_answer = self._generate_final_answer(branch)
 
-        return final_branches, all_branches 
+        return final_branches, all_branches

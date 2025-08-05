@@ -47,7 +47,7 @@ def extract_final_answer(branch_text: str, final_answer_text: str) -> str:
 
 def load_model_and_tokenizer(
     model_name: str,
-    max_seq_length: int = 4096,
+    max_seq_length: int = 16384,
     dtype: str = "bfloat16",
     load_in_4bit: bool = True,
 ):
