@@ -357,40 +357,11 @@ class GuidedTreeSearch:
 
         # Final branches comprise both those naturally finished *and* any that
         # were still in the beam when the optional safety net triggered.
-        # Also include any branches that were generated in the final iteration
-        # but not yet added to finished due to budget constraints
         final_branches = finished.copy() if finished else []
         
         # Add any branches that were still in the beam
         if beam:
             final_branches.extend(beam)
-        
-        # Also include any branches that were generated in the final iteration
-        # but not yet processed due to budget constraints
-        # Find the maximum step count among all branches
-        max_step = max(b.step_count for b in all_branches) if all_branches else 0
-        
-        # Add any branches with the maximum step count that aren't already included
-        max_step_branches = [b for b in all_branches if b.step_count == max_step]
-        logger.info(f"Found {len(max_step_branches)} branches with max step count {max_step}")
-        
-        for branch in max_step_branches:
-            if branch not in final_branches:
-                final_branches.append(branch)
-                logger.info(f"Added branch {branch.id} with step count {branch.step_count} to final branches")
-        
-        # If we still don't have enough branches to fill beam_width, add branches with fewer steps
-        if len(final_branches) < self.config.beam_width:
-            # Get all branches sorted by step count (descending) and score (descending)
-            remaining_branches = [b for b in all_branches if b not in final_branches]
-            remaining_branches.sort(key=lambda b: (b.step_count, b.score), reverse=True)
-            
-            # Add branches until we reach beam_width or run out of branches
-            for branch in remaining_branches:
-                if len(final_branches) >= self.config.beam_width:
-                    break
-                final_branches.append(branch)
-                logger.info(f"Added additional branch {branch.id} with step count {branch.step_count} to fill beam_width")
         
         # Ensure we don't have duplicates
         seen_ids = set()
@@ -401,6 +372,32 @@ class GuidedTreeSearch:
                 unique_final_branches.append(branch)
         
         final_branches = unique_final_branches
+        
+        # Check if we have enough total explored branches to potentially fill up to beam_width
+        total_explored_branches = len(all_branches)
+        logger.info(f"Total explored branches: {total_explored_branches}, beam_width: {self.config.beam_width}")
+        
+        # If we have enough total explored branches (≥ beam_width), we can fill up to beam_width
+        # by selecting from all explored branches, not just finished/beam ones
+        if total_explored_branches >= self.config.beam_width:
+            logger.info(f"Total explored branches ({total_explored_branches}) >= beam_width ({self.config.beam_width}), filling up to beam_width")
+            
+            # Start with finished and beam branches
+            candidate_branches = final_branches.copy()
+            
+            # Add remaining branches from all_branches to fill up to beam_width
+            remaining_branches = [b for b in all_branches if b not in candidate_branches]
+            remaining_branches.sort(key=lambda b: (b.step_count, b.score), reverse=True)
+            
+            for branch in remaining_branches:
+                if len(candidate_branches) >= self.config.beam_width:
+                    break
+                candidate_branches.append(branch)
+                logger.info(f"Added branch {branch.id} with step count {branch.step_count} to fill beam_width")
+            
+            final_branches = candidate_branches
+        else:
+            logger.info(f"Total explored branches ({total_explored_branches}) < beam_width ({self.config.beam_width}), returning only actual explored branches")
         
         logger.info(f"Final branch selection: {len(final_branches)} branches selected from {len(all_branches)} total branches")
         if final_branches:
