@@ -3,70 +3,108 @@ import glob
 from collections import Counter
 import os
 
-def calculate_metrics():
+def calculate_metrics(base_path):
     """
-    Calculates and prints performance metrics from JSON result files.
+    Calculates and prints performance metrics from JSON result files,
+    supporting both 'results.json' and 'summary.json' formats across
+    two different directory structures.
     """
-    # Define the path to search for result files.
-    # This pattern finds all results.json files within any subdirectory 
-    # that follows the structure 'question_*/run_*'.
-    path_pattern = os.path.join('uats_results', 'question_*', 'run_*', 'results.json')
-    
-    # Find all files matching the pattern
-    result_files = glob.glob(path_pattern)
-    
+    # --- File Discovery ---
+    # Define the base directory for the results.
+
+    # Define patterns for all supported directory structures and filenames.
+    # This finds files both with and without the intermediate 'run_*' directory.
+    patterns = [
+        # Structure with 'run_*' subdirectory
+        os.path.join(base_path, 'question_*', 'run_*', 'results.json'),
+        os.path.join(base_path, 'question_*', 'run_*', 'summary.json'),
+        # Structure without 'run_*' subdirectory
+        os.path.join(base_path, 'question_*', 'results.json'),
+        os.path.join(base_path, 'question_*', 'summary.json')
+    ]
+
+    # Collect all files that match any of the defined patterns.
+    all_found_files = []
+    for pattern in patterns:
+        all_found_files.extend(glob.glob(pattern))
+
+    # Use a set to get a unique list of file paths, then convert back to a list.
+    result_files = list(set(all_found_files))
+
     if not result_files:
-        print("Error: No result files found.")
-        print(f"Please ensure the script is in the correct directory and that files exist at the path: {path_pattern}")
+        print("Error: No result files ('results.json' or 'summary.json') found.")
+        print(f"Please ensure results exist in '{os.path.join(base_path, 'question_*')}' or '{os.path.join(base_path, 'question_*', 'run_*')}' directories.")
         return
 
-    # Initialize counters
-    total_questions = len(result_files)
+    # --- Initialize counters ---
+    # This counter tracks successfully processed files.
+    processed_questions = 0
     most_consistent_correct = 0
     at_least_one_correct = 0
     total_correct_answers = 0
     total_possible_answers = 0
 
-    # Process each result file
-    for file_path in result_files:
-        print(file_path)
+    # --- Process each result file ---
+    for file_path in sorted(result_files): # Sorting for consistent output order
         try:
             with open(file_path, 'r') as f:
                 data = json.load(f)
-            
-            # Extract necessary data from JSON
-            correct_answer = data.get("correct_answer")
-            all_answers = data.get("all_answers", [])
-            
-            # Ensure there are answers to process
-            if not all_answers:
-                continue
 
-            # --- Metric 1: Most consistent answer is correct ---
-            # Find the most common answer using collections.Counter
-            answer_counts = Counter(all_answers)
-            most_common_answer = answer_counts.most_common(1)[0][0]
-            if most_common_answer == correct_answer:
+            # These variables will be populated based on the JSON format.
+            is_most_consistent_correct = False
+            at_least_one_is_correct = False
+            correct_count_in_file = 0
+            total_answers_in_file = 0
+
+            # --- Check format and extract data ---
+            # The 'summary.json' format has a nested 'evaluation' key.
+            if "evaluation" in data:
+                # --- New format ('summary.json') processing ---
+                evaluation_data = data.get("evaluation", {})
+                is_most_consistent_correct = evaluation_data.get("is_most_consistent_correct", False)
+                correct_count_in_file = evaluation_data.get("correct_count", 0)
+                at_least_one_is_correct = correct_count_in_file > 0
+                total_answers_in_file = data.get("num_samples", 0)
+
+            else:
+                # --- Original format ('results.json') processing ---
+                correct_answer = data.get("correct_answer")
+                all_answers = data.get("all_answers", [])
+
+                # Skip if essential data is missing
+                if not all_answers or correct_answer is None:
+                    print(f"Warning: Skipping file {file_path} due to missing 'all_answers' or 'correct_answer' field.")
+                    continue
+
+                # Calculate metrics on the fly for the original format
+                answer_counts = Counter(all_answers)
+                most_common_answer = answer_counts.most_common(1)[0][0]
+                is_most_consistent_correct = (most_common_answer == correct_answer)
+                at_least_one_is_correct = (correct_answer in all_answers)
+
+                correct_count_in_file = data.get("correct_count", 0)
+                total_answers_in_file = data.get("total_answers", 0)
+
+            # --- Update aggregate counters after successful data extraction ---
+            processed_questions += 1
+            if is_most_consistent_correct:
                 most_consistent_correct += 1
-
-            # --- Metric 2: At least one answer is correct ---
-            if correct_answer in all_answers:
+            if at_least_one_is_correct:
                 at_least_one_correct += 1
-                
-            # --- Metric 3: Mean accuracy ---
-            # Sum the counts provided directly in the JSON for mean accuracy calculation
-            total_correct_answers += data.get("correct_count", 0)
-            total_possible_answers += data.get("total_answers", 0)
+
+            total_correct_answers += correct_count_in_file
+            total_possible_answers += total_answers_in_file
 
         except (json.JSONDecodeError, IndexError, KeyError) as e:
             print(f"Warning: Could not process file {file_path}. Error: {e}")
-            total_questions -= 1 # Adjust total if a file is malformed
+            # Do not increment processed_questions count if a file is malformed
 
     # --- Calculate final percentages ---
-    if total_questions > 0:
-        most_consistent_pct = (most_consistent_correct / total_questions) * 100
-        at_least_one_pct = (at_least_one_correct / total_questions) * 100
+    if processed_questions > 0:
+        most_consistent_pct = (most_consistent_correct / processed_questions) * 100
+        at_least_one_pct = (at_least_one_correct / processed_questions) * 100
     else:
+        print("Warning: No valid result files were processed.")
         most_consistent_pct = 0
         at_least_one_pct = 0
 
@@ -76,11 +114,11 @@ def calculate_metrics():
         mean_accuracy_pct = 0
 
     # --- Print the final results ---
-    print("\n--- Aggregated Results ---")
-    print(f"- Most consistent answer is correct: {most_consistent_correct} out of {total_questions} ({most_consistent_pct:.2f}%)")
-    print(f"- At least one answer is correct: {at_least_one_correct} out of {total_questions} ({at_least_one_pct:.2f}%)")
+    print(f"\n--- Aggregated Results from {processed_questions} questions ---")
+    print(f"- Most consistent answer is correct: {most_consistent_correct} out of {processed_questions} ({most_consistent_pct:.2f}%)")
+    print(f"- At least one answer is correct: {at_least_one_correct} out of {processed_questions} ({at_least_one_pct:.2f}%)")
     print(f"- Mean accuracy (total correct / total generated): {mean_accuracy_pct:.2f}% ({total_correct_answers}/{total_possible_answers})")
-    print("--------------------------\n")
+    print("----------------------------------------------------\n")
 
 if __name__ == "__main__":
-    calculate_metrics()
+    calculate_metrics("self_consistency_results/run_20250805_234428")
