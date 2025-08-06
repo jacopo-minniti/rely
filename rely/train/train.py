@@ -182,7 +182,31 @@ class Trainer:
         train_dataset = Subset(full_dataset, train_indices)
         val_dataset = Subset(full_dataset, val_indices)
         print(f"Split dataset into {len(train_dataset)} training and {len(val_dataset)} validation samples.")
-    
+        
+        # ---- Save the validation set questions and answers to a .jsonl file ----
+        print(f"📝 Saving validation set questions and answers to a .jsonl file...")
+        val_save_path = run_dir / 'validation_set.jsonl'
+        with open(val_save_path, 'w') as f:
+            # `val_indices` holds the indices of the validation samples in the original `dataset_list`
+            for idx in val_indices:
+                # Get the original data dictionary from the master list
+                original_entry = dataset_list[idx]
+                
+                # Assume the question is stored under the key 'question'.
+                # If your key is different (e.g., 'prompt', 'text'), change it here.
+                question_text = original_entry.get('question', 'ERROR: QUESTION_KEY_NOT_FOUND')
+                answer_text = original_entry.get('solution', 'ERROR: QUESTION_KEY_NOT_FOUND')
+
+                # Create the JSON object for this line
+                json_line = {
+                    "question": question_text,
+                    "answer": answer_text
+                }
+                
+                # Write the JSON object as a string on a new line
+                f.write(json.dumps(json_line) + '\n')
+        print(f"  - Validation set saved to: {val_save_path}")
+
         # ---- 4b. Optional removal of near-zero labels from TRAINING set ----
         if preprocess_cfg.get('remove_zeroes', False):
             epsilon = float(preprocess_cfg.get('zero_tolerance', 0.01))  # tolerance window around 0
