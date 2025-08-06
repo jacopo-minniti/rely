@@ -1,8 +1,0 @@
-transformers==4.54.1
-accelerate==1.9.0
-unsloth==2025.8.1
-unsloth_zoo==2025.8.1
-vllm==0.10.0
-matplotlib==3.10.5
-seaborn==0.13.2
-pygraphviz==1.14
