@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Union
 import json
 import logging
@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from datetime import datetime
 
-from vllm import LLM, SamplingParams
+from vllm import LLM, SamplingParams, RequestOutput
 
 from rely.utils.text_utils import (
     format_system_prompt,
@@ -30,20 +30,14 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SelfConsistencyConfig:
     """Configuration for self-consistency inference."""
-    # Model / sampling
     model_name: str = "Qwen/Qwen2-7B-Instruct"
     num_samples: int = 20
     max_new_tokens: int = 500
-    # A very brief follow-up generation to let the model output the final answer
     follow_up_tokens: int = 64
     temperature: float = 1.0
     top_p: float = 0.95
-
-    # Special tokens / patterns
     end_think_token: str = "</think>"
-    answer_pattern: str = r"\(([A-Z])\)"  # Captures single letter inside parentheses
-
-    # Hardware
+    answer_pattern: str = r"\(([A-Z])\)"
     tensor_parallel_size: int = 1
     gpu_memory_utilization: float = 0.9
 
@@ -52,7 +46,9 @@ class SelfConsistencyConfig:
 class SelfConsistencyResult:
     """Holds results from self-consistency inference."""
     answers: List[str]
-    generated_texts: List[str]  # Full generated texts for each sample
+    generated_texts: List[str]
+    # MODIFICATION: Added field to store token counts for each generation
+    generated_tokens: List[int]
     distribution: Dict[str, int]
     most_consistent_answer: Optional[str]
     config: SelfConsistencyConfig
@@ -61,8 +57,8 @@ class SelfConsistencyResult:
 @dataclass
 class BatchSelfConsistencyResult:
     """Holds results from batch self-consistency inference."""
-    results: List[SelfConsistencyResult]  # One result per question
-    questions: List[str]  # The questions that were processed
+    results: List[SelfConsistencyResult]
+    questions: List[str]
     config: SelfConsistencyConfig
 
 
@@ -74,11 +70,7 @@ class SelfConsistencyInference:
         self.llm: Optional[LLM] = None
         self._initialize_model()
 
-    # ---------------------------------------------------------------------
-    # Helpers
-    # ---------------------------------------------------------------------
     def _initialize_model(self):
-        """Load the model once so we can reuse across generations."""
         try:
             logger.info(f"Loading model {self.config.model_name} with vLLM…")
             self.llm = LLM(
@@ -93,8 +85,9 @@ class SelfConsistencyInference:
             logger.error(f"Failed to load model: {e}")
             raise
 
-    def _generate(self, prompt: str, max_tokens: int, n: int = 1) -> Union[str, List[str]]:
-        """Generate text from the model. Returns a list for n > 1."""
+    # MODIFICATION: Updated to return both text and token count
+    def _generate(self, prompt: str, max_tokens: int, n: int = 1) -> List[tuple[str, int]]:
+        """Generate text from the model. Returns a list of (text, token_count) tuples."""
         if self.llm is None:
             raise ValueError("LLM not initialized")
 
@@ -104,14 +97,17 @@ class SelfConsistencyInference:
             max_tokens=max_tokens,
             n=n,
         )
-        # vLLM generate expects a list of prompts
         outputs = self.llm.generate([prompt], sampling_params)
         
-        # When n>1, outputs[0] contains all n samples for the single prompt
-        generated = [output.text for output in outputs[0].outputs]
-        return generated if n > 1 else generated[0]
+        # Capture both the generated text and the number of tokens
+        generated_with_tokens = [
+            (output.text, len(output.token_ids)) 
+            for output in outputs[0].outputs
+        ]
+        return generated_with_tokens
 
-    def _generate_batch(self, prompts: List[str], max_tokens: int) -> List[str]:
+    # MODIFICATION: Updated to return both text and token count
+    def _generate_batch(self, prompts: List[str], max_tokens: int) -> List[tuple[str, int]]:
         """Generate text for a batch of *different* prompts."""
         if self.llm is None:
             raise ValueError("LLM not initialized")
@@ -122,77 +118,84 @@ class SelfConsistencyInference:
             max_tokens=max_tokens,
         )
         outputs = self.llm.generate(prompts, sampling_params)
-        return [output.outputs[0].text for output in outputs]
+        # Capture text and token count for each prompt in the batch
+        return [
+            (output.outputs[0].text, len(output.outputs[0].token_ids))
+            for output in outputs
+        ]
 
     def _extract_answer(self, text: str) -> Optional[str]:
-        """Extract the final answer letter using the configured regex pattern."""
         matches = list(re.finditer(self.config.answer_pattern, text))
         if not matches:
             return None
-        return matches[-1].group(1)  # Take the last match
+        return matches[-1].group(1)
 
-    # ------------------------------------------------------------------
-    # Core Logic (Refactored for Efficiency)
-    # ------------------------------------------------------------------
-    def _get_consistent_samples(self, system_prompt: str, user_question: str) -> List[tuple[str, str]]:
+    # MODIFICATION: Core logic updated to handle and aggregate token counts
+    def _get_consistent_samples(self, system_prompt: str, user_question: str) -> List[tuple[str, str, int]]:
         """
-        Generates N samples and efficiently handles follow-ups for incomplete ones in a single batch.
+        Generates N samples and efficiently handles follow-ups.
 
         Returns:
-            A list of tuples, where each tuple is (answer, full_generated_text).
+            A list of tuples: (answer, full_generated_text, total_token_count).
         """
         base_prompt = format_system_prompt(system_prompt, user_question) + "<think>\n"
 
-        # 1. Generate all N samples in a single efficient call
+        # 1. Generate all N samples; this now returns (text, token_count) tuples
         initial_samples = self._generate(base_prompt, self.config.max_new_tokens, n=self.config.num_samples)
 
         complete_results = []
-        follow_up_prompts = []
+        # Store (prompt, initial_token_count) for follow-up
+        follow_up_queue = []
 
-        # 2. Partition samples into "complete" and "incomplete" (needs follow-up)
-        for generated_text in initial_samples:
+        # 2. Partition samples
+        for generated_text, token_count in initial_samples:
             full_text = base_prompt + generated_text
             if self.config.end_think_token in generated_text:
                 answer = self._extract_answer(full_text)
-                complete_results.append((answer or "?", full_text))
+                # Store answer, text, and the initial token count
+                complete_results.append((answer or "?", full_text, token_count))
             else:
                 follow_up_prompt = ensure_think_ending(full_text)
-                follow_up_prompts.append(follow_up_prompt)
+                # Queue the prompt and its token count so far
+                follow_up_queue.append((follow_up_prompt, token_count))
 
-        # 3. Process the follow-up batch in a single call (if any)
-        if follow_up_prompts:
+        # 3. Process the follow-up batch
+        if follow_up_queue:
+            follow_up_prompts = [item[0] for item in follow_up_queue]
             logger.debug(f"Issuing a batch follow-up for {len(follow_up_prompts)} incomplete samples...")
+            
+            # This returns (completion_text, follow_up_token_count)
             follow_up_completions = self._generate_batch(follow_up_prompts, self.config.follow_up_tokens)
 
-            for original_prompt, completion in zip(follow_up_prompts, follow_up_completions):
+            for (original_prompt, initial_tokens), (completion, follow_up_tokens) in zip(follow_up_queue, follow_up_completions):
                 final_text = original_prompt + completion
                 answer = self._extract_answer(final_text)
-                complete_results.append((answer or "?", final_text))
+                # Sum the tokens from both generation steps
+                total_tokens = initial_tokens + follow_up_tokens
+                complete_results.append((answer or "?", final_text, total_tokens))
 
         return complete_results
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    # MODIFICATION: Updated to unpack token counts and add to the result object
     def run_inference(self, system_prompt: str, user_question: str) -> SelfConsistencyResult:
         """Run self-consistency for a single question and return aggregated results."""
         logger.info(f"Running self-consistency for '{user_question[:50]}...' with {self.config.num_samples} samples...")
         
-        # The refactored helper does all the generation and follow-up work efficiently.
+        # `results` now contains (answer, text, token_count)
         results = self._get_consistent_samples(system_prompt, user_question)
 
+        # Unpack the results into separate lists
         answers = [res[0] for res in results]
         generated_texts = [res[1] for res in results]
+        token_counts = [res[2] for res in results] # <-- Extract token counts
 
-        for i, answer in enumerate(answers):
-            logger.debug(f"Sample {i + 1}/{self.config.num_samples} ⇒ {answer}")
+        for i, (answer, tokens) in enumerate(zip(answers, token_counts)):
+            logger.debug(f"Sample {i + 1}/{self.config.num_samples} ⇒ {answer} ({tokens} tokens)")
 
-        # Compute distribution
         distribution: Dict[str, int] = {}
         for ans in answers:
             distribution[ans] = distribution.get(ans, 0) + 1
 
-        # Identify the most frequent answer (ties broken arbitrarily)
         most_consistent: Optional[str] = None
         if distribution:
             most_consistent = max(distribution.items(), key=lambda kv: kv[1])[0]
@@ -200,17 +203,15 @@ class SelfConsistencyInference:
         return SelfConsistencyResult(
             answers=answers,
             generated_texts=generated_texts,
+            generated_tokens=token_counts, # <-- Pass token counts to the result object
             distribution=distribution,
             most_consistent_answer=most_consistent,
             config=self.config,
         )
 
     def run_batch_inference(self, system_prompt: str, user_questions: List[str]) -> BatchSelfConsistencyResult:
-        """Run self-consistency inference on multiple questions efficiently."""
         logger.info(f"Running batch self-consistency for {len(user_questions)} questions with {self.config.num_samples} samples each...")
         all_results = []
-
-        # This now correctly loops over UNIQUE questions and uses the efficient single-question method.
         for i, user_question in enumerate(user_questions):
             logger.info(f"Processing question {i + 1}/{len(user_questions)}: {user_question[:50]}...")
             question_result = self.run_inference(system_prompt, user_question)
@@ -222,11 +223,7 @@ class SelfConsistencyInference:
             config=self.config,
         )
 
-def create_self_consistency_inference(config: SelfConsistencyConfig) -> SelfConsistencyInference:
-    """Factory helper to build the inference object."""
-    return SelfConsistencyInference(config)
-
-
+# MODIFICATION: Updated to save token counts in both individual files and the summary
 def save_self_consistency_result(
     result: SelfConsistencyResult,
     system_prompt: str,
@@ -239,13 +236,14 @@ def save_self_consistency_result(
     run_dir = output_path
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save individual generation files
-    for i, (answer, text) in enumerate(zip(result.answers, result.generated_texts)):
+    # Save individual generation files with token counts
+    for i, (answer, text, tokens) in enumerate(zip(result.answers, result.generated_texts, result.generated_tokens)):
         with open(run_dir / f"generation_{i}.txt", "w") as f:
             f.write(f"# System Prompt\n{system_prompt}\n\n")
             f.write(f"# Question\n{user_question}\n\n")
             f.write(f"# Generated Text\n{text}\n\n")
-            f.write(f"# Extracted Answer\n{answer}\n")
+            f.write(f"# Extracted Answer\n{answer}\n\n")
+            f.write(f"# Generated Tokens\n{tokens}\n") # <-- Added token count
     
     # Prepare and save summary file
     summary_data = {
@@ -260,7 +258,11 @@ def save_self_consistency_result(
                 "percentage": round((count / len(result.answers)) * 100, 2)
             } for ans, count in sorted(result.distribution.items(), key=lambda item: item[1], reverse=True)
         },
-        "all_answers": result.answers,
+        # MODIFICATION: Replaced `all_answers` with a more detailed structure
+        "generations": [
+            {"answer": ans, "tokens": tok}
+            for ans, tok in zip(result.answers, result.generated_tokens)
+        ],
     }
     
     if correct_answer is not None:
@@ -285,14 +287,9 @@ def run_self_consistency(
     save_path: Optional[Union[str, Path]] = None,
     correct_answer: Optional[Union[str, List[str]]] = None,
 ) -> Union[SelfConsistencyResult, BatchSelfConsistencyResult]:
-    """
-    Main entry point to run self-consistency inference.
-
-    Handles both single and batch questions and orchestrates saving results.
-    """
     if config is None:
         config = SelfConsistencyConfig()
-    inference = create_self_consistency_inference(config)
+    inference = SelfConsistencyInference(config)
 
     is_batch = isinstance(user_question, list)
     questions = user_question if is_batch else [user_question]
@@ -311,7 +308,6 @@ def run_self_consistency(
     else:
         batch_result = inference.run_batch_inference(system_prompt, questions)
         if save_path:
-            # Create a single run directory for the entire batch
             run_dir = Path(save_path) / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             for i, (res, q) in enumerate(zip(batch_result.results, batch_result.questions)):
                 question_save_path = run_dir / f"question_{i}"

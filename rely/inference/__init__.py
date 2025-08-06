@@ -29,7 +29,6 @@ from .self_consistency import (
     SelfConsistencyResult,
     SelfConsistencyInference,
     run_self_consistency,
-    create_self_consistency_inference,
     save_self_consistency_result
 )
 
@@ -54,7 +53,6 @@ __all__ = [
     "SelfConsistencyResult",
     "SelfConsistencyInference",
     "run_self_consistency",
-    "create_self_consistency_inference",
     "save_self_consistency_result"
 ]
 

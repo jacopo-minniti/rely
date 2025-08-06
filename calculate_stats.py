@@ -121,5 +121,5 @@ def calculate_metrics(base_path):
     print("----------------------------------------------------\n")
 
 if __name__ == "__main__":
-    base = "/Users/jacopominniti/Desktop/results/uats/classification_05_all_8000"
+    base = "self_consistency_results/run_20250806_184948"
     calculate_metrics(base)

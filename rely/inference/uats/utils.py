@@ -275,15 +275,19 @@ def _generate_tree_image(
         
         steps = branch_text.split('\n\n')
         latest_step = steps[-1].strip() if steps else branch_text.strip()
-        # get only first 40 chars and then ellipsis
-        latest_step = latest_step[:40] + '...'
+        # get only first 25 chars and then ellipsis
+        latest_step = latest_step[:25] + '...'
         
         # Wrap the text for better display in the node
         wrapped_text = textwrap.fill(latest_step, width=30)
         
-        u_str = f"{branch.uncertainty:.2f}" if branch.uncertainty is not None else "?"
-        v_str = f"{branch.value:.2f}" if branch.value is not None else "?"
-        label = f"u={u_str}, v={v_str}\n\n{wrapped_text}"
+        label = ""
+        if branch.uncertainty is not None and branch.value is not None:
+            label = f"u={branch.uncertainty:.2f}, v={branch.value:.2f}\n\n{wrapped_text}"
+        if branch.uncertainty is not None:
+            label = f"u={branch.uncertainty:.2f}\n\n{wrapped_text}"
+        if branch.value is not None:
+            label = f"v={branch.value:.2f}\n\n{wrapped_text}"
         
         G.add_node(node_id, label=label, is_final=branch.final_answer is not None)
         
@@ -298,7 +302,7 @@ def _generate_tree_image(
         if branch.final_answer:
             final_answer = extract_final_answer(branch.text, branch.final_answer)
             final_node_id = f"final_{branch.id}"
-            G.add_node(final_node_id, label=f"Final Answer:\n{final_answer}", is_final_answer=True)
+            G.add_node(final_node_id, label=final_answer, is_final_answer=True)
             G.add_edge(branch.id, final_node_id)
     
     pos = nx.nx_agraph.graphviz_layout(G, prog="dot")

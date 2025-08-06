@@ -335,9 +335,7 @@ class GuidedTreeSearch:
                 if budget_exceeded:
                     break  # Exit branch expansion loop
 
-            # --------------------------------------------------------------
             # Prune to top-k by *normalised* score.
-            # --------------------------------------------------------------
             if len(all_candidates) > self.config.beam_width:
                 all_candidates = sorted(
                     all_candidates,
