@@ -22,6 +22,11 @@ from .show import (
     show_summary
 )
 
+from .accuracy_stats import (
+    process_and_calculate_metrics,
+    display_metrics
+)
+
 # Import from entropy-stats.py
 from .entropy_stats import (
     validate_entropy_field,
@@ -43,22 +48,6 @@ from .entropy_stats import (
     analyze_entropy_dataset,
     comprehensive_entropy_analysis
 )
-
-# Probes utilities moved to rely.inference.uats.probes but keep backward compatibility
-try:
-    from .probes import (
-        load_probes,
-        convert_isotropy_to_branches,
-        MLPProbe,
-    )
-except ModuleNotFoundError:  # probes module relocated
-    from importlib import import_module
-
-    _probes_module = import_module("rely.inference.uats.probes")
-
-    load_probes = _probes_module.load_probes
-    convert_isotropy_to_branches = _probes_module.convert_isotropy_to_branches
-    MLPProbe = _probes_module.MLPProbe
 
 # Import from text_utils.py
 from .text_utils import (
@@ -82,6 +71,10 @@ __all__ = [
     "show_fields",
     "show_first_n",
     "show_summary",
+
+    # Accuracy stats 
+    "process_and_calculate_metrics",
+    "display_metrics",
     
     # Entropy statistics utilities
     "validate_entropy_field",
