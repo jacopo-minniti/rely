@@ -125,7 +125,7 @@ class SelfConsistencyInference:
             return None
         return matches[-1].group(1)
 
-    # MODIFICATION: Core logic updated to handle and aggregate token counts
+
     def _get_consistent_samples(self, system_prompt: str, user_question: str) -> List[tuple[str, str, int]]:
         """
         Generates N samples and efficiently handles follow-ups.
