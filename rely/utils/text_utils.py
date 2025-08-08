@@ -68,7 +68,7 @@ def format_system_prompt(system_prompt: str, user_question: str) -> str:
     Returns:
         Formatted prompt string
     """
-    return f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{user_question}<|im_end|>\n<|im_start|>assistant\n"
+    return f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{user_question} \\think<|im_end|>\n<|im_start|>assistant\n"
 
 
 def ensure_think_ending(text: str) -> str:

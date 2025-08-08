@@ -14,10 +14,6 @@ from rely.utils.text_utils import (
     MMLU_SYSTEM_PROMPT,
 )
 
-# Dummy implementations for standalone execution
-def format_system_prompt(system_prompt: str, user_question: str) -> str:
-    return f"{system_prompt}\n\nUSER: {user_question}\nASSISTANT: "
-
 def ensure_think_ending(text: str) -> str:
     end_tag = "</think>"
     if text.rstrip().endswith(end_tag):
@@ -138,7 +134,7 @@ class SelfConsistencyInference:
         Returns:
             A list of tuples: (answer, full_generated_text, total_token_count).
         """
-        base_prompt = format_system_prompt(system_prompt, user_question) + "<think>\n"
+        base_prompt = format_system_prompt(system_prompt, user_question)
 
         # 1. Generate all N samples; this now returns (text, token_count) tuples
         initial_samples = self._generate(base_prompt, self.config.max_new_tokens, n=self.config.num_samples)
