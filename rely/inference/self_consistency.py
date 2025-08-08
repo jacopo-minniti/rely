@@ -74,7 +74,6 @@ class SelfConsistencyInference:
                 tensor_parallel_size=self.config.tensor_parallel_size,
                 enable_prefix_caching=True,
                 gpu_memory_utilization=self.config.gpu_memory_utilization,
-                trust_remote_code=True,
             )
             logger.info("Model loaded successfully.")
         except Exception as e:
