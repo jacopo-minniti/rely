@@ -6,6 +6,7 @@ other/
 unsloth_compiled_cache
 uats_results/
 self_consistency_results/
+sbs_results/
 
 *.pdf
 *.jsonl

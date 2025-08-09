@@ -3,26 +3,25 @@ import logging
 import time
 import os
 import json
+import traceback
 from collections import Counter
-from multiprocessing import Process
+from multiprocessing import Process, Queue, set_start_method
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import uuid
 
 import torch
 import torch.nn as nn
+from openai import OpenAI
 from unsloth import FastModel
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
-from vllm import LLM, SamplingParams
-from vllm.utils import get_open_port
 from tqdm import tqdm
 import argparse
 
 # --- Configuration ---
-
-# Disable torch compilation to prevent recompilation issues
 os.environ["TORCH_COMPILE_DISABLE"] = "1"
 torch._dynamo.config.suppress_errors = True
 
-# Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -41,7 +40,12 @@ Options:
 [...Explanation...] The correct answer is (B).
 """
 
-# --- Core SBS Implementation (Logic Unchanged) ---
+# --- OpenAI Client Configuration ---
+OPENAI_API_KEY = "EMPTY"
+OPENAI_API_BASE = "http://localhost:8000/v1"
+
+
+# --- Core SBS Implementation ---
 
 @dataclass
 class SBSConfig:
@@ -75,6 +79,7 @@ class ValueHead(nn.Module):
         x = self.hidden_layers(x)
         return self.output_layer(x)
 
+
 class SBSNode:
     """Node in the Step-level Beam Search tree"""
     def __init__(self, parent: Optional['SBSNode'] = None, text: str = "", depth: int = 0):
@@ -84,14 +89,8 @@ class SBSNode:
         self.depth = depth
         self.full_text: str = (parent.full_text if parent else "") + text
         self.value: float = -100.0
-        self.activation: Optional[torch.Tensor] = None
         self.is_terminal = False
         self.final_answer = ""
-        self.tag = f"node_{id(self)}"
-        self.state = {"text": text, "action": "", "action_input": "", "final_answer": ""}
-
-    def has_children(self) -> bool:
-        return len(self.children) > 0
 
     def add_child(self, child_text: str) -> 'SBSNode':
         cleaned = child_text.lstrip('\n')
@@ -99,54 +98,30 @@ class SBSNode:
         self.children.append(child)
         return child
 
+
 class StepBeamSearch:
     """
-    Step-level Beam Search implementation with vLLM for generation and Unsloth for value estimation.
-    MODIFIED to support placing the value model on a dedicated GPU.
+    MODIFIED: Step-level Beam Search implementation.
+    This class now acts as a client to a separate Value Server process
+    and the vLLM OpenAI API server.
     """
     def __init__(self,
-                 inference_model: str,
-                 activations_model: str,
+                 inference_model_name: str,
                  config: SBSConfig,
-                 vllm_params: Dict[str, Any],
-                 value_head_path: Optional[str] = None,
-                 value_model_device: str = "cuda:0"):
+                 value_task_queue: Queue,
+                 value_result_queue: Queue,
+                 worker_rank: int):
         self.config = config
-        self.inference_model = inference_model
-        self.activations_model = activations_model
+        self.inference_model_name = inference_model_name
+        self.worker_rank = worker_rank
+        
+        # NEW: Queues for communicating with the Value Server
+        self.value_task_queue = value_task_queue
+        self.value_result_queue = value_result_queue
 
-        # --- 1. Load vLLM for Generation ---
-        # vLLM will use the GPUs assigned to it by the distributed engine.
-        logger.info(f"Loading vLLM model: {inference_model} with params: {vllm_params}")
-        self.vllm_model = LLM(
-            model=self.inference_model,
-            **vllm_params
-        )
-        
-        # --- 2. Load Unsloth Model for Value Estimation on a Dedicated GPU ---
-        self.value_device = torch.device(value_model_device)
-        logger.info(f"Loading Unsloth value model on dedicated device: {self.value_device}")
-        
-        self.unsloth_model, self.tokenizer = FastModel.from_pretrained(
-            model_name=self.activations_model,
-            max_seq_length=24_000,
-            load_in_4bit=True,
-            dtype=torch.bfloat16,
-        )
-        self.unsloth_model.to(self.value_device) # Move model to specified device
-        
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-
-        # --- 3. Load Value Head on the Same Dedicated GPU ---
-        self.value_head = ValueHead(input_dim=self.unsloth_model.config.hidden_size)
-        if value_head_path:
-            logger.info(f"Loading value head from '{value_head_path}' to {self.value_device}")
-            # Load state dict directly to the target device
-            self.value_head.load_state_dict(torch.load(value_head_path, map_location=self.value_device))
-        
-        self.value_head.to(device=self.value_device, dtype=torch.bfloat16)
-        self.value_head.eval()
+        # NEW: OpenAI client to connect to the vLLM server
+        self.client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_API_BASE)
+        logger.info(f"[Rank {self.worker_rank}] Client initialized to connect to {OPENAI_API_BASE}")
         
         self.root: Optional[SBSNode] = None
         self.active_beams: List[SBSNode] = []
@@ -156,10 +131,9 @@ class StepBeamSearch:
 
     def clear_cache(self):
         self._prompt_cache.clear()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
 
     def create_prompt(self, question: str, partial_solution: str = "") -> str:
+        # This function remains the same
         cache_key = (question, partial_solution)
         if cache_key in self._prompt_cache:
             return self._prompt_cache[cache_key]
@@ -168,6 +142,7 @@ class StepBeamSearch:
         return prompt
 
     def _extract_final_answer(self, text: str) -> Optional[str]:
+        # This function remains the same
         patterns = [
             r'The correct answer is \(([A-J])\)', r'The answer is \(([A-J])\)',
             r'So the answer is \(([A-J])\)', r'Answer: \(([A-J])\)',
@@ -177,75 +152,126 @@ class StepBeamSearch:
             if m: return m.group(1).upper()
         return None
 
-    @torch.no_grad()
-    def _get_activations_and_values(self, prompts: List[str], generated_texts: List[str]) -> List[Tuple[torch.Tensor, float]]:
-        results = []
-        for prompt, gen_text in zip(prompts, generated_texts):
-            full_text = prompt + gen_text + "\n\n"
-            # Tokenize and ensure tensors are on the correct device for the value model
-            inputs = self.tokenizer(full_text, return_tensors="pt", truncation=False).to(self.value_device)
-            
-            outputs = self.unsloth_model(**inputs, output_hidden_states=True)
-            
-            activation = outputs.hidden_states[-2][0, -1, :]
-            value = torch.sigmoid(self.value_head(activation.unsqueeze(0))).item()
-            
-            results.append((activation, value))
-        return results
+    def _get_values_from_server(self, prompts: List[str], generated_texts: List[str]) -> List[float]:
+        # This function's logic is mostly the same, just renamed queues for clarity
+        if not prompts:
+            return []
+        request_id = str(uuid.uuid4())
+        payload = {
+            "request_id": request_id,
+            "worker_rank": self.worker_rank,
+            "prompts": prompts,
+            "generated_texts": generated_texts
+        }
+        self.value_task_queue.put(payload)
+        
+        while True:
+            response = self.value_result_queue.get()
+            if response.get("request_id") == request_id:
+                return response["values"]
+            else:
+                logger.warning(f"[Rank {self.worker_rank}] Received unexpected value result, requeuing.")
+                self.value_result_queue.put(response)
+                time.sleep(0.01)
+
+    def _make_api_request(self, prompt: str) -> List[str]:
+        """Helper function to make a single API call."""
+        try:
+            completion = self.client.completions.create(
+                model=self.inference_model_name,
+                prompt=prompt,
+                max_tokens=self.config.max_tokens,
+                temperature=self.config.temperature,
+                stop=["\n\n"],
+                n=self.config.n_generate_sample,
+            )
+            return [choice.text for choice in completion.choices]
+        except Exception as e:
+            logger.error(f"[Rank {self.worker_rank}] Error during API call: {e}")
+            return []
 
     def _generate_and_score_candidates(self, question: str) -> List[SBSNode]:
-        if not self.active_beams: return []
+        """
+        MODIFIED: This function now uses the OpenAI client to generate candidates
+        and sends requests to the Value Server for scoring.
+        """
+        if not self.active_beams:
+            return []
 
-        prompts = [self.create_prompt(question, node.full_text) for node in self.active_beams]
-        sampling_params = SamplingParams(
-            temperature=self.config.temperature, max_tokens=self.config.max_tokens,
-            stop=["\n\n"], n=self.config.n_generate_sample,
-        )
-        vllm_outputs = self.vllm_model.generate(prompts, sampling_params)
-        
         all_candidates, seen_full_texts = [], set()
-        for i, output in enumerate(vllm_outputs):
-            parent_node, parent_prompt = self.active_beams[i], prompts[i]
-            generated_texts = [gen.text for gen in output.outputs]
-            activations_and_values = self._get_activations_and_values([parent_prompt] * len(generated_texts), generated_texts)
+        prompts = [self.create_prompt(question, node.full_text) for node in self.active_beams]
+        
+        # NEW: Use a thread pool to make API requests concurrently
+        generated_outputs = [[] for _ in self.active_beams]
+        with ThreadPoolExecutor(max_workers=len(self.active_beams)) as executor:
+            future_to_index = {executor.submit(self._make_api_request, prompt): i for i, prompt in enumerate(prompts)}
+            for future in as_completed(future_to_index):
+                index = future_to_index[future]
+                try:
+                    generated_outputs[index] = future.result()
+                except Exception as exc:
+                    logger.error(f"[Rank {self.worker_rank}] API request generated an exception: {exc}")
 
-            for j, gen_text in enumerate(generated_texts):
-                activation, value = activations_and_values[j]
+        # Batch data for value scoring
+        value_request_prompts = []
+        value_request_texts = []
+        parent_nodes = []
+
+        for i, gen_texts in enumerate(generated_outputs):
+            parent_node = self.active_beams[i]
+            for gen_text in gen_texts:
+                value_request_prompts.append(prompts[i])
+                value_request_texts.append(gen_text)
+                parent_nodes.append(parent_node)
+
+        # Get all values from the server in one batch
+        values = self._get_values_from_server(value_request_prompts, value_request_texts)
+
+        # Process results
+        candidate_idx = 0
+        for i, gen_texts in enumerate(generated_outputs):
+            for gen_text in gen_texts:
+                parent_node = self.active_beams[i]
+                value = values[candidate_idx]
                 snippet = gen_text.rstrip() + '\n\n'
                 child_node = parent_node.add_child(snippet)
-                child_node.activation, child_node.value = activation, value
-
+                child_node.value = value
+                
                 if ans := self._extract_final_answer(gen_text):
                     child_node.is_terminal, child_node.final_answer = True, ans
-                
+                    
                 if self.config.remove_duplicate:
-                    if child_node.full_text in seen_full_texts: continue
+                    if child_node.full_text in seen_full_texts:
+                        candidate_idx += 1
+                        continue
                     seen_full_texts.add(child_node.full_text)
-                
+                    
                 all_candidates.append(child_node)
-
+                candidate_idx += 1
+        
         if self.config.verbose and all_candidates:
             logger.info(f"Generated {len(all_candidates)} unique candidates this step.")
+            
         return all_candidates
 
     def _update_beams(self, candidates: List[SBSNode]) -> int:
+        # This function remains unchanged
         if not candidates:
             self.active_beams, self.current_beam_width = [], 0
             return 0
         candidates.sort(key=lambda x: x.value, reverse=True)
         new_active_beams, newly_completed = [], 0
-        
         for cand in candidates[:self.current_beam_width]:
             if cand.is_terminal or cand.depth >= self.config.max_depth:
                 self.completed_beams.append(cand)
                 newly_completed += 1
             else:
                 new_active_beams.append(cand)
-        
         self.active_beams = new_active_beams
         self.current_beam_width = len(self.active_beams)
         return newly_completed
 
+    # Helper functions _create_summary and _save_results remain unchanged
     def _create_summary(self, solutions: List[Dict[str, Any]], question: str, ground_truth: Optional[str]) -> Dict[str, Any]:
         answers = [s['final_answer'] for s in solutions if s['final_answer'] != "Not found"]
         majority_vote = Counter(answers).most_common(1)[0][0] if answers else "N/A"
@@ -262,12 +288,9 @@ class StepBeamSearch:
         for idx, node in enumerate(final_beams):
             if not node.final_answer: node.final_answer = self._extract_final_answer(node.full_text) or ""
             termination_reason = "answer_found" if node.final_answer else "max_depth"
-            
             solution_data = {"beam_index": idx + 1, "value": node.value, "final_answer": node.final_answer or "Not found",
                              "depth": node.depth, "termination_reason": termination_reason, "solution_path": node.full_text}
             solutions.append(solution_data)
-            
-            # Save individual beam file
             filename = f"beam_{idx+1:02d}.txt"
             file_path = os.path.join(base_path, filename)
             with open(file_path, 'w', encoding='utf-8') as f:
@@ -275,67 +298,102 @@ class StepBeamSearch:
                 f.write("\n\n---\n\n" + node.full_text)
             saved_files.append(file_path)
 
-        # Save summary file
         summary_path = os.path.join(base_path, "summary.json")
         with open(summary_path, 'w', encoding='utf-8') as f:
             json.dump(self._create_summary(solutions, question, ground_truth), f, indent=4)
         saved_files.append(summary_path)
         return solutions, saved_files
-
-    def run(self, question: str, ground_truth: Optional[str] = None, base_path: Optional[str] = None) -> Dict[str, Any]:
-        """Main execution loop for a single question."""
-        logger.info(f"Starting SBS for question: {question[:100]}...")
-        self.clear_cache()
-        self.root, self.active_beams = SBSNode(text="", depth=0), [self.root]
-        self.completed_beams, self.current_beam_width = [], self.config.step_beam_width
         
+    def run(self, question: str, ground_truth: Optional[str] = None, base_path: Optional[str] = None) -> Dict[str, Any]:
+        # This function remains unchanged
+        logger.info(f"[Rank {self.worker_rank}] Starting SBS for question: {question[:100]}...")
+        self.clear_cache()
+        self.root = SBSNode(text="", depth=0)
+        self.active_beams = [self.root]
+        self.completed_beams, self.current_beam_width = [], self.config.step_beam_width
         step = 0
         while self.active_beams and step < self.config.max_depth:
             step += 1
-            if self.config.verbose: logger.info(f"\n--- SBS Step {step} | Active Beams: {len(self.active_beams)} ---")
-            
+            if self.config.verbose: logger.info(f"\n--- [Rank {self.worker_rank}] SBS Step {step} | Active Beams: {len(self.active_beams)} ---")
             candidates = self._generate_and_score_candidates(question)
             if not candidates:
-                logger.warning("No new candidates generated. Stopping search.")
+                logger.warning(f"[Rank {self.worker_rank}] No new candidates generated. Stopping search.")
                 break
             self._update_beams(candidates)
 
         self.completed_beams.extend(self.active_beams)
         final_beams = sorted(self.completed_beams, key=lambda x: x.value, reverse=True)[:self.config.step_beam_width]
-        
         solutions, saved_files = [], []
         if base_path:
             solutions, saved_files = self._save_results(final_beams, base_path, question, ground_truth)
-        
         if self.config.verbose and solutions:
             best = solutions[0]
-            logger.info(f"--- SBS Complete --- Best solution value: {best['value']:.4f}, Answer: {best['final_answer']}")
+            logger.info(f"--- [Rank {self.worker_rank}] SBS Complete --- Best solution value: {best['value']:.4f}, Answer: {best['final_answer']}")
 
         return {"question": question, "ground_truth": ground_truth, "solutions": solutions}
 
 # --- Data Parallel Execution Harness ---
 
-def _sbs_worker(
-    args: argparse.Namespace,
-    dataset_slice: List[Dict[str, Any]],
-    dp_rank: int,
-    dp_master_ip: str,
-    dp_master_port: int,
-):
-    """Worker function for data-parallel Step-level Beam Search."""
-    # 1. Set Environment for vLLM Data Parallelism
-    os.environ["VLLM_DP_RANK"] = str(dp_rank)
-    os.environ["VLLM_DP_SIZE"] = str(args.dp_size)
-    os.environ["VLLM_DP_MASTER_IP"] = dp_master_ip
-    os.environ["VLLM_DP_MASTER_PORT"] = str(dp_master_port)
-    
-    # Set GPUs visible to this process
-    all_gpus = args.vllm_gpus.split(',') + [str(args.value_model_gpu)]
-    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(all_gpus)
-    
-    logger.info(f"[Rank {dp_rank}] Worker started. Visible GPUs: {os.environ['CUDA_VISIBLE_DEVICES']}")
+def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queues: List[Queue]):
+    """
+    This process loads the Unsloth value model on a dedicated GPU and serves scoring requests from the client workers.
+    """
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.value_model_gpu)
+    value_device = torch.device("cuda:0")
+    logger.info(f"[ValueServer] Starting on device {value_device}")
 
-    # 2. Initialize SBS Instance (loads models once per worker)
+    model, tokenizer = FastModel.from_pretrained(
+        model_name=args.activations_model,
+        max_seq_length=10_000,
+        load_in_4bit=True,
+        dtype=torch.bfloat16,
+    )
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+        
+    value_head = ValueHead(input_dim=model.config.hidden_size)
+    if os.path.exists(args.value_head_path):
+        logger.info(f"[ValueServer] Loading value head from '{args.value_head_path}'")
+        value_head.load_state_dict(torch.load(args.value_head_path, map_location=value_device))
+    else:
+        logger.warning(f"[ValueServer] Value head path not found: '{args.value_head_path}'. Using random weights.")
+    value_head.to(device=value_device, dtype=torch.bfloat16).eval()
+
+    logger.info("[ValueServer] Models loaded. Waiting for tasks.")
+
+    @torch.no_grad()
+    def get_values(prompts: List[str], generated_texts: List[str]) -> List[float]:
+        values = []
+        for prompt, gen_text in zip(prompts, generated_texts):
+            full_text = prompt + gen_text + "\n\n"
+            inputs = tokenizer(full_text, return_tensors="pt", truncation=False).to(value_device)
+            outputs = model(**inputs, output_hidden_states=True)
+            activation = outputs.hidden_states[-2][0, -1, :]
+            value = torch.sigmoid(value_head(activation.unsqueeze(0))).item()
+            values.append(value)
+        return values
+
+    while True:
+        try:
+            task = task_queue.get()
+            if task == "STOP":
+                logger.info("[ValueServer] Received STOP signal. Shutting down.")
+                break
+            request_id, worker_rank = task["request_id"], task["worker_rank"]
+            values = get_values(task["prompts"], task["generated_texts"])
+            result_queues[worker_rank].put({"request_id": request_id, "values": values})
+        except Exception as e:
+            logger.error(f"[ValueServer] Error processing task: {e}", exc_info=True)
+
+
+def _sbs_worker(args: argparse.Namespace,
+                dataset_slice: List[Dict[str, Any]],
+                rank: int,
+                task_queue: Queue,
+                result_queue: Queue):
+    """MODIFIED: Worker function for data-parallel Step-level Beam Search."""
+    logger.info(f"[Rank {rank}] Worker started.")
+    
     sbs_config = SBSConfig(
         step_beam_width=args.beam_width,
         n_generate_sample=args.n_samples,
@@ -343,128 +401,129 @@ def _sbs_worker(
         temperature=args.temperature,
         verbose=args.verbose,
     )
-    vllm_params = {
-        "tensor_parallel_size": args.tp_size,
-        "gpu_memory_utilization": 0.9,
-        "dtype": "bfloat16",
-        "max_model_len": 24000,
-        "enable_prefix_caching": True,
-    }
-    value_model_device = f"cuda:{args.value_model_gpu}"
     
+    # Initialize SBS Instance (now a client)
     sbs_instance = StepBeamSearch(
-        inference_model=args.inference_model,
-        activations_model=args.activations_model,
+        inference_model_name=args.inference_model,
         config=sbs_config,
-        vllm_params=vllm_params,
-        value_head_path=args.value_head_path,
-        value_model_device=value_model_device,
+        value_task_queue=task_queue,
+        value_result_queue=result_queue,
+        worker_rank=rank,
     )
 
-    # 3. Process Assigned Data Slice
-    logger.info(f"[Rank {dp_rank}] Processing {len(dataset_slice)} items.")
-    for item in tqdm(dataset_slice, desc=f"[Rank {dp_rank}] Processing"):
-        question = item['question']
-        ground_truth = item.get('answer') # Use .get for optional field
-        original_index = item['original_index']
-        
-        # Create a unique output directory for each question
-        output_path = os.path.join(args.output_dir, f"q_{original_index:04d}")
-        
+    for item in tqdm(dataset_slice, desc=f"Rank {rank} Processing"):
         try:
+            question = item['question']
+            ground_truth = item.get('answer')
+            original_index = item['original_index']
+            output_path = os.path.join(args.output_dir, f"q_{original_index:04d}")
+            
+            if os.path.exists(os.path.join(output_path, "summary.json")):
+                logger.info(f"[Rank {rank}] Skipping item {original_index} as it is already completed.")
+                continue
+                
             sbs_instance.run(
                 question=question,
                 ground_truth=ground_truth,
                 base_path=output_path
             )
         except Exception as e:
-            logger.error(f"[Rank {dp_rank}] Error processing item {original_index}: {e}", exc_info=True)
-            # Optionally save error info
-            os.makedirs(output_path, exist_ok=True)
-            with open(os.path.join(output_path, "error.log"), 'w') as f:
-                f.write(f"Error on question index {original_index}:\n{e}")
+            error_traceback = traceback.format_exc()
+            logger.error(f"[Rank {rank}] FATAL ERROR processing item {original_index}: {e}\nTRACEBACK:\n{error_traceback}")
+            if 'output_path' in locals():
+                os.makedirs(output_path, exist_ok=True)
+                with open(os.path.join(output_path, "error.log"), 'w') as f:
+                    f.write(f"Error on question index {original_index}:\n{str(e)}\n\n{error_traceback}")
 
-    logger.info(f"[Rank {dp_rank}] Worker finished.")
+    logger.info(f"[Rank {rank}] Worker finished.")
+
 
 def run_sbs_on_dataset(args: argparse.Namespace):
-    """Main function to set up and run parallel SBS on a dataset."""
-    # 1. Load and prepare dataset
+    """MODIFIED: Main function to orchestrate the server and client processes."""
+    set_start_method('spawn', force=True)
+    
     with open(args.input_file, 'r', encoding='utf-8') as f:
         dataset = [json.loads(line) for line in f]
-    
-    # Add original index to each item for unique output paths
-    for i, item in enumerate(dataset):
-        item['original_index'] = i
-    
-    # 2. Setup for multiprocessing
-    dp_size = args.dp_size
-    dp_master_ip = "127.0.0.1"
-    dp_master_port = get_open_port()
+        for i, item in enumerate(dataset):
+            item['original_index'] = i
+
+    num_workers = args.num_workers
+    value_task_queue = Queue()
+    value_result_queues = [Queue() for _ in range(num_workers)]
     procs = []
 
-    logger.info(f"Starting {dp_size} data-parallel workers.")
-    
-    # 3. Distribute data and launch workers
+    # Start the dedicated Value Server process
+    logger.info("Starting Value Model Server process...")
+    value_server_proc = Process(
+        target=_value_model_server,
+        args=(args, value_task_queue, value_result_queues)
+    )
+    value_server_proc.start()
+    procs.append(value_server_proc)
+    time.sleep(15) # Give the server time to load models
+
+    # Distribute data and launch client workers
     total_samples = len(dataset)
-    samples_per_rank = total_samples // dp_size
-    
-    for i in range(dp_size):
-        start_idx = i * samples_per_rank
-        end_idx = (i + 1) * samples_per_rank if i != dp_size - 1 else total_samples
+    samples_per_worker = (total_samples + num_workers - 1) // num_workers
+
+    logger.info(f"Starting {num_workers} SBS client workers.")
+    for i in range(num_workers):
+        start_idx = i * samples_per_worker
+        end_idx = min(start_idx + samples_per_worker, total_samples)
         dataset_slice = dataset[start_idx:end_idx]
-        
         if not dataset_slice:
-            logger.warning(f"Rank {i} received an empty data slice. Skipping.")
             continue
             
-        proc = Process(target=_sbs_worker, args=(args, dataset_slice, i, dp_master_ip, dp_master_port))
+        proc = Process(
+            target=_sbs_worker,
+            args=(args, dataset_slice, i, value_task_queue, value_result_queues[i])
+        )
         proc.start()
         procs.append(proc)
         
-    # 4. Wait for all processes to complete
-    for proc in procs:
+    # Wait for client workers to complete
+    for proc in procs[1:]:
         proc.join()
-        if proc.exitcode != 0:
-            logger.error(f"Process {proc.pid} exited with code {proc.exitcode}. Check logs for errors.")
-            
-    logger.info("All workers have completed.")
 
-# --- Command-Line Interface ---
+    # Signal the Value Server to stop and wait for it
+    logger.info("All SBS workers finished. Shutting down Value Server...")
+    value_task_queue.put("STOP")
+    value_server_proc.join()
+    logger.info("All processes have completed.")
+
 
 def main():
-    parser = argparse.ArgumentParser(description="Run Step-level Beam Search on a dataset with Data Parallelism.")
+    parser = argparse.ArgumentParser(description="Run SBS using a vLLM server.")
+    parser.add_argument("--input_file", type=str, required=True, help="Path to input JSONL dataset.")
+    parser.add_argument("--output_dir", type=str, required=True, help="Directory to save results.")
+    parser.add_argument("--inference_model", type=str, default="Qwen/Qwen3-1.7B", help="Model name served by vLLM.")
+    parser.add_argument("--activations_model", type=str, default="unsloth/Qwen3-1.7B-unsloth-bnb-4bit", help="Unsloth model for value estimation.")
+    parser.add_argument("--value_head_path", type=str, default="models/value_probe.pth", help="Path to pretrained value head.")
     
-    # --- I/O Arguments ---
-    parser.add_argument("--input_file", type=str, required=True, help="Path to the input JSONL dataset.")
-    parser.add_argument("--output_dir", type=str, required=True, help="Directory to save the output results.")
-    parser.add_argument("--inference_model", type=str, default="Qwen/Qwen3-1.7B", help="Model name for both vLLM and Unsloth.")
-    parser.add_argument("--activations_model", type=str, default="unsloth/Qwen3-1.7B-unsloth-bnb-4bit", help="Model name for both vLLM and Unsloth.")
-    parser.add_argument("--value_head_path", type=str, required=True, help="Path to the pretrained value head state_dict.")
-
-    # --- Parallelism Arguments ---
-    parser.add_argument("--dp_size", type=int, default=1, help="Number of data parallel workers.")
-    parser.add_argument("--tp_size", type=int, default=1, help="Tensor parallel size for vLLM within each worker.")
-    parser.add_argument("--vllm_gpus", type=str, default="0", help="Comma-separated list of GPU IDs for vLLM (e.g., '0,1,2,3').")
-    parser.add_argument("--value_model_gpu", type=int, default=0, help="The single GPU ID for the value model (e.g., 4).")
+    # NEW: Simplified parallelism arguments
+    parser.add_argument("--num_workers", type=int, default=4, help="Number of parallel client worker processes.")
+    parser.add_argument("--value_model_gpu", type=int, default=0, help="The single GPU ID for the value model server.")
     
-    # --- SBS Algorithm Arguments ---
-    parser.add_argument("--beam_width", type=int, default=3, help="Step-level beam width.")
-    parser.add_argument("--n_samples", type=int, default=5, help="Number of samples to generate at each step.")
-    parser.add_argument("--max_depth", type=int, default=10, help="Maximum search depth.")
-    parser.add_argument("--temperature", type=float, default=0.6, help="Generation temperature.")
-    parser.add_argument("--verbose", action='store_true', help="Enable verbose logging for SBS steps.")
-
+    # SBS Config arguments
+    parser.add_argument("--beam_width", type=int, default=4, help="Step-level beam width.")
+    parser.add_argument("--n_samples", type=int, default=5, help="Samples to generate at each step.")
+    parser.add_argument("--max_depth", type=int, default=100, help="Maximum search depth.")
+    parser.add_argument("--temperature", type=float, default=1, help="Generation temperature.")
+    parser.add_argument("--verbose", action='store_true', help="Enable verbose logging.")
+    
     args = parser.parse_args()
-
-    # Create output directory if it doesn't exist
     os.makedirs(args.output_dir, exist_ok=True)
-    
-    # Basic validation
-    if str(args.value_model_gpu) in args.vllm_gpus.split(','):
-        logger.warning(f"GPU {args.value_model_gpu} is assigned to both vLLM and the value model. This may cause OOM errors. It's recommended to use separate GPUs.")
-
     run_sbs_on_dataset(args)
-
 
 if __name__ == "__main__":
     main()
+
+'''
+CUDA_VISIBLE_DEVICES="1,2,3,4,5,6,7" vllm serve Qwen/Qwen3-1.7B \
+    --tensor-parallel-size 1 \
+    --gpu-memory-utilization 0.90 \
+    --max-model-len 10000 \
+    --dtype bfloat16 \
+    --enable-prefix-caching \
+    --port 8000
+'''
