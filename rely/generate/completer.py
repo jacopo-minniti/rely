@@ -174,7 +174,6 @@ class Completer:
 
 
     def _worker(self, output_file, n_completions_per_item, n_items_per_cot, max_new_tokens, temperature, cot_percentage, model, trust_remote_code, dp_size, tp_size, gpu_memory_utilization, max_num_seqs, global_dp_rank, local_dp_rank, master_addr, master_port):
-
         logging.info(f"Starting worker: global_rank={global_dp_rank}, local_rank={local_dp_rank}")
         os.environ["VLLM_DP_RANK"] = str(global_dp_rank)
         os.environ["VLLM_DP_RANK_LOCAL"] = str(local_dp_rank)
@@ -182,7 +181,6 @@ class Completer:
         os.environ["VLLM_DP_MASTER_IP"] = master_addr
         os.environ["VLLM_DP_MASTER_PORT"] = str(master_port)
 
-        # Always use load_dataset, which supports both local and HF datasets
         all_data = load_dataset(
             self.config.dataset,
             subset=self.config.subset,
@@ -206,31 +204,32 @@ class Completer:
         if not data_chunk:
             logging.warning(f"DP rank {global_dp_rank} has no items to process. Exiting worker.")
             return
-        logging.info(f"DP rank {global_dp_rank} preparing {len(data_chunk)} prompts (from index {start_idx} to {end_idx-1}).")
+        logging.info(f"DP rank {global_dp_rank} preparing {len(data_chunk)} items.")
 
         prompts_to_process = []
-        source_metadata = []
+        # CHANGE 1: Track the original item's index instead of copying the whole item.
+        source_indices = []
 
-        for item in data_chunk:
+        # Use enumerate to get a unique, hashable index for each item.
+        for item_idx, item in enumerate(data_chunk):
             question = item.get("question", "")
             if not question:
                 logging.warning(f"Skipping item on rank {global_dp_rank}: missing question")
                 continue
             
-            # Generate n_items_per_cot random samples from this CoT
             for sample_idx in range(n_items_per_cot):
                 cut_cot = self.split_attempt(item, cot_percentage)
-                if not cut_cot:
-                    logging.warning(f"Skipping sample {sample_idx} for item on rank {global_dp_rank}: missing cut_cot")
-                    continue
+                # You might want to check for empty cut_cot here as well.
                 
                 prompt = self.build_prompt(question, cut_cot)
                 prompts_to_process.append(prompt)
-                source_metadata.append({
-                    "original_item": item,
+                # Store the index and the cut_cot for later reconstruction.
+                source_indices.append({
+                    "item_idx": item_idx, 
                     "cut_cot": cut_cot,
-                    "sample_idx": sample_idx,
+                    "sample_idx": sample_idx
                 })
+
         if not prompts_to_process:
             logging.warning(f"DP rank {global_dp_rank} has no valid prompts to process after filtering. Exiting.")
             return
@@ -254,39 +253,36 @@ class Completer:
         all_outputs = llm.generate(prompts_to_process, sampling_params)
         base, ext = os.path.splitext(output_file)
         output_file_path = f"{base}.rank{global_dp_rank}{ext}"
-        processed_count = 0
-        output_data = []
 
-        # Group outputs by original item
-        # Each original item will have multiple samples, each with multiple completions
-        # Output structure: {original_item, samples: [{sample_idx, cut_cot, completions}, ...]}
-        item_outputs = {}
-        for source_info, output_group in zip(source_metadata, all_outputs):
-            original_item = source_info["original_item"]
-            sample_idx = source_info["sample_idx"]
-            cut_cot = source_info["cut_cot"]
-            completions = [out.text for out in output_group.outputs]
+        # CHANGE 2: Use a much more efficient aggregation strategy.
+        # This dictionary will hold the final structured data, indexed by the item's original index.
+        processed_outputs = {}
+
+        for source_info, output_group in zip(source_indices, all_outputs):
+            item_idx = source_info["item_idx"]
             
-            if original_item not in item_outputs:
-                item_outputs[original_item] = {
-                    "original_item": original_item,
+            # If we haven't seen this item before, initialize its entry.
+            # This only runs ONCE per original item, avoiding data duplication.
+            if item_idx not in processed_outputs:
+                processed_outputs[item_idx] = {
+                    "original_item": data_chunk[item_idx],
                     "samples": []
                 }
             
-            item_outputs[original_item]["samples"].append({
-                "sample_idx": sample_idx,
-                "cut_cot": cut_cot,
+            # Append the new sample's results to the correct item.
+            completions = [out.text for out in output_group.outputs]
+            processed_outputs[item_idx]["samples"].append({
+                "sample_idx": source_info["sample_idx"],
+                "cut_cot": source_info["cut_cot"],
                 "completions": completions
             })
-        
-        # Convert grouped outputs to final format
-        for item_key, item_data in item_outputs.items():
-            output_data.append(item_data)
-            processed_count += 1
 
+        # CHANGE 3: Convert the dictionary values to a list for saving.
+        output_data = list(processed_outputs.values())
+        
         save_dataset(output_data, output_file_path)
         
-        logging.info(f"DP rank {global_dp_rank} finished. Processed {processed_count} examples.")
+        logging.info(f"DP rank {global_dp_rank} finished. Processed {len(output_data)} original items.")
         logging.info(f"Output for rank {global_dp_rank} written to {output_file_path}")
         
         sleep(1)

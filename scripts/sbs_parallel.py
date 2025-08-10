@@ -510,6 +510,18 @@ def main():
     parser.add_argument("--max_depth", type=int, default=100, help="Maximum search depth.")
     parser.add_argument("--temperature", type=float, default=1, help="Generation temperature.")
     parser.add_argument("--verbose", action='store_true', help="Enable verbose logging.")
+    # --- I/O Arguments ---
+    parser.add_argument("--input_file", type=str, required=True, help="Path to the input JSONL dataset.")
+    parser.add_argument("--output_dir", type=str, required=True, help="Directory to save the output results.")
+    parser.add_argument("--inference_model", type=str, default="Qwen/Qwen3-1.7B", help="Model name for both vLLM and Unsloth.")
+    parser.add_argument("--activations_model", type=str, default="unsloth/Qwen3-1.7B-unsloth-bnb-4bit", help="Model name for both vLLM and Unsloth.")
+    parser.add_argument("--value_head_path", type=str, default="models/value_probe.pth", help="Path to the pretrained value head state_dict.")
+
+    # --- Parallelism Arguments ---
+    parser.add_argument("--dp_size", type=int, default=1, help="Number of data parallel workers.")
+    parser.add_argument("--tp_size", type=int, default=1, help="Tensor parallel size for vLLM within each worker.")
+    parser.add_argument("--vllm_gpus", type=str, default="0", help="Comma-separated list of GPU IDs for vLLM (e.g., '0,1,2,3').")
+    parser.add_argument("--value_model_gpu", type=int, default=0, help="The single GPU ID for the value model (e.g., 4).")
     
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
