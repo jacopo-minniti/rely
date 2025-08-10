@@ -520,8 +520,6 @@ def main():
     # --- Parallelism Arguments ---
     parser.add_argument("--dp_size", type=int, default=1, help="Number of data parallel workers.")
     parser.add_argument("--tp_size", type=int, default=1, help="Tensor parallel size for vLLM within each worker.")
-    parser.add_argument("--vllm_gpus", type=str, default="0", help="Comma-separated list of GPU IDs for vLLM (e.g., '0,1,2,3').")
-    parser.add_argument("--value_model_gpu", type=int, default=0, help="The single GPU ID for the value model (e.g., 4).")
     
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
