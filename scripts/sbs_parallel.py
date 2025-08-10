@@ -142,10 +142,9 @@ class StepBeamSearch:
         return prompt
 
     def _extract_final_answer(self, text: str) -> Optional[str]:
-        # This function remains the same
+            
         patterns = [
-            r'The correct answer is \(([A-J])\)', r'The answer is \(([A-J])\)',
-            r'So the answer is \(([A-J])\)', r'Answer: \(([A-J])\)',
+            r'The correct answer is \(([A-J])\)'
         ]
         for p in patterns:
             m = re.search(p, text, re.IGNORECASE)
