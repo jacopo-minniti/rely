@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # Configuration
-INPUT_FILE="completions.jsonl"
+INPUT_FILE="completions_1k.jsonl"
 MODEL_NAME="unsloth/Qwen3-1.7B-unsloth-bnb-4bit"
 NUM_GPUS=8
-SESSION_NAME="activations_extraction"
+SESSION_NAME="extraction"
 
 # Generate output file name based on input file
 INPUT_BASENAME=$(basename "$INPUT_FILE" .jsonl)

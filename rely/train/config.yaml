@@ -1,6 +1,6 @@
 # General Configuration
 run_name: "uncertainty_run"
-task: "regression"  # Options: "classification", "regression"
+task: "classification"  # Options: "classification", "regression"
 model_type: "mlp"       # Options: "linear", "mlp"
 output_file: "probe.pth"
 
@@ -9,7 +9,7 @@ files:
   # - "data/Qwen3-1.7B/mmlu/nn-short-100.pt"
   # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-05.pt"
   # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-6k.pt"
-  - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-1k.pt"
+  - "scores_1k.pt"
 
 exclude_val:
   # - "data/Qwen3-1.7B/mmlu/nn-short-100-high-entropy-05.pt"
@@ -30,7 +30,7 @@ training:
   epochs: 256
   batch_size: 4096
   learning_rate: 5.0e-4  
-  weight_decay: 1.0e-2
+  weight_decay: 1.0e-1
   val_split: 0.15
   patience: 15  # Early stopping patience
   scheduler:
@@ -41,7 +41,7 @@ training:
 # Task-Specific Settings
 task_specific:
   classification:
-    label_type: "entropy"  # Options: "hard", "soft", "entropy", "variance"
+    label_type: "hard"  # Options: "hard", "soft", "entropy", "variance"
     soft_label_threshold: 0.01  # Threshold for binarizing soft/entropy labels
     
     # Class weighting for imbalanced datasets
@@ -51,7 +51,7 @@ task_specific:
     val_threshold: "auto"  # Threshold for validation predictions. Use "auto" for automatic optimization.
     
     # Data balancing
-    balance_data: false
+    balance_data: true
     balance_strategy: 'smote'  # Options: 'undersample', 'oversample', 'smote'
     smote_k_neighbors: 5
     
@@ -63,5 +63,5 @@ task_specific:
 # Model-Specific Settings
 model_specific:
   mlp:
-    hidden_dims: [256, 128]  # Hidden layer dimensions
-    dropout_p: 0.7          # Dropout probability 
+    hidden_dims: [256, 128]
+    dropout_p: 0.7
