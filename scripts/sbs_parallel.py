@@ -516,10 +516,6 @@ def main():
     parser.add_argument("--inference_model", type=str, default="Qwen/Qwen3-1.7B", help="Model name for both vLLM and Unsloth.")
     parser.add_argument("--activations_model", type=str, default="unsloth/Qwen3-1.7B-unsloth-bnb-4bit", help="Model name for both vLLM and Unsloth.")
     parser.add_argument("--value_head_path", type=str, default="models/value_probe.pth", help="Path to the pretrained value head state_dict.")
-
-    # --- Parallelism Arguments ---
-    parser.add_argument("--dp_size", type=int, default=1, help="Number of data parallel workers.")
-    parser.add_argument("--tp_size", type=int, default=1, help="Tensor parallel size for vLLM within each worker.")
     
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
