@@ -509,12 +509,6 @@ def main():
     parser.add_argument("--max_depth", type=int, default=100, help="Maximum search depth.")
     parser.add_argument("--temperature", type=float, default=1, help="Generation temperature.")
     parser.add_argument("--verbose", action='store_true', help="Enable verbose logging.")
-    # --- I/O Arguments ---
-    parser.add_argument("--input_file", type=str, required=True, help="Path to the input JSONL dataset.")
-    parser.add_argument("--output_dir", type=str, required=True, help="Directory to save the output results.")
-    parser.add_argument("--inference_model", type=str, default="Qwen/Qwen3-1.7B", help="Model name for both vLLM and Unsloth.")
-    parser.add_argument("--activations_model", type=str, default="unsloth/Qwen3-1.7B-unsloth-bnb-4bit", help="Model name for both vLLM and Unsloth.")
-    parser.add_argument("--value_head_path", type=str, default="models/value_probe.pth", help="Path to the pretrained value head state_dict.")
     
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
@@ -524,10 +518,10 @@ if __name__ == "__main__":
     main()
 
 '''
-CUDA_VISIBLE_DEVICES="1,2,3,4,5,6,7" vllm serve Qwen/Qwen3-1.7B \
+CUDA_VISIBLE_DEVICES="1,2" vllm serve Qwen/Qwen3-1.7B \
     --tensor-parallel-size 1 \
     --gpu-memory-utilization 0.90 \
-    --max-model-len 10000 \
+    --max-model-len 7000 \
     --dtype bfloat16 \
     --enable-prefix-caching \
     --port 8000

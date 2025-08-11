@@ -15,8 +15,7 @@ Options:
 (D) an average of 10 times, with an rms deviation of about 0.1
 
 ## Your Example Answer
-[...Explanation...] The correct answer is (B).
-"""
+[...Explanation...] The correct answer is (B)."""
 
 def get_last_step_pos(text: str, tokenizer: AutoTokenizer) -> Tuple[int, str]:
     """
