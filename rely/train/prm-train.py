@@ -1,3 +1,4 @@
+import os
 import torch
 import argparse  # ## NEW ##
 from datasets import load_dataset
@@ -9,12 +10,13 @@ from transformers import (
 )
 # from peft import LoraConfig, get_peft_model # Commented out as in original
 
-# ## MODIFIED ## - Using a class for config is good, but argparse is more flexible for this case.
+os.environ["WANDB_PROJECT"] = "value-model"
+
 class ModelConfig:
     MODEL_NAME = "Qwen/Qwen3-1.7B"
     OUTPUT_DIR = "./prm-v1"
 
-# ## MODIFIED ## - The function now accepts a 'method' argument.
+
 def preprocess_data(examples, method: str):
     """
     Transforms the raw dataset into classification examples based on the chosen method.
