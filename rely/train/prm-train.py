@@ -1,6 +1,6 @@
 import os
 import torch
-import argparse  # ## NEW ##
+import argparse
 from datasets import load_dataset
 from transformers import (
     AutoTokenizer,
@@ -81,7 +81,6 @@ def main():
     
     raw_dataset = load_dataset(args.dataset, args.dataset_subset)
 
-    # ## MODIFIED ## - Pass the method to the preprocessing function via a lambda.
     processed_train_dataset = raw_dataset['train'].map(
         lambda exs: preprocess_data(exs, method=args.method),
         batched=True,

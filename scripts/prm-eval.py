@@ -135,7 +135,7 @@ def main():
     print(f"Using device: {device}")
     
     # Load the trained model and tokenizer from checkpoint
-    model_path = "./prm-v1/checkpoint-1500"
+    model_path = "./prm-v2/checkpoint-1914"
     
     print("Loading model and tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(model_path)
