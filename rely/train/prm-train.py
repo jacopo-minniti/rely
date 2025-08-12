@@ -14,7 +14,7 @@ os.environ["WANDB_PROJECT"] = "value-model"
 
 class ModelConfig:
     MODEL_NAME = "Qwen/Qwen3-1.7B"
-    OUTPUT_DIR = "./prm-v1"
+    OUTPUT_DIR = "./prm-v2"
 
 
 def preprocess_data(examples, method: str):
@@ -41,12 +41,8 @@ def preprocess_data(examples, method: str):
                 history += step + "\n\n"
     
     elif method == 'sparse':
-        # This is the new logic for the 'sparse' dataset format.
-        # Each row is already a single, distinct training example.
         for i in range(len(examples["prompt"])):
-            # The text to classify is the CoT up to the point of completion.
-            # This represents the "state" we want to score.
-            text = examples["cut_cot"][i]
+            text = examples["prompt"][i] + examples["cut_cot"][i]
             
             # The label is the single boolean value inside the list.
             label = int(examples["labels"][i][0])
@@ -72,9 +68,9 @@ def main():
     parser = argparse.ArgumentParser(description="Train a PRM/Value Model.")
     parser.add_argument("--method", type=str, required=True, choices=['fill', 'sparse'],
                         help="The dataset processing method ('fill' or 'sparse').")
-    parser.add_argument("--dataset_path", type=str, required=True,
+    parser.add_argument("--dataset", type=str, required=True,
                         help="Path to the local training dataset folder or file.")
-    parser.add_argument("--subset", type=str, default=None,
+    parser.add_argument("--dataset_subset", type=str, default=None,
                         help="Optional subset of the dataset to use")
     args = parser.parse_args()
 
@@ -83,7 +79,7 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
-    raw_dataset = load_dataset(args.dataset_path, args.subset)
+    raw_dataset = load_dataset(args.dataset, args.dataset_subset)
 
     # ## MODIFIED ## - Pass the method to the preprocessing function via a lambda.
     processed_train_dataset = raw_dataset['train'].map(
@@ -122,7 +118,7 @@ def main():
         per_device_eval_batch_size=2,
         gradient_accumulation_steps=4,
         bf16=True,
-        warmup_steps=50,
+        warmup_steps=100,
         weight_decay=0.01,
         logging_dir="./logs",
         logging_steps=1,

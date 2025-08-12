@@ -8,6 +8,8 @@ uats_results/
 self_consistency_results/
 sbs_results/
 tests/
+prm-v1/
+prm-v2/
 
 *.pdf
 *.jsonl
