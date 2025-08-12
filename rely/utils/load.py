@@ -1,7 +1,8 @@
 import os
+import random
 import json
 import torch
-from typing import List, Dict, Any, Union, Optional
+from typing import List, Dict, Any, Union, Optional, Tuple
 from pathlib import Path
 
 
@@ -100,3 +101,22 @@ def validate_file_format(file_path: Union[str, Path]) -> bool:
     """
     file_ext = Path(file_path).suffix.lower()
     return file_ext in ['.pt', '.jsonl']
+
+
+def split_dataset(data: List[Dict[str, Any]], train_ratio: float = 0.85) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Split a dataset into training and validation sets.
+    
+    Args:
+        data: List of dictionaries representing the dataset
+        train_ratio: Proportion of data to use for training (default is 0.85)
+    
+    Returns:
+        Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]: Training and validation datasets
+    """
+    if not (0 < train_ratio < 1):   
+        raise ValueError("train_ratio must be between 0 and 1")
+    
+    random.shuffle(data)
+    split_index = int(len(data) * train_ratio)
+    return data[:split_index], data[split_index:]

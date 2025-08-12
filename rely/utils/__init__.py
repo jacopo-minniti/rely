@@ -9,7 +9,8 @@ text processing, probe management, dataset analysis, and more.
 from .load import (
     load_dataset,
     save_dataset,
-    validate_file_format
+    validate_file_format,
+    split_dataset
 )
 
 # Import from merge.py
@@ -63,6 +64,7 @@ __all__ = [
     "load_dataset",
     "save_dataset", 
     "validate_file_format",
+    "split_dataset",
     
     # Merge utilities
     "merge",
