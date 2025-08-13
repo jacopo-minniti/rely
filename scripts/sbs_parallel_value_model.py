@@ -492,7 +492,7 @@ def main():
     # SBS Config arguments
     parser.add_argument("--beam_width", type=int, default=4, help="Step-level beam width.")
     parser.add_argument("--n_samples", type=int, default=5, help="Samples to generate at each step.")
-    parser.add_argument("--max_depth", type=int, default=200, help="Maximum search depth.")
+    parser.add_argument("--max_depth", type=int, default=300, help="Maximum search depth.")
     parser.add_argument("--temperature", type=float, default=1, help="Generation temperature.")
     parser.add_argument("--verbose", action='store_true', help="Enable verbose logging.")
     
