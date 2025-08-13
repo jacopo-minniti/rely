@@ -96,11 +96,11 @@ class StepBeamSearch:
         self.inference_model_name = inference_model_name
         self.worker_rank = worker_rank
         
-        # NEW: Queues for communicating with the Value Server
+        # Queues for communicating with the Value Server
         self.value_task_queue = value_task_queue
         self.value_result_queue = value_result_queue
 
-        # NEW: OpenAI client to connect to the vLLM server
+        # OpenAI client to connect to the vLLM server
         self.client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_API_BASE)
         logger.info(f"[Rank {self.worker_rank}] Client initialized to connect to {OPENAI_API_BASE}")
         
@@ -341,17 +341,19 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
     def get_values(prompts: List[str], generated_texts: List[str]) -> List[float]:
         values = []
         for prompt, gen_text in zip(prompts, generated_texts):
-            full_text = prompt + gen_text + "\n\n"
+            full_text = prompt + gen_text # + "\n\n"
             inputs = tokenizer(
                 full_text, 
                 return_tensors="pt", 
                 truncation=True, 
-                max_length=tokenizer.model_max_length,
+                max_length=7000,
                 padding=True
             ).to(value_device)
             outputs = model(**inputs)
-            # Get the score for the positive class (index 1) as the value
-            value = outputs.logits[0, 1].item()
+            # Apply softmax to convert logits to probabilities
+            probabilities = torch.softmax(outputs.logits, dim=-1)
+            # Get the probability for the positive class (index 1) as the value
+            value = probabilities[0, 1].item()
             values.append(value)
         return values
 
