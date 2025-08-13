@@ -1,3 +1,26 @@
+"""
+Step-level Beam Search (SBS) implementation with support for two value estimation approaches:
+
+1. Value Head approach (original): Uses Unsloth model + value head for value estimation
+   - Requires internal activations from the model
+   - Uses torch.sigmoid for normalization
+   
+2. Value Model approach (new): Uses AutoModelForSequenceClassification for value estimation
+   - Direct text-to-value estimation
+   - No internal activations needed
+   - Returns normalized scores directly
+
+Usage examples:
+
+# Using value head (original approach)
+config = SBSConfig(use_value_model=False)
+sbs = StepBeamSearch("model_name", config, value_head_path="path/to/value_head.pth")
+
+# Using value model (new approach)  
+config = SBSConfig(use_value_model=True)
+sbs = StepBeamSearch("model_name", config, value_model_path="path/to/value_model")
+"""
+
 import re
 import logging
 import time
@@ -7,15 +30,8 @@ import torch.nn as nn
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from vllm import LLM, SamplingParams
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 import os
-import json
-from collections import Counter
-import json
-from collections import Counter
-import json
-from collections import Counter
-import json
-from collections import Counter
 import json
 from collections import Counter
 
@@ -54,6 +70,7 @@ class SBSConfig:
     remove_duplicate: bool = True
     verbose: bool = True
     generation_batch_size: int = 4
+    use_value_model: bool = False  # If True, use value model; if False, use value head
 
 class ValueHead(nn.Module):
     """A multi-layer perceptron for value estimation."""
@@ -101,8 +118,8 @@ class SBSNode:
         return child
 
 class StepBeamSearch:
-    """Step-level Beam Search implementation with vLLM for generation and Unsloth for value estimation."""
-    def __init__(self, model_name: str, config: SBSConfig, value_head_path: Optional[str] = None):
+    """Step-level Beam Search implementation with vLLM for generation and either value head or value model for estimation."""
+    def __init__(self, model_name: str, config: SBSConfig, value_head_path: Optional[str] = None, value_model_path: Optional[str] = None):
         self.config = config
         self.model_name = model_name
         
@@ -124,32 +141,65 @@ class StepBeamSearch:
             vllm_load_time = time.time() - vllm_load_start
             logger.info(f"vLLM model loading took {vllm_load_time:.3f}s")
         
-        # Load Unsloth model for value estimation (forward pass only)
-        logger.info(f"Loading Unsloth model for value estimation: {model_name}")
-        unsloth_load_start = time.time()
-        self.unsloth_model, self.tokenizer = FastModel.from_pretrained(
-            model_name=self.model_name,
-            max_seq_length=24_000,
-            load_in_4bit=True,
-            dtype=torch.bfloat16,
-        )
-        if self.config.verbose:
-            unsloth_load_time = time.time() - unsloth_load_start
-            logger.info(f"Unsloth model loading took {unsloth_load_time:.3f}s")
-        
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-
-        self.value_head = ValueHead(input_dim=self.unsloth_model.config.hidden_size)
-        if value_head_path:
-            logger.info(f"Loading value head from: {value_head_path}")
-            value_head_start = time.time()
-            self.value_head.load_state_dict(torch.load(value_head_path, map_location=self.unsloth_model.device))
+        if config.use_value_model:
+            # Load value model (AutoModelForSequenceClassification)
+            if not value_model_path:
+                raise ValueError("value_model_path must be provided when use_value_model=True")
+            logger.info(f"Loading value model from: {value_model_path}")
+            value_model_start = time.time()
+            self.value_model = AutoModelForSequenceClassification.from_pretrained(
+                value_model_path,
+                num_labels=2,
+                torch_dtype=torch.bfloat16,
+                device_map="auto"
+            )
+            self.value_tokenizer = AutoTokenizer.from_pretrained(value_model_path)
+            if self.value_tokenizer.pad_token is None:
+                self.value_tokenizer.pad_token = self.value_tokenizer.eos_token
+            self.value_model.eval()
             if self.config.verbose:
-                value_head_time = time.time() - value_head_start
-                logger.info(f"Value head loading took {value_head_time:.3f}s")
-        self.value_head.to(device=self.unsloth_model.device, dtype=torch.bfloat16)
-        self.value_head.eval()
+                value_model_time = time.time() - value_model_start
+                logger.info(f"Value model loading took {value_model_time:.3f}s")
+            
+            # Set placeholders for value head components
+            self.unsloth_model = None
+            self.tokenizer = None
+            self.value_head = None
+        else:
+            # Load Unsloth model for value estimation (forward pass only)
+            logger.info(f"Loading Unsloth model for value estimation: {model_name}")
+            unsloth_load_start = time.time()
+            self.unsloth_model, self.tokenizer = FastModel.from_pretrained(
+                model_name=self.model_name,
+                max_seq_length=24_000,
+                load_in_4bit=True,
+                dtype=torch.bfloat16,
+            )
+            if self.config.verbose:
+                unsloth_load_time = time.time() - unsloth_load_start
+                logger.info(f"Unsloth model loading took {unsloth_load_time:.3f}s")
+            
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+
+            self.value_head = ValueHead(input_dim=self.unsloth_model.config.hidden_size)
+            if value_head_path:
+                logger.info(f"Loading value head from: {value_head_path}")
+                value_head_start = time.time()
+                # Get device from unsloth model
+                device = next(self.unsloth_model.parameters()).device
+                self.value_head.load_state_dict(torch.load(value_head_path, map_location=device))
+                if self.config.verbose:
+                    value_head_time = time.time() - value_head_start
+                    logger.info(f"Value head loading took {value_head_time:.3f}s")
+            # Get device from unsloth model
+            device = next(self.unsloth_model.parameters()).device
+            self.value_head.to(device=device, dtype=torch.bfloat16)
+            self.value_head.eval()
+            
+            # Set placeholders for value model components
+            self.value_model = None
+            self.value_tokenizer = None
         
         self.root: Optional[SBSNode] = None
         self.active_beams: List[SBSNode] = []
@@ -185,20 +235,54 @@ class StepBeamSearch:
         return None
 
     @torch.no_grad()
-    def _get_activations_and_values(self, prompts: List[str], generated_texts: List[str]) -> List[Tuple[torch.Tensor, float]]:
-        """Get activations and values from the Unsloth model and value head."""
+    def _get_activations_and_values(self, prompts: List[str], generated_texts: List[str]) -> List[Tuple[Optional[torch.Tensor], float]]:
+        """Get activations and values using either value head or value model."""
         results = []
-        for prompt, gen_text in zip(prompts, generated_texts):
-            full_text = prompt + gen_text + "\n\n"
-            inputs = self.tokenizer(full_text, return_tensors="pt", truncation=False).to(self.unsloth_model.device)
+        
+        if self.config.use_value_model:
+            # Use value model (AutoModelForSequenceClassification)
+            assert self.value_model is not None, "Value model should be initialized when use_value_model=True"
+            assert self.value_tokenizer is not None, "Value tokenizer should be initialized when use_value_model=True"
             
-            outputs = self.unsloth_model(**inputs, output_hidden_states=True)
+            for prompt, gen_text in zip(prompts, generated_texts):
+                full_text = prompt + gen_text + "\n\n"
+                inputs = self.value_tokenizer(
+                    full_text, 
+                    return_tensors="pt", 
+                    truncation=True, 
+                    max_length=getattr(self.value_tokenizer, 'model_max_length', 512)
+                )
+                # Get device from model parameters
+                device = next(self.value_model.parameters()).device
+                inputs = inputs.to(device)
+                
+                outputs = self.value_model(**inputs)
+                # Get the score for the positive class (index 1) and convert to float
+                value = outputs.logits[0, 1].item()
+                
+                # No activation for value model approach
+                results.append((None, value))
+        else:
+            # Use value head with Unsloth model (original approach)
+            assert self.unsloth_model is not None, "Unsloth model should be initialized when use_value_model=False"
+            assert self.tokenizer is not None, "Tokenizer should be initialized when use_value_model=False"
+            assert self.value_head is not None, "Value head should be initialized when use_value_model=False"
             
-            # Get the hidden state of the last token from the second to last layer
-            activation = outputs.hidden_states[-2][0, -1, :]
-            value = torch.sigmoid(self.value_head(activation.unsqueeze(0))).item()
+            # Get device from model parameters
+            device = next(self.unsloth_model.parameters()).device
             
-            results.append((activation, value))
+            for prompt, gen_text in zip(prompts, generated_texts):
+                full_text = prompt + gen_text + "\n\n"
+                inputs = self.tokenizer(full_text, return_tensors="pt", truncation=False).to(device)
+                
+                outputs = self.unsloth_model(**inputs, output_hidden_states=True)
+                
+                # Get the hidden state of the last token from the second to last layer
+                activation = outputs.hidden_states[-2][0, -1, :]
+                value = torch.sigmoid(self.value_head(activation.unsqueeze(0))).item()
+                
+                results.append((activation, value))
+        
         return results
 
     def _generate_and_score_candidates(self, question: str) -> List[SBSNode]:

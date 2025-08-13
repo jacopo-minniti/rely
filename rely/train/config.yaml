@@ -6,10 +6,10 @@ output_file: "probe.pth"
 
 files:
   - "data/Qwen3-1.7B/mmlu/nn-long-4.pt"
-  - "data/Qwen3-1.7B/mmlu/nn-long-4-1k.pt"
+  # - "data/Qwen3-1.7B/mmlu/nn-long-4-1k.pt"
 
 exclude_val:
-  - "data/Qwen3-1.7B/mmlu/nn-long-4-1k.pt"
+  # - "data/Qwen3-1.7B/mmlu/nn-long-4-1k.pt"
 
 
 activation_field: "cut_cot_activations"  # Options: "activations", "cut_cot_activations"

@@ -32,6 +32,11 @@ from .self_consistency import (
     save_self_consistency_result
 )
 
+from .sbs import (
+    SBSConfig,
+    StepBeamSearch
+)
+
 __all__ = [
     # UATS exports
     "UATSConfig",
@@ -53,7 +58,10 @@ __all__ = [
     "SelfConsistencyResult",
     "SelfConsistencyInference",
     "run_self_consistency",
-    "save_self_consistency_result"
+    "save_self_consistency_result",
+    # SBS exports
+    "SBSConfig",
+    "StepBeamSearch"
 ]
 
 __version__ = "1.0.0" 
