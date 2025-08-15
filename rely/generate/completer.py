@@ -34,7 +34,7 @@ class Completer:
         self.config = config
 
 
-    def split_attempt(self, item: dict, cot_percentage: float = 1.0) -> str:
+    def split_attempt(self, item: dict, cot_percentage: float = 1.0, used_steps: Optional[set] = None) -> str:
         if self.config.forking_strategy == "entropy":
             return item.get("cut_cot", "")
         else:
@@ -48,7 +48,19 @@ class Completer:
             max_step = len(steps) - 1
             # Calculate the maximum step based on cot_percentage
             max_sampled_step = int(max_step * cot_percentage)
-            sampled_step = random.randint(0, max_sampled_step) if max_sampled_step > 0 else 0
+            
+            # Ensure different samples when used_steps is provided
+            if used_steps is not None:
+                available_steps = [i for i in range(max_sampled_step + 1) if i not in used_steps]
+                if not available_steps:
+                    # If all steps have been used, fall back to random selection
+                    sampled_step = random.randint(0, max_sampled_step) if max_sampled_step > 0 else 0
+                else:
+                    sampled_step = random.choice(available_steps)
+                used_steps.add(sampled_step)
+            else:
+                sampled_step = random.randint(0, max_sampled_step) if max_sampled_step > 0 else 0
+                
             cut_steps = steps[:sampled_step + 1]
 
             return "\n\n".join(cut_steps)
@@ -217,8 +229,11 @@ class Completer:
                 logging.warning(f"Skipping item on rank {global_dp_rank}: missing question")
                 continue
             
+            # Track sampled steps to ensure different samples
+            used_steps = set()
+            
             for sample_idx in range(n_items_per_cot):
-                cut_cot = self.split_attempt(item, cot_percentage)
+                cut_cot = self.split_attempt(item, cot_percentage, used_steps)
                 # You might want to check for empty cut_cot here as well.
                 
                 prompt = self.build_prompt(question, cut_cot)

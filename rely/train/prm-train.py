@@ -7,14 +7,16 @@ from transformers import (
     AutoModelForSequenceClassification,
     TrainingArguments,
     Trainer,
+    DataCollatorWithPadding
 )
-# from peft import LoraConfig, get_peft_model # Commented out as in original
+
+# accelerate launch prm-train.py --method sparse --dataset jacopo-minniti/uats-prm-nn-long-4 --dataset_subset sparse
 
 os.environ["WANDB_PROJECT"] = "value-model"
 
 class ModelConfig:
     MODEL_NAME = "Qwen/Qwen3-1.7B"
-    OUTPUT_DIR = "./prm-v2"
+    OUTPUT_DIR = "./prm-no-infiltration"
 
 
 def preprocess_data(examples, method: str):
@@ -42,8 +44,8 @@ def preprocess_data(examples, method: str):
     
     elif method == 'sparse':
         for i in range(len(examples["prompt"])):
-            text = examples["prompt"][i] + examples["cut_cot"][i]
-            
+            text = examples["prompt"][i].strip() + "\n" + examples["cut_cot"][i].strip()
+
             # The label is the single boolean value inside the list.
             label = int(examples["labels"][i][0])
             
@@ -56,9 +58,8 @@ def tokenize_function(examples, tokenizer):
     """Tokenize the text data."""
     return tokenizer(
         examples["text"],
-        padding="max_length",
         truncation=True,
-        max_length=4096, # Reduced from 5000 for better compatibility
+        max_length=8192,
     )
 
 def main():
@@ -112,28 +113,35 @@ def main():
     training_args = TrainingArguments(
         output_dir=ModelConfig.OUTPUT_DIR,
         num_train_epochs=3,
-        learning_rate=1.0e-4,
+        lr_scheduler_type="cosine",
+        learning_rate=2e-5,
         per_device_train_batch_size=2,
         per_device_eval_batch_size=2,
         gradient_accumulation_steps=4,
         bf16=True,
+        max_grad_norm=1.0,
         warmup_steps=100,
         weight_decay=0.01,
         logging_dir="./logs",
-        logging_steps=1,
+        logging_steps=10,
         eval_strategy="steps",
-        eval_steps=25,
+        eval_steps=500,
         load_best_model_at_end=True,
         report_to="wandb",
-        push_to_hub=False
+        push_to_hub=False,
+        save_strategy="steps",
+        save_steps=1500,
     )
+
+    data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
 
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=tokenized_train_dataset,
         eval_dataset=tokenized_test_dataset,
-        processing_class=tokenizer,
+        data_collator=data_collator,
+        processing_class=tokenizer
     )
 
     trainer.train()
