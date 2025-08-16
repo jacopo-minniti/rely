@@ -1,18 +1,28 @@
 """
-accelerate launch train.py \
+accelerate launch rely/train/reward-train.py \
     --model_name_or_path Qwen/Qwen3-1.7B \
     --dataset_name jacopo-minniti/nn-long-4-pairwise \
     --output_dir Qwen3-1.7B-Reward \
-    --per_device_train_batch_size 8 \
+    --per_device_train_batch_size 2 \
+    --per_device_eval_batch_size 2 \
+    --gradient_accumulation_steps 4 \
+    --lr_scheduler_type cosine \
+    --warmup_steps 100 \
+    --bf16 True \
+    --max_grad_norm 1.0 \
+    --logging_dir ./logs \
+    --save_strategy steps \
+    --save_steps 500 \
     --num_train_epochs 3 \
-    --gradient_checkpointing True \
+    --weight_decay 0.01 \
     --learning_rate 1.0e-5 \
     --eval_strategy steps \
     --eval_steps 100 \
     --logging_steps 10 \
-    --max_length 8000 \
+    --max_length 6000 \
     --push_to_hub False \
     --report_to wandb \
+
     --use_peft \
     --lora_r 64 \
     --lora_alpha 32 \
