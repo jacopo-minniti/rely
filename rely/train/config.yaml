@@ -3,22 +3,24 @@ task: "classification"  # Options: "classification", "regression"
 model_type: "mlp"       # Options: "linear", "mlp"
 output_file: "probe.pth"
 
-
-files:
-  - "data/Qwen3-1.7B/mmlu/nn-long-4.pt"
-  # - "data/Qwen3-1.7B/mmlu/nn-long-4-1k.pt"
-
-exclude_val:
-  # - "data/Qwen3-1.7B/mmlu/nn-long-4-1k.pt"
-
+# Dataset configuration
+dataset:
+  # For local datasets: provide separate train and test files
+  train_file: "data/Qwen3-1.7B/mmlu/nn-long-4.pt"
+  test_file: "data/Qwen3-1.7B/mmlu/nn-long-4-1k.pt"
+  
+  # OR for HuggingFace datasets: provide dataset name and optional subset
+  # hf_dataset: "jacopo-minniti/uats-prm-nn-long-4"
+  # subset: "fill-10"  # Optional: only for HF datasets
+  
+  # Common options
+  is_hf_dataset: false  # Set to true if using HF dataset
 
 activation_field: "cut_cot_activations"  # Options: "activations", "cut_cot_activations"
 
 preprocessing:
   percentage_dataset: 1  # 0.0-1.0
   normalize_inputs: false  # Normalize input features to zero mean, unit variance
-  remove_zeroes: false
-  zero_tolerance: 0.01
 
 # Training Hyperparameters
 training:
@@ -38,9 +40,6 @@ task_specific:
   classification:
     label_type: "hard"  # Options: "hard", "soft", "entropy", "variance"
     soft_label_threshold: 0.01  # Threshold for binarizing soft/entropy labels
-    
-    # Class weighting for imbalanced datasets
-    class_weight: "none"  # Options: "none", "balanced", "inverse", "sqrt_inverse"
     
     # Evaluation
     val_threshold: "auto"  # Threshold for validation predictions. Use "auto" for automatic optimization.

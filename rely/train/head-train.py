@@ -18,6 +18,7 @@ from collections import Counter
 from imblearn.over_sampling import SMOTE
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, List, Union, Tuple
+from rely.utils import load_dataset
 from pprint import pprint
 
 
@@ -77,36 +78,50 @@ class Trainer:
         print(f"🚀 Running task: {config['task']}")
         print(f"🧠 Using model type: {config['model_type']}")
 
-        # ---- 1. Load activations ----
-        activation_files = config['files']
-        print(f"  - Found {len(activation_files)} file(s):")
-        for f in sorted(activation_files):
-            print(f"    - {f}")
-
-        all_entries = []
-        for file_path in sorted(activation_files):
-            print(f"  - Loading {file_path}...")
+        # ---- 1. Load datasets ----
+        dataset_config = config.get('dataset', {})
+        is_hf_dataset = dataset_config.get('is_hf_dataset', False)
+        
+        if is_hf_dataset:
+            # HuggingFace dataset
+            hf_dataset = dataset_config.get('hf_dataset')
+            subset = dataset_config.get('subset', None)
+            
+            if not hf_dataset:
+                print("❌ Error: 'hf_dataset' must be specified when 'is_hf_dataset' is True.")
+                return {}
+            
+            print(f"📦 Loading HuggingFace dataset: {hf_dataset}" + (f" (subset: {subset})" if subset else ""))
+            
+            # Load train and test splits automatically
+            train_data = load_dataset(hf_dataset, subset=subset, split='train')
+            test_data = load_dataset(hf_dataset, subset=subset, split='test')
+            
+            print(f"  - Train split: {len(train_data)} samples")
+            print(f"  - Test split: {len(test_data)} samples")
+            
+        else:
+            # Local dataset files
+            train_file = dataset_config.get('train_file')
+            test_file = dataset_config.get('test_file')
+            
+            if not train_file or not test_file:
+                print("❌ Error: Both 'train_file' and 'test_file' must be specified for local datasets.")
+                return {}
+            
+            print(f"📁 Loading local datasets:")
+            print(f"  - Train file: {train_file}")
+            print(f"  - Test file: {test_file}")
+            
             try:
-                data_from_file = torch.load(file_path, weights_only=False)
-                if isinstance(data_from_file, list):
-                    # Tag each entry with its originating file so we can exclude certain files from validation
-                    for entry in data_from_file:
-                        if isinstance(entry, dict):
-                            entry = dict(entry)  # Shallow copy to avoid mutating the original object
-                            entry["__source_file__"] = file_path
-                        all_entries.append(entry)
-                else:
-                    print(f"⚠️ Warning: File {Path(file_path).name} did not contain a list. Skipping.")
+                train_data = load_dataset(train_file)
+                test_data = load_dataset(test_file)
             except Exception as e:
-                print(f"⚠️ Warning: Could not load or process {Path(file_path).name}. Error: {e}. Skipping.")
-
-        if not all_entries:
-            print("❌ Error: Dataset is empty after loading all files.")
-            return {}
-
-        # Shuffle and optional subsampling
-        print(f"🔀 Shuffling {len(all_entries)} total entries...")
-        random.shuffle(all_entries)
+                print(f"❌ Error loading local datasets: {e}")
+                return {}
+            
+            print(f"  - Train data: {len(train_data)} samples")
+            print(f"  - Test data: {len(test_data)} samples")
         
         # Get preprocessing configuration
         preprocess_cfg = config.get('preprocessing', {})
@@ -114,88 +129,69 @@ class Trainer:
         if not 0 < percentage_dataset <= 1:
             print(f"⚠️ Warning: Invalid 'percentage_dataset' value {percentage_dataset}. Using 1.0 (100%).")
             percentage_dataset = 1.0
+        
+        # Optional subsampling
         if percentage_dataset < 1.0:
-            keep_n = max(1, int(len(all_entries) * percentage_dataset))
-            print(f"📉 Using only {keep_n}/{len(all_entries)} entries (~{percentage_dataset*100:.1f}%) as requested.")
-            all_entries = all_entries[:keep_n]
-
-        dataset_list = all_entries
+            train_keep_n = max(1, int(len(train_data) * percentage_dataset))
+            test_keep_n = max(1, int(len(test_data) * percentage_dataset))
+            print(f"📉 Using only {train_keep_n}/{len(train_data)} train entries and {test_keep_n}/{len(test_data)} test entries (~{percentage_dataset*100:.1f}%) as requested.")
+            
+            # Shuffle before subsampling
+            random.shuffle(train_data)
+            random.shuffle(test_data)
+            train_data = train_data[:train_keep_n]
+            test_data = test_data[:test_keep_n]
+        else:
+            # Shuffle the data
+            print(f"🔀 Shuffling datasets...")
+            random.shuffle(train_data)
+            random.shuffle(test_data)
 
         # ---- 2. Tensor preparation ----
         # Unified activation field handling
         activation_field = config.get('activation_field', 'activations')
-        if activation_field == 'cut_cot_activations':
-            X = torch.stack([e['cut_cot_activations'] for e in dataset_list]).float()
-        else:
-            X = torch.stack([e['activations'] for e in dataset_list]).float()
         
-        # Optional normalization of input features
+        # Prepare training data
+        if activation_field == 'cut_cot_activations':
+            X_train = torch.stack([e['cut_cot_activations'] for e in train_data]).float()
+            X_val = torch.stack([e['cut_cot_activations'] for e in test_data]).float()
+        else:
+            X_train = torch.stack([e['activations'] for e in train_data]).float()
+            X_val = torch.stack([e['activations'] for e in test_data]).float()
+        
+        # Optional normalization of input features (using train data statistics)
         if preprocess_cfg.get('normalize_inputs', False):
-            mean = X.mean(dim=0, keepdim=True)
-            std = X.std(dim=0, keepdim=True) + 1e-8
-            X = (X - mean) / std
-            print("🌀 Input features normalized (zero mean, unit variance).")
-        input_dim = X.shape[1]
+            mean = X_train.mean(dim=0, keepdim=True)
+            std = X_train.std(dim=0, keepdim=True) + 1e-8
+            X_train = (X_train - mean) / std
+            X_val = (X_val - mean) / std  # Use train statistics for validation data
+            print("🌀 Input features normalized (zero mean, unit variance) using training data statistics.")
+        input_dim = X_train.shape[1]
 
         # ---- 3. Label preparation (unified) ----
         if config['task'] == 'classification':
             clf_cfg = config['task_specific']['classification']
-            y = self._prepare_classification_labels(dataset_list, clf_cfg)
-            full_dataset = TensorDataset(X, y.unsqueeze(1))
+            y_train = self._prepare_classification_labels(train_data, clf_cfg)
+            y_val = self._prepare_classification_labels(test_data, clf_cfg)
+            train_dataset = TensorDataset(X_train, y_train.unsqueeze(1))
+            val_dataset = TensorDataset(X_val, y_val.unsqueeze(1))
         else:
             reg_cfg = config['task_specific']['regression']
-            y = self._prepare_regression_labels(dataset_list, reg_cfg)
-            full_dataset = TensorDataset(X, y.unsqueeze(1))
+            y_train = self._prepare_regression_labels(train_data, reg_cfg)
+            y_val = self._prepare_regression_labels(test_data, reg_cfg)
+            train_dataset = TensorDataset(X_train, y_train.unsqueeze(1))
+            val_dataset = TensorDataset(X_val, y_val.unsqueeze(1))
 
-        # ---- 4. Train/Val split with optional file exclusion ----
-        val_ratio = config['training']['val_split']
-        raw_exclude = config.get('exclude_val', [])
-        if raw_exclude is None:
-            raw_exclude = []
-        exclude_files = set(raw_exclude)
+        print(f"✅ Prepared datasets: {len(train_dataset)} training samples, {len(val_dataset)} validation samples.")
 
-        # Separate indices based on whether their source file should be excluded from validation
-        excluded_indices = [
-            idx for idx, entry in enumerate(dataset_list)
-            if entry.get("__source_file__") and (
-                entry["__source_file__"] in exclude_files
-                or Path(entry["__source_file__"]).name in exclude_files
-            )
-        ]
-        eligible_indices = [idx for idx in range(len(dataset_list)) if idx not in excluded_indices]
-
-        val_size = int(val_ratio * len(dataset_list))
-        if val_size > len(eligible_indices):
-            print(
-                f"⚠️ Warning: Requested validation size ({val_size}) exceeds eligible samples "
-                f"({len(eligible_indices)}). Reducing val_size to {len(eligible_indices)}."
-            )
-            val_size = len(eligible_indices)
-
-        if val_size == 0:
-            print("❌ Error: Validation set size is zero. Check 'val_split' or 'exclude_val' settings.")
-            return {}
-
-        val_indices = random.sample(eligible_indices, val_size)
-        train_indices = [idx for idx in range(len(dataset_list)) if idx not in val_indices]
-
-        train_dataset = Subset(full_dataset, train_indices)
-        val_dataset = Subset(full_dataset, val_indices)
-        print(f"Split dataset into {len(train_dataset)} training and {len(val_dataset)} validation samples.")
-        
-        # ---- Save the validation set questions and answers to a .jsonl file ----
+        # ---- 4. Save the validation set questions and answers to a .jsonl file ----
         print(f"📝 Saving validation set questions and answers to a .jsonl file...")
         val_save_path = run_dir / 'validation_set.jsonl'
         with open(val_save_path, 'w') as f:
-            # `val_indices` holds the indices of the validation samples in the original `dataset_list`
-            for idx in val_indices:
-                # Get the original data dictionary from the master list
-                original_entry = dataset_list[idx]
-                
-                # Assume the question is stored under the key 'question'.
-                # If your key is different (e.g., 'prompt', 'text'), change it here.
-                question_text = original_entry.get('question', 'ERROR: QUESTION_KEY_NOT_FOUND')
-                answer_text = original_entry.get('solution', 'ERROR: QUESTION_KEY_NOT_FOUND')
+            for entry in test_data:
+                # Get question and answer from the entry
+                question_text = entry.get('question', 'ERROR: QUESTION_KEY_NOT_FOUND')
+                answer_text = entry.get('solution', 'ERROR: ANSWER_KEY_NOT_FOUND')
 
                 # Create the JSON object for this line
                 json_line = {
@@ -207,15 +203,9 @@ class Trainer:
                 f.write(json.dumps(json_line) + '\n')
         print(f"  - Validation set saved to: {val_save_path}")
 
-        # ---- 4b. Optional removal of near-zero labels from TRAINING set ----
-        if preprocess_cfg.get('remove_zeroes', False):
-            epsilon = float(preprocess_cfg.get('zero_tolerance', 0.01))  # tolerance window around 0
-            train_dataset = self._remove_zeroes(full_dataset, train_dataset, epsilon)
-            print(f"🧹 Removed samples with |label| <= {epsilon} from training set. New train size: {len(train_dataset)}")
-
         # ---- 5. Balance training set (optional) ----
         if config['task'] == 'classification' and config['task_specific']['classification'].get('balance_data', False):
-            train_dataset = self._balance_training_set(full_dataset, train_dataset, config['task_specific']['classification'])
+            train_dataset = self._balance_tensor_dataset(train_dataset, config['task_specific']['classification'])
 
         # ---- 6. Dataloaders ----
         train_loader = DataLoader(train_dataset, batch_size=config['training']['batch_size'], shuffle=True)
@@ -228,17 +218,7 @@ class Trainer:
             mlp_cfg = config['model_specific']['mlp']
             model = MLPProbe(input_dim, hidden_dims=mlp_cfg['hidden_dims'], dropout_p=mlp_cfg['dropout_p']).to(device)
 
-        # Calculate class weights for classification if specified
-        class_weights = None
-        if config['task'] == 'classification':
-            clf_cfg = config['task_specific']['classification']
-            class_weight_config = clf_cfg.get('class_weight', None)
-            if class_weight_config:
-                class_weights = self._calculate_class_weights(y, class_weight_config)
-                if class_weights is not None:
-                    class_weights = class_weights.to(device)
-        
-        criterion = nn.BCEWithLogitsLoss(pos_weight=class_weights[1] if class_weights is not None else None) if config['task'] == 'classification' else nn.MSELoss()
+        criterion = nn.BCEWithLogitsLoss() if config['task'] == 'classification' else nn.MSELoss()
         optimizer = optim.Adam(model.parameters(), lr=config['training']['learning_rate'], weight_decay=config['training'].get('weight_decay', 0))
 
         scheduler = None
@@ -254,7 +234,7 @@ class Trainer:
         # ---- 8. Early stopping ----
         checkpoint_path = run_dir / 'checkpoint.pt'
         patience = config['training'].get('patience', 10)
-        early_stopping = EarlyStopping(patience=patience, verbose=True, path=checkpoint_path)
+        early_stopping = EarlyStopping(patience=patience, verbose=True, path=str(checkpoint_path))
 
         # ---- 9. Training loop ----
         print("\n--- Starting Training ---")
@@ -342,51 +322,6 @@ class Trainer:
         
         return y
 
-    def _calculate_class_weights(self, y: torch.Tensor, class_weight_config: str) -> Optional[torch.Tensor]:
-        """Calculate class weights for imbalanced datasets.
-        
-        Args:
-            y: Tensor of labels (0s and 1s)
-            class_weight_config: String specifying the weighting strategy
-            
-        Returns:
-            Tensor of class weights [weight_for_class_0, weight_for_class_1] or None
-        """
-        if class_weight_config is None or class_weight_config == "none":
-            return None
-            
-        # Count samples per class
-        n_samples = len(y)
-        n_negative = (y == 0).sum().item()
-        n_positive = (y == 1).sum().item()
-        
-        if class_weight_config == "balanced":
-            # Balanced weights: inverse of class frequency
-            weight_negative = n_samples / (2 * n_negative) if n_negative > 0 else 1.0
-            weight_positive = n_samples / (2 * n_positive) if n_positive > 0 else 1.0
-            weights = torch.tensor([weight_negative, weight_positive], dtype=torch.float32)
-            print(f"  - Using balanced class weights: [negative={weight_negative:.3f}, positive={weight_positive:.3f}]")
-            
-        elif class_weight_config == "inverse":
-            # Inverse frequency weights
-            weight_negative = n_positive / n_negative if n_negative > 0 else 1.0
-            weight_positive = n_negative / n_positive if n_positive > 0 else 1.0
-            weights = torch.tensor([weight_negative, weight_positive], dtype=torch.float32)
-            print(f"  - Using inverse frequency weights: [negative={weight_negative:.3f}, positive={weight_positive:.3f}]")
-            
-        elif class_weight_config == "sqrt_inverse":
-            # Square root of inverse frequency weights
-            weight_negative = (n_positive / n_negative) ** 0.5 if n_negative > 0 else 1.0
-            weight_positive = (n_negative / n_positive) ** 0.5 if n_positive > 0 else 1.0
-            weights = torch.tensor([weight_negative, weight_positive], dtype=torch.float32)
-            print(f"  - Using sqrt inverse frequency weights: [negative={weight_negative:.3f}, positive={weight_positive:.3f}]")
-            
-        else:
-            print(f"⚠️ Warning: Unknown class_weight '{class_weight_config}'. Using no class weights.")
-            return None
-            
-        return weights
-
     def _balance_training_set(self, full_dataset, train_dataset, clf_cfg):
         """Balance training set using various strategies."""
         strategy = clf_cfg.get('balance_strategy', 'undersample')
@@ -451,42 +386,63 @@ class Trainer:
             print(f"⚠️ Warning: Unknown balance_strategy '{strategy}'. Using original training data.")
             return train_dataset
 
-    def _remove_zeroes(self, full_dataset, train_dataset, epsilon: float = 0.01):
-        """Remove training samples whose labels are approximately zero.
+    def _balance_tensor_dataset(self, train_dataset, clf_cfg):
+        """Balance training dataset (TensorDataset) using various strategies."""
+        strategy = clf_cfg.get('balance_strategy', 'undersample')
+        print(f"⚖️ Balancing TRAINING dataset using '{strategy}' strategy...")
 
-        Args:
-            full_dataset (TensorDataset): The complete dataset (needed to reference original indices).
-            train_dataset (Subset): Current training subset.
-            epsilon (float): Samples with |label| <= epsilon will be discarded.
+        X_train, y_train = train_dataset.tensors
+        y_train = y_train.squeeze()
 
-        Returns:
-            Subset: A new training subset without near-zero-label samples.
-        """
-        if hasattr(train_dataset, 'indices'):
-            # Standard case: `train_dataset` is a Subset produced by `random_split`
-            train_indices = train_dataset.indices
-            y_all = full_dataset.tensors[1].squeeze()
-            train_y = y_all[train_indices]
+        pos_idx = (y_train == 1).nonzero(as_tuple=True)[0]
+        neg_idx = (y_train == 0).nonzero(as_tuple=True)[0]
+        n_pos, n_neg = len(pos_idx), len(neg_idx)
 
-            keep_mask = torch.abs(train_y) > epsilon
-            if keep_mask.sum() == 0:
-                print(f"⚠️ Warning: All training samples had |label| <= {epsilon}. Keeping original training set.")
+        if strategy == 'undersample':
+            if n_pos > n_neg and n_neg > 0:
+                perm = torch.randperm(n_pos)
+                sampled_pos = pos_idx[perm[:n_neg]]
+                balanced_idx = torch.cat([sampled_pos, neg_idx])
+            elif n_neg > n_pos and n_pos > 0:
+                perm = torch.randperm(n_neg)
+                sampled_neg = neg_idx[perm[:n_pos]]
+                balanced_idx = torch.cat([pos_idx, sampled_neg])
+            else:
+                balanced_idx = torch.arange(len(y_train))
+            return TensorDataset(X_train[balanced_idx], y_train[balanced_idx].unsqueeze(1))
+
+        elif strategy == 'oversample':
+            if n_pos > n_neg and n_neg > 0:
+                majority, minority = pos_idx, neg_idx
+            elif n_neg > n_pos and n_pos > 0:
+                majority, minority = neg_idx, pos_idx
+            else:
                 return train_dataset
+            if len(minority) > 0:
+                n_to_add = len(majority) - len(minority)
+                resampled = minority[torch.randint(0, len(minority), (n_to_add,))]
+                all_idx = torch.cat([torch.arange(len(y_train)), resampled])
+            else:
+                all_idx = majority
+            return TensorDataset(X_train[all_idx], y_train[all_idx].unsqueeze(1))
 
-            kept_indices = [train_indices[i] for i in keep_mask.nonzero(as_tuple=True)[0]]
-            return Subset(full_dataset, kept_indices)
-
-        # Fallback: if `train_dataset` is already a TensorDataset (e.g., after earlier processing)
-        try:
-            X_train, y_train = train_dataset.tensors  # type: ignore
-            keep_mask = torch.abs(y_train.squeeze()) > epsilon
-            if keep_mask.sum() == 0:
-                print(f"⚠️ Warning: All training samples had |label| <= {epsilon}. Keeping original training set.")
+        elif strategy == 'smote':
+            smote_k = clf_cfg.get('smote_k_neighbors', 5)
+            if n_neg <= smote_k or n_pos <= smote_k:
+                print(f"⚠️ Warning: Minority class has {min(n_pos, n_neg)} samples, too few for SMOTE with k={smote_k}. Using original train data.")
                 return train_dataset
-            return TensorDataset(X_train[keep_mask], y_train[keep_mask])
-        except AttributeError:
-            # As a safety net, return the dataset unchanged if structure is unexpected
-            print("⚠️ Warning: Could not apply zero-removal due to unexpected dataset structure.")
+            X_np, y_np = X_train.numpy(), y_train.numpy()
+            smote = SMOTE(random_state=42, k_neighbors=smote_k)
+            resampled_data = smote.fit_resample(X_np, y_np)
+            X_resampled, y_resampled = resampled_data[0], resampled_data[1]
+            print(f"  - Original train distribution: {Counter(y_np)}")
+            print(f"  - Resampled train distribution: {Counter(y_resampled)}")
+            X_res_t = torch.from_numpy(X_resampled).float()
+            y_res_t = torch.from_numpy(y_resampled).float()
+            return TensorDataset(X_res_t, y_res_t.unsqueeze(1))
+
+        else:
+            print(f"⚠️ Warning: Unknown balance_strategy '{strategy}'. Using original training data.")
             return train_dataset
 
     def _find_optimal_threshold(self, labels, probs):

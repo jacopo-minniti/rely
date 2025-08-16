@@ -146,7 +146,7 @@ class Completer:
                 processes.append(proc)
             exit_code = 0
             for proc in processes:
-                proc.join(timeout=15000)
+                proc.join(timeout=35000)
                 if proc.exitcode is None:
                     logging.warning(f"Process {proc.pid} timed out. Killing...")
                     proc.kill()
