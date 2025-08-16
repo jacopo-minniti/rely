@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Configuration
-INPUT_FILE="completions_1k.jsonl"
+INPUT_FILE="nn-long-4-fill-10-test.jsonl"
 MODEL_NAME="unsloth/Qwen3-1.7B-unsloth-bnb-4bit"
 NUM_GPUS=8
 SESSION_NAME="extraction"

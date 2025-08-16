@@ -1,6 +1,4 @@
-import os
-import json
-import torch
+import random
 from typing import List, Dict, Any, Union
 from pathlib import Path
 from .load import load_dataset, save_dataset
@@ -40,6 +38,7 @@ def merge(input_files: List[str], output_filename: str = None) -> str:
             output_filename = f"{base_name}.jsonl"
     
     # Use centralized saving function
+    random.shuffle(merged_data)
     save_dataset(merged_data, output_filename)
     
     print(f"Successfully merged {len(input_files)} files into {output_filename}")

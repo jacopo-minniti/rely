@@ -72,9 +72,10 @@ def extract_activations(
     for line in tqdm(lines_to_process, desc=f"Extracting on {device}"):
         ex = json.loads(line)
         
-        question = ex["question"]
-        cut_cot = ex["cut_cot"]
-        prompt_base = f"<|im_start|>system\n{SYSTEM_PROMPT}<|im_end|>\n<|im_start|>user\n{question}<|im_end|>\n<|im_start|>assistant\n<think>\n{cut_cot}"
+        # question = ex["question"]
+        # cut_cot = ex["cut_cot"]
+        # prompt_base = f"<|im_start|>system\n{SYSTEM_PROMPT}<|im_end|>\n<|im_start|>user\n{question}<|im_end|>\n<|im_start|>assistant\n<think>\n{cut_cot}"
+        prompt_base = (ex["prompt"]+ex["cut_cot"]).strip()
         
         if not prompt_base.endswith("\n\n"):
             prompt_base += "\n\n"
