@@ -6,11 +6,11 @@ accelerate launch train.py \
     --per_device_train_batch_size 8 \
     --num_train_epochs 3 \
     --gradient_checkpointing True \
-    --learning_rate 1.0e-4 \
+    --learning_rate 1.0e-5 \
     --eval_strategy steps \
-    --eval_steps 50 \
-    --logging_steps 1 \
-    --max_length 5000 \
+    --eval_steps 100 \
+    --logging_steps 10 \
+    --max_length 8000 \
     --push_to_hub False \
     --report_to wandb \
     --use_peft \
@@ -78,9 +78,6 @@ if __name__ == "__main__":
 
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
-    ##########
-    # Training
-    ##########
     trainer = RewardTrainer(
         model=model,
         processing_class=tokenizer,
