@@ -44,7 +44,7 @@ def preprocess_data(examples, method: str):
     
     elif method == 'sparse':
         for i in range(len(examples["prompt"])):
-            text = examples["prompt"][i].strip() + "\n" + examples["cut_cot"][i].strip()
+            text = examples["prompt"][i].strip() + examples["cut_cot"][i].strip()
 
             # The label is the single boolean value inside the list.
             label = int(examples["labels"][i][0])
