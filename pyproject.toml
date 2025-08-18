@@ -14,3 +14,6 @@ dependencies = [
     "unsloth>=2024.8",
     "unsloth-zoo>=2025.8.1",
 ]
+
+[tool.setuptools]
+packages = ["rely"]

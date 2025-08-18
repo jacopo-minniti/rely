@@ -6,9 +6,9 @@ output_file: "probe.pth"
 # Dataset configuration
 dataset:
   # For local datasets: provide separate train and test files
-  train_file: "data/Qwen3-1.7B/mmlu/nn-long-4.pt"
-  test_file: "data/Qwen3-1.7B/mmlu/nn-long-4-1k.pt"
-  
+  train_file: "train.pt"
+  test_file: "test.pt"
+
   # OR for HuggingFace datasets: provide dataset name and optional subset
   # hf_dataset: "jacopo-minniti/uats-prm-nn-long-4"
   # subset: "fill-10"  # Optional: only for HF datasets
@@ -38,7 +38,7 @@ training:
 # Task-Specific Settings
 task_specific:
   classification:
-    label_type: "hard"  # Options: "hard", "soft", "entropy", "variance"
+    label_type: "entropy"  # Options: "hard", "soft", "entropy", "variance"
     soft_label_threshold: 0.01  # Threshold for binarizing soft/entropy labels
     
     # Evaluation
@@ -51,11 +51,11 @@ task_specific:
     
   regression:
     # Label configuration
-    label_field: "entropy"  # Field name in data
+    label_field: "soft_label"  # Field name in data
     use_transformation: false  # Apply logit transformation
 
 # Model-Specific Settings
 model_specific:
   mlp:
     hidden_dims: [256, 128]
-    dropout_p: 0.7
+    dropout_p: 0.5
