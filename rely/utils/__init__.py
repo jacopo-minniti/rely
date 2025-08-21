@@ -56,7 +56,8 @@ from .text_utils import (
     count_tokens_after_marker,
     format_system_prompt,
     ensure_think_ending,
-    MMLU_SYSTEM_PROMPT
+    MMLU_SYSTEM_PROMPT,
+    MATH_SYSTEM_PROMPT
 )
 
 __all__ = [
@@ -109,7 +110,8 @@ __all__ = [
     "count_tokens_after_marker",
     "format_system_prompt",
     "ensure_think_ending",
-    "MMLU_SYSTEM_PROMPT"
+    "MMLU_SYSTEM_PROMPT",
+    "MATH_SYSTEM_PROMPT"
 ]
 
 __version__ = "1.0.0" 

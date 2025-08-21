@@ -2,13 +2,13 @@ import logging
 import math
 from typing import List, Optional, Union
 
-import unsloth
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers.generation.stopping_criteria import StopStringCriteria
 
 from .config import UATSConfig, Branch
 from .probes import MLPProbe
+from .value_model import UATSValueModel
 from rely.utils.text_utils import (
     count_tokens_after_marker,
     format_system_prompt,
@@ -37,29 +37,29 @@ class GuidedTreeSearch:
 
         return branches
 
-        
-
     def __init__(
         self,
         model: AutoModelForCausalLM,
         tokenizer: AutoTokenizer,
         uncertainty_probe: MLPProbe,
-        value_probe: MLPProbe,
+        value_model: UATSValueModel,
         config: UATSConfig,
+        question: str = "",  # Store question for value model calls
     ):
         self.model = model
         self.tokenizer = tokenizer
         self.uncertainty_probe = uncertainty_probe
-        self.value_probe = value_probe
+        self.value_model = value_model
         self.config = config
+        self.question = question  # Store question for value estimation
         self.device = next(model.parameters()).device
 
-    def _value_probe(
+    def _value_model_score(
         self,
         text: Optional[str] = None,
         ids: Optional[torch.Tensor] = None,
     ) -> tuple[float, torch.Tensor]:
-        """Get value score for a given text or a pre-tokenised tensor.
+        """Get value score for a given text using the autoregressive value model.
 
         Passing ``ids`` avoids the costly re-tokenisation of the full prompt at
         every step.  Exactly one of ``text`` or ``ids`` must be provided.
@@ -67,35 +67,46 @@ class GuidedTreeSearch:
 
         if ids is None:
             if text is None:
-                raise ValueError("Either `text` or `ids` must be provided to _value_probe")
+                raise ValueError("Either `text` or `ids` must be provided to _value_model_score")
 
-            # Ensure the text ends with the step delimiter so that the probe
-            # attends to the completion token.
+            # Ensure the text ends with the step delimiter so that we have clean step boundaries
             if not text.endswith("\n\n"):
                 text = text + "\n\n"
-
+            
+            # Tokenize for returning ids
             inputs = self.tokenizer(text, return_tensors="pt")  # type: ignore[call-arg]
             ids_tensor = inputs.input_ids.to(self.device)
-            attention_mask = inputs.attention_mask.to(self.device)
+            
+            # Extract the reasoning part after the prompt for value model evaluation
+            reasoning_text = self._extract_reasoning_from_full_text(text)
         else:
-            # ``ids`` already contains the full prompt – just create an
-            # attention mask of ones.
+            # Decode the ids to get the full text, then extract reasoning
             ids_tensor = ids if ids.dim() == 2 else ids.unsqueeze(0)
             ids_tensor = ids_tensor.to(self.device)
-            attention_mask = torch.ones_like(ids_tensor, dtype=torch.long)
+            full_text = self.tokenizer.decode(ids_tensor[0], skip_special_tokens=True)
+            reasoning_text = self._extract_reasoning_from_full_text(full_text)
 
-        with torch.no_grad():
-            outputs = self.model(  # type: ignore[attr-defined]
-                ids_tensor,
-                attention_mask=attention_mask,
-                output_hidden_states=True,
-            )
-            hidden_states = outputs.hidden_states[-2]
-            probe_hidden_state = hidden_states[:, -1:, :].squeeze(1)
-            value_logits = self.value_probe(probe_hidden_state)
-            value_score = torch.sigmoid(value_logits).item()
+        # Get value score from the value model
+        value_score = self.value_model.get_value(self.question, reasoning_text)
 
         return value_score, ids_tensor.cpu()
+    
+    def _extract_reasoning_from_full_text(self, full_text: str) -> str:
+        """Extract only the reasoning part from the full prompt text."""
+        # Look for the assistant's response start marker
+        if "<|im_start|>assistant\n" in full_text:
+            reasoning_part = full_text.split("<|im_start|>assistant\n", 1)[1]
+            # Remove any trailing end markers
+            reasoning_part = reasoning_part.replace("<|im_end|>", "").strip()
+            return reasoning_part
+        
+        # Fallback: look for the \\think marker
+        if "\\think" in full_text:
+            reasoning_part = full_text.split("\\think", 1)[1]
+            return reasoning_part.strip()
+        
+        # Last fallback: return the whole text
+        return full_text
 
     def _generate_step(
         self, ids: torch.Tensor
@@ -203,6 +214,9 @@ class GuidedTreeSearch:
         Returns:
             List of all branches explored during search
         """
+        # Store the question for value model calls
+        self.question = user_question
+        
         prompt = format_system_prompt(system_prompt, user_question)
 
         # ------------------------------------------------------------------
@@ -225,7 +239,7 @@ class GuidedTreeSearch:
         first_node_text = prompt + first_step_text
         total_tokens = count_tokens_after_marker(first_node_text, self.tokenizer)
 
-        value_score, _ = self._value_probe(ids=first_ids)
+        value_score, _ = self._value_model_score(ids=first_ids)
 
         # Normalise by sequence length to mitigate length bias.
         norm_score = value_score / max(total_tokens, 1)
@@ -289,7 +303,7 @@ class GuidedTreeSearch:
                     new_text = branch.text + step_text
                     total_tokens = count_tokens_after_marker(new_text, self.tokenizer)
 
-                    value_score, _ = self._value_probe(ids=new_ids)
+                    value_score, _ = self._value_model_score(ids=new_ids)
 
                     norm_score = value_score / max(total_tokens, 1)
 

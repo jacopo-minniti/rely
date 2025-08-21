@@ -1,36 +1,32 @@
 """
-Step-level Beam Search (SBS) implementation with support for two value estimation approaches:
+Step-level Beam Search (SBS) implementation using Qwen2.5-Math-PRM for value estimation.
 
-1. Value Head approach (original): Uses Unsloth model + value head for value estimation
-   - Requires internal activations from the model
-   - Uses torch.sigmoid for normalization
-   
-2. Value Model approach (new): Uses AutoModelForSequenceClassification for value estimation
-   - Direct text-to-value estimation
-   - No internal activations needed
-   - Returns normalized scores directly
+Uses Process Reward Model (PRM) for step-wise value estimation:
+- Direct text-to-step-rewards estimation using Process Reward Model
+- Automatically inserts <extra_0> tokens between reasoning steps
+- Supports multiple value scoring methods:
+  * "product": Product of step rewards (default) - penalizes paths with any weak steps
+  * "minimum": Minimum step reward - focuses on the single weakest link
+  * "average": Average of step rewards - balanced approach considering all steps equally
+  * "last_step": Only the last step reward - for comparing new generations
+- Returns normalized step rewards between 0 and 1
+- Expects final answers in \boxed{} format for optimal PRM alignment
 
-Usage examples:
-
-# Using value head (original approach)
-config = SBSConfig(use_value_model=False)
-sbs = StepBeamSearch("model_name", config, value_head_path="path/to/value_head.pth")
-
-# Using value model (new approach)  
-config = SBSConfig(use_value_model=True)
-sbs = StepBeamSearch("model_name", config, value_model_path="path/to/value_model")
+Usage example:
+config = SBSConfig(value_scoring_method="average")  # or "product", "minimum", "last_step"
+sbs = StepBeamSearch("generation_model_name", config, value_model_path="Qwen/Qwen2.5-Math-PRM-7B")
 """
 
 import re
 import logging
 import time
-from unsloth import FastModel
 import torch
-import torch.nn as nn
+import math
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from vllm import LLM, SamplingParams
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoTokenizer, AutoModel
+import torch.nn.functional as F
 import os
 import json
 from collections import Counter
@@ -43,53 +39,113 @@ torch._dynamo.config.suppress_errors = True
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """The following are multiple choice questions (with answers) about science. Think step by step and then finish your answer with 'The correct answer is (X)' where X is the correct letter choice.
+SYSTEM_PROMPT = """The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer."""
 
-EXAMPLE
 
-Question: The quantum efficiency of a photon detector is 0.1. If 100 photons are sent into the detector, one after the other, the detector will detect photons
-Options:
-(A) an average of 10 times, with an rms deviation of about 4
-(B) an average of 10 times, with an rms deviation of about 3
-(C) an average of 10 times, with an rms deviation of about 1
-(D) an average of 10 times, with an rms deviation of about 0.1
+def normalize_answer(answer: str) -> str:
+    """
+    Normalize an answer for comparison by:
+    - Converting to lowercase
+    - Removing all whitespace (spaces, tabs, newlines)
+    - Removing common punctuation that doesn't affect mathematical meaning
+    - Handling special cases like fractions, decimals, etc.
+    """
+    if not answer or answer == "?":
+        return answer
+    
+    # Convert to string and lowercase
+    normalized = str(answer).lower()
+    
+    # Remove all whitespace
+    normalized = re.sub(r'\s+', '', normalized)
+    
+    # Remove common punctuation that doesn't affect meaning
+    # Keep mathematical operators and decimal points
+    normalized = re.sub(r'[,;:()[\]{}"]', '', normalized)
+    
+    # Handle common mathematical expressions
+    # Convert fractions like "1/2" to consistent format
+    normalized = re.sub(r'(\d+)/(\d+)', r'\1/\2', normalized)
+    
+    # Remove trailing zeros after decimal point
+    if '.' in normalized:
+        normalized = normalized.rstrip('0').rstrip('.')
+    
+    return normalized
 
-## Your Example Answer
-[...Explanation...] The correct answer is (B).
-"""
+
+def extract_final_answer(text: str) -> Optional[str]:
+    """
+    Finds the last \\boxed{} in a string and extracts its content,
+    correctly handling nested braces.
+    """
+    # 1. Find the starting position of the last \boxed{
+    start_marker = r'\boxed{'
+    last_box_start_pos = text.rfind(start_marker)
+
+    # If \boxed{ is not found, return None
+    if last_box_start_pos == -1:
+        return None
+
+    # 2. The actual content starts right after the marker
+    content_start_pos = last_box_start_pos + len(start_marker)
+
+    # 3. Use a counter (brace_level) to find the matching closing brace
+    brace_level = 1
+    for i in range(content_start_pos, len(text)):
+        char = text[i]
+        if char == '{':
+            brace_level += 1
+        elif char == '}':
+            brace_level -= 1
+
+        # 4. When the brace level is 0, we've found the matching brace
+        if brace_level == 0:
+            # The content is the substring between the start and this point
+            return text[content_start_pos:i]
+
+    # If the loop finishes, it means a matching closing brace was not found
+    return None
+
+
+def make_step_rewards(logits, token_masks):
+    """Extract step-wise rewards from PRM model outputs."""
+    
+    probabilities = F.softmax(logits, dim=-1)
+    probabilities = probabilities * token_masks.unsqueeze(-1) # bs, seq_len, num_labels
+    
+    all_scores_res = []
+    for i in range(probabilities.size(0)):
+        sample = probabilities[i] # seq_len, num_labels
+        # Find non-zero elements (where tokens match <extra_0>)
+        non_zero_mask = sample.sum(dim=-1) != 0
+        if non_zero_mask.any():
+            valid_probs = sample[non_zero_mask] # valid_tokens, num_labels
+            if valid_probs.size(1) >= 2:
+                # Extract positive class probabilities (index 1)
+                positive_probs = valid_probs[:, 1]
+                non_zero_elements_list = positive_probs.cpu().tolist()
+            else:
+                # Fallback if unexpected dimensions
+                non_zero_elements_list = valid_probs.flatten().cpu().tolist()
+        else:
+            # No valid tokens found
+            non_zero_elements_list = []
+        all_scores_res.append(non_zero_elements_list)
+    return all_scores_res
 
 @dataclass
 class SBSConfig:
-    """Configuration for Step-level Beam Search"""
+    """Configuration for Step-level Beam Search with PRM"""
     step_beam_width: int = 3
     n_generate_sample: int = 5
     max_depth: int = 10
     temperature: float = 0.6
     max_tokens: int = 512
-    need_value_func: bool = True
     remove_duplicate: bool = True
     verbose: bool = True
     generation_batch_size: int = 4
-    use_value_model: bool = False  # If True, use value model; if False, use value head
-
-class ValueHead(nn.Module):
-    """A multi-layer perceptron for value estimation."""
-    def __init__(self, input_dim, hidden_dims=[256, 128], dropout_p=0.3):
-        super(ValueHead, self).__init__()
-        layers = []
-        current_dim = input_dim
-        for h_dim in hidden_dims:
-            layers.append(nn.Linear(current_dim, h_dim))
-            layers.append(nn.BatchNorm1d(h_dim))
-            layers.append(nn.ReLU())
-            layers.append(nn.Dropout(dropout_p))
-            current_dim = h_dim
-        self.hidden_layers = nn.Sequential(*layers)
-        self.output_layer = nn.Linear(current_dim, 1)
-
-    def forward(self, x):
-        x = self.hidden_layers(x)
-        return self.output_layer(x)
+    value_scoring_method: str = "product"  # "product", "minimum", "average", or "last_step"
 
 class SBSNode:
     """Node in the Step-level Beam Search tree"""
@@ -118,88 +174,54 @@ class SBSNode:
         return child
 
 class StepBeamSearch:
-    """Step-level Beam Search implementation with vLLM for generation and either value head or value model for estimation."""
-    def __init__(self, model_name: str, config: SBSConfig, value_head_path: Optional[str] = None, value_model_path: Optional[str] = None):
+    """Step-level Beam Search implementation with vLLM for generation and PRM for value estimation."""
+    def __init__(self, model_name: str, config: SBSConfig, value_model_path: str):
         self.config = config
         self.model_name = model_name
         
+        # Validate scoring method
+        valid_methods = ["product", "minimum", "average", "last_step"]
+        if config.value_scoring_method not in valid_methods:
+            raise ValueError(f"Invalid value_scoring_method '{config.value_scoring_method}'. Must be one of: {valid_methods}")
+        
+        # solve cache issues with torch dynamo
         import torch._dynamo
         torch._dynamo.config.cache_size_limit = 256
         torch._dynamo.config.suppress_errors = True
         
-        # Load vLLM model for generation
-        logger.info(f"Loading vLLM model: {model_name}")
+        logger.info(f"Loading vLLM model: {model_name} on GPU 0")
         vllm_load_start = time.time()
         self.vllm_model = LLM(
-            model="Qwen/Qwen3-1.7B", 
-            max_model_len=24_000,
-            dtype=torch.bfloat16,
+            model=self.model_name, 
+            max_model_len=8_000,
+            dtype="bfloat16",
             gpu_memory_utilization=0.9,
-            enable_prefix_caching=True
+            enable_prefix_caching=True,
+            tensor_parallel_size=1,
+            distributed_executor_backend="mp"
         )
         if self.config.verbose:
             vllm_load_time = time.time() - vllm_load_start
             logger.info(f"vLLM model loading took {vllm_load_time:.3f}s")
         
-        if config.use_value_model:
-            # Load value model (AutoModelForSequenceClassification)
-            if not value_model_path:
-                raise ValueError("value_model_path must be provided when use_value_model=True")
-            logger.info(f"Loading value model from: {value_model_path}")
-            value_model_start = time.time()
-            self.value_model = AutoModelForSequenceClassification.from_pretrained(
-                value_model_path,
-                num_labels=2,
-                torch_dtype=torch.bfloat16,
-                device_map="auto"
-            )
-            self.value_tokenizer = AutoTokenizer.from_pretrained(value_model_path)
-            if self.value_tokenizer.pad_token is None:
-                self.value_tokenizer.pad_token = self.value_tokenizer.eos_token
-            self.value_model.eval()
-            if self.config.verbose:
-                value_model_time = time.time() - value_model_start
-                logger.info(f"Value model loading took {value_model_time:.3f}s")
-            
-            # Set placeholders for value head components
-            self.unsloth_model = None
-            self.tokenizer = None
-            self.value_head = None
-        else:
-            # Load Unsloth model for value estimation (forward pass only)
-            logger.info(f"Loading Unsloth model for value estimation: {model_name}")
-            unsloth_load_start = time.time()
-            self.unsloth_model, self.tokenizer = FastModel.from_pretrained(
-                model_name=self.model_name,
-                max_seq_length=24_000,
-                load_in_4bit=True,
-                dtype=torch.bfloat16,
-            )
-            if self.config.verbose:
-                unsloth_load_time = time.time() - unsloth_load_start
-                logger.info(f"Unsloth model loading took {unsloth_load_time:.3f}s")
-            
-            if self.tokenizer.pad_token is None:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
-
-            self.value_head = ValueHead(input_dim=self.unsloth_model.config.hidden_size)
-            if value_head_path:
-                logger.info(f"Loading value head from: {value_head_path}")
-                value_head_start = time.time()
-                # Get device from unsloth model
-                device = next(self.unsloth_model.parameters()).device
-                self.value_head.load_state_dict(torch.load(value_head_path, map_location=device))
-                if self.config.verbose:
-                    value_head_time = time.time() - value_head_start
-                    logger.info(f"Value head loading took {value_head_time:.3f}s")
-            # Get device from unsloth model
-            device = next(self.unsloth_model.parameters()).device
-            self.value_head.to(device=device, dtype=torch.bfloat16)
-            self.value_head.eval()
-            
-            # Set placeholders for value model components
-            self.value_model = None
-            self.value_tokenizer = None
+        # Load PRM value model on GPU 1
+        logger.info(f"Loading PRM value model from: {value_model_path} on GPU 1")
+        value_model_start = time.time()
+        self.value_model = AutoModel.from_pretrained(
+            value_model_path,
+            torch_dtype=torch.bfloat16,
+            device_map={"": 1},  # Force model to GPU 1
+            trust_remote_code=True,
+            # use_cache=False  # Disable cache to avoid compatibility issues
+        )
+        self.value_tokenizer = AutoTokenizer.from_pretrained(value_model_path, trust_remote_code=True)
+        if self.value_tokenizer.pad_token is None:
+            self.value_tokenizer.pad_token = self.value_tokenizer.eos_token
+        self.value_model.eval()
+        if self.config.verbose:
+            value_model_time = time.time() - value_model_start
+            logger.info(f"PRM value model loading took {value_model_time:.3f}s")
+            logger.info(f"Using value scoring method: {self.config.value_scoring_method}")
         
         self.root: Optional[SBSNode] = None
         self.active_beams: List[SBSNode] = []
@@ -221,67 +243,111 @@ class StepBeamSearch:
         return prompt
 
     def _extract_final_answer(self, text: str) -> Optional[str]:
-        """Extract a final answer letter from text. Accept several phrasings."""
-        patterns = [
-            r'The correct answer is \(([A-J])\)',
-            r'The answer is \(([A-J])\)',
-            r'So the answer is \(([A-J])\)',
-            r'Answer: \(([A-J])\)',
-        ]
-        for p in patterns:
-            m = re.search(p, text, re.IGNORECASE)
-            if m:
-                return m.group(1).upper()
-        return None
+        """Extract a final answer from text, capturing everything inside \\boxed{}."""
+        return extract_final_answer(text)
 
     @torch.no_grad()
-    def _get_activations_and_values(self, prompts: List[str], generated_texts: List[str]) -> List[Tuple[Optional[torch.Tensor], float]]:
-        """Get activations and values using either value head or value model."""
+    def _get_activations_and_values(self, prompts: List[str], full_reasoning_paths: List[str]) -> List[Tuple[Optional[torch.Tensor], float]]:
+        """Get values using PRM value model.
+        
+        Args:
+            prompts: The original prompts used for generation
+            full_reasoning_paths: Complete reasoning chains (parent path + new generation)
+        """
         results = []
         
-        if self.config.use_value_model:
-            # Use value model (AutoModelForSequenceClassification)
-            assert self.value_model is not None, "Value model should be initialized when use_value_model=True"
-            assert self.value_tokenizer is not None, "Value tokenizer should be initialized when use_value_model=True"
+        for prompt, full_reasoning_text in zip(prompts, full_reasoning_paths):
+            # Prepare the text with <extra_0> tokens between steps
+            # Split by double newlines and join with <extra_0>
+            steps = full_reasoning_text.split('\n\n')
+            # Filter out empty steps
+            steps = [step.strip() for step in steps if step.strip()]
+            if not steps:
+                # If no steps, just use the original text
+                formatted_text = full_reasoning_text.strip() + "<extra_0>"
+            else:
+                formatted_text = "<extra_0>".join(steps) + "<extra_0>"
             
-            for prompt, gen_text in zip(prompts, generated_texts):
-                full_text = prompt + gen_text + "\n\n"
-                inputs = self.value_tokenizer(
-                    full_text, 
-                    return_tensors="pt", 
-                    truncation=True, 
-                    max_length=getattr(self.value_tokenizer, 'model_max_length', 512)
+            # Extract question from the prompt - it's after the user role in the template
+            question_match = re.search(r'<\|im_start\|>user\n(.+?) \\think<\|im_end\|>', prompt, re.DOTALL)
+            if question_match:
+                question_text = question_match.group(1).strip()
+            else:
+                # Fallback - use a generic question
+                question_text = "Please solve this step by step."
+            
+            # Create messages in the format expected by the PRM
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": question_text},
+                {"role": "assistant", "content": formatted_text}
+            ]
+            
+            # Apply chat template
+            conversation_str = self.value_tokenizer.apply_chat_template(
+                messages, 
+                tokenize=False, 
+                add_generation_prompt=False
+            )
+            
+            # Tokenize and move to GPU 1 (where the value model is)
+            input_ids = self.value_tokenizer.encode(
+                conversation_str, 
+                return_tensors="pt", 
+                truncation=True,
+                max_length=8_000
+            ).to("cuda:1") 
+            
+            # Get model outputs
+            try:
+                outputs = self.value_model(
+                    input_ids=input_ids,
+                    use_cache=False,
+                    return_dict=True
                 )
-                # Get device from model parameters
-                device = next(self.value_model.parameters()).device
-                inputs = inputs.to(device)
-                
-                outputs = self.value_model(**inputs)
-                # Get the score for the positive class (index 1) and convert to float
-                value = outputs.logits[0, 1].item()
-                
-                # No activation for value model approach
-                results.append((None, value))
-        else:
-            # Use value head with Unsloth model (original approach)
-            assert self.unsloth_model is not None, "Unsloth model should be initialized when use_value_model=False"
-            assert self.tokenizer is not None, "Tokenizer should be initialized when use_value_model=False"
-            assert self.value_head is not None, "Value head should be initialized when use_value_model=False"
+            except (AttributeError, TypeError) as e:
+                # Fallback for compatibility issues
+                logger.warning(f"Cache issue encountered: {e}. Trying without cache.")
+                outputs = self.value_model(input_ids=input_ids)
             
-            # Get device from model parameters
-            device = next(self.unsloth_model.parameters()).device
+            # Extract step rewards
+            step_sep_tokens = self.value_tokenizer.encode("<extra_0>", add_special_tokens=False)
+            if step_sep_tokens:
+                step_sep_id = step_sep_tokens[0]
+            else:
+                # Fallback if token not found
+                step_sep_id = self.value_tokenizer.encode("<extra_0>")[0]
+            token_masks = (input_ids == step_sep_id)
+            step_rewards = make_step_rewards(outputs[0], token_masks)
             
-            for prompt, gen_text in zip(prompts, generated_texts):
-                full_text = prompt + gen_text + "\n\n"
-                inputs = self.tokenizer(full_text, return_tensors="pt", truncation=False).to(device)
+            # Calculate value based on the configured scoring method
+            if step_rewards and step_rewards[0]:
+                # Adding small epsilon to avoid exact zeros that would make entire product zero
+                epsilon = 1e-8
+                safe_rewards = [max(r, epsilon) for r in step_rewards[0]]
                 
-                outputs = self.unsloth_model(**inputs, output_hidden_states=True)
-                
-                # Get the hidden state of the last token from the second to last layer
-                activation = outputs.hidden_states[-2][0, -1, :]
-                value = torch.sigmoid(self.value_head(activation.unsqueeze(0))).item()
-                
-                results.append((activation, value))
+                if self.config.value_scoring_method == "product":
+                    # Use product of all step rewards - penalizes paths with weak steps
+                    value = math.prod(safe_rewards)
+                elif self.config.value_scoring_method == "minimum":
+                    # Use minimum step reward - focuses on the weakest link
+                    value = min(safe_rewards)
+                elif self.config.value_scoring_method == "average":
+                    # Use average of all step rewards - balanced approach
+                    value = sum(safe_rewards) / len(safe_rewards)
+                elif self.config.value_scoring_method == "last_step":
+                    # Use only the last step reward - for comparing new generations
+                    value = safe_rewards[-1]
+                else:
+                    # Fallback to product if invalid method specified
+                    logger.warning(f"Invalid value_scoring_method '{self.config.value_scoring_method}', using 'product'")
+                    value = math.prod(safe_rewards)
+            else:
+                # Fallback value if no rewards found - use low score rather than neutral
+                value = 0.1
+            
+            # No activation for PRM approach
+            results.append((None, value))
         
         return results
 
@@ -309,8 +375,12 @@ class StepBeamSearch:
             
             generated_texts = [gen.text for gen in output.outputs]
             
+            # Create full reasoning paths (parent's full text + new generated text)
+            # The PRM needs to see the entire reasoning chain, not just the new step
+            full_reasoning_paths = [parent_node.full_text + gen.text for gen in output.outputs]
+            
             # Get activations and values in a single pass
-            activations_and_values = self._get_activations_and_values([parent_prompt] * len(generated_texts), generated_texts)
+            activations_and_values = self._get_activations_and_values([parent_prompt] * len(generated_texts), full_reasoning_paths)
 
             for j, gen_text in enumerate(generated_texts):
                 activation, value = activations_and_values[j]
@@ -318,6 +388,8 @@ class StepBeamSearch:
                 snippet = gen_text.rstrip() + '\n\n'
                 child_node = parent_node.add_child(snippet)
                 child_node.activation = activation
+                # IMPORTANT: The value was computed on the full reasoning path (parent + new step)
+                # This ensures the PRM saw the complete context when scoring this step
                 child_node.value = value
 
                 # Answer / terminal detection (no dependency on </think>)
@@ -380,7 +452,7 @@ class StepBeamSearch:
 
         accuracy = "N/A"
         if ground_truth and answers:
-            correct_answers = sum(1 for ans in answers if ans.strip().upper() == ground_truth.strip().upper())
+            correct_answers = sum(1 for ans in answers if ans.strip().lower() == ground_truth.strip().lower())
             accuracy = f"{correct_answers / len(answers):.2%}" if answers else "0.00%"
 
         summary = {

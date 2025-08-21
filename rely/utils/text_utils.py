@@ -3,6 +3,9 @@ import torch
 from transformers import AutoTokenizer
 
 # Default system prompt for MMLU-Pro style questions
+MATH_SYSTEM_PROMPT = """The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer."""
+
+
 MMLU_SYSTEM_PROMPT = """The following are multiple choice questions (with answers) about science. Think step by step and then finish your answer with 'The correct answer is (X)' where X is the correct letter choice.
 
 EXAMPLE

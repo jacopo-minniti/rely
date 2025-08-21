@@ -21,9 +21,10 @@ def main():
     parser.add_argument('--end_idx', type=int, default=None, help='Ending question index (exclusive)')
     parser.add_argument('--dataset_name', type=str, default="TIGER-Lab/MMLU-Pro", help='Dataset name')
     parser.add_argument('--split', type=str, default="validation", help='Dataset split')
-    parser.add_argument('--model_name', type=str, default="unsloth/Qwen3-1.7B-unsloth-bnb-4bit", help='Model name')
+    parser.add_argument('--model_name', type=str, default="Qwen/Qwen2.5-1.5B-Instruct", help='Model name')
     parser.add_argument('--uncertainty_probe_path', type=str, default="models/c_uncertainty_probe.pth", help='Path to uncertainty probe')
-    parser.add_argument('--value_probe_path', type=str, default="models/value_probe.pth", help='Path to value probe')
+    parser.add_argument('--value_model_path', type=str, default="Qwen/Qwen2.5-Math-PRM-7B", help='HuggingFace path to value model')
+    parser.add_argument('--value_scoring_method', type=str, default="product", choices=["product", "minimum", "average", "last_step"], help='Value scoring method')
     parser.add_argument('--budget', type=int, default=4000, help='Token budget')
     parser.add_argument('--max_step_tokens', type=int, default=512, help='Max tokens per step')
     parser.add_argument('--beam_width', type=int, default=4, help='Beam width')
@@ -66,7 +67,8 @@ def main():
             config=UATSConfig(
                 model_name=args.model_name,
                 uncertainty_probe_path=args.uncertainty_probe_path,
-                value_probe_path=args.value_probe_path,
+                value_model_path=args.value_model_path,
+                value_scoring_method=args.value_scoring_method,
                 budget=args.budget,
                 uncertainty_threshold=0.5,
                 max_step_tokens=args.max_step_tokens,

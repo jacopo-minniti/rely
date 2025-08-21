@@ -6,12 +6,20 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Union
 
-from unsloth import FastLanguageModel
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from .config import UATSConfig, Branch
 from .guided_tree_search import GuidedTreeSearch
 from .probes import load_probes
-from rely.utils.text_utils import MMLU_SYSTEM_PROMPT
+from .value_model import UATSValueModel
+from rely.utils.text_utils import MMLU_SYSTEM_PROMPT, MATH_SYSTEM_PROMPT
+import random
+import re
+from datetime import datetime
+from pathlib import Path
+from typing import List, Optional, Union
+
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 logger = logging.getLogger(__name__)
 
@@ -20,25 +28,90 @@ logger = logging.getLogger(__name__)
 # Small helpers / utilities
 # -----------------------------------------------------------------------------
 
-def extract_final_answer(branch_text: str, final_answer_text: str) -> str:
-    """Extract the final answer string (e.g. "(A)") from the concatenated texts."""
+# def extract_final_answer(branch_text: str, final_answer_text: str) -> str:
+#     """Extract the final answer string (e.g. "(A)") from the concatenated texts."""
 
-    full_text = branch_text + final_answer_text
+#     full_text = branch_text + final_answer_text
 
-    # Look for patterns like "(A)", "(B)", "(C)", "(D)" in the final answer section
-    if "## Final Answer" in full_text:
-        final_answer_section = full_text.split("## Final Answer")[-1].strip()
-    else:
-        final_answer_section = full_text
+#     # Look for patterns like "(A)", "(B)", "(C)", "(D)" in the final answer section
+#     if "## Final Answer" in full_text:
+#         final_answer_section = full_text.split("## Final Answer")[-1].strip()
+#     else:
+#         final_answer_section = full_text
 
-    letter_pattern = r"\([A-Z]\)"
-    matches = re.findall(letter_pattern, final_answer_section)
+#     letter_pattern = r"\([A-Z]\)"
+#     matches = re.findall(letter_pattern, final_answer_section)
 
-    if matches:
-        # Return the last match (most recent formatting)
-        return matches[-1].replace("(", "").replace(")", "")
+#     if matches:
+#         # Return the last match (most recent formatting)
+#         return matches[-1].replace("(", "").replace(")", "")
 
-    return final_answer_section.strip()
+#     return final_answer_section.strip()
+
+def normalize_answer(answer: str) -> str:
+    """
+    Normalize an answer for comparison by:
+    - Converting to lowercase
+    - Removing all whitespace (spaces, tabs, newlines)
+    - Removing common punctuation that doesn't affect mathematical meaning
+    - Handling special cases like fractions, decimals, etc.
+    """
+    if not answer or answer == "?":
+        return answer
+    
+    # Convert to string and lowercase
+    normalized = str(answer).lower()
+    
+    # Remove all whitespace
+    normalized = re.sub(r'\s+', '', normalized)
+    
+    # Remove common punctuation that doesn't affect meaning
+    # Keep mathematical operators and decimal points
+    normalized = re.sub(r'[,;:()[\]{}"]', '', normalized)
+    
+    # Handle common mathematical expressions
+    # Convert fractions like "1/2" to consistent format
+    normalized = re.sub(r'(\d+)/(\d+)', r'\1/\2', normalized)
+    
+    # Remove trailing zeros after decimal point
+    if '.' in normalized:
+        normalized = normalized.rstrip('0').rstrip('.')
+    
+    return normalized
+
+
+def extract_final_answer(text: str) -> Optional[str]:
+    """
+    Finds the last \\boxed{} in a string and extracts its content,
+    correctly handling nested braces.
+    """
+    # 1. Find the starting position of the last \boxed{
+    start_marker = r'\boxed{'
+    last_box_start_pos = text.rfind(start_marker)
+
+    # If \boxed{ is not found, return None
+    if last_box_start_pos == -1:
+        return None
+
+    # 2. The actual content starts right after the marker
+    content_start_pos = last_box_start_pos + len(start_marker)
+
+    # 3. Use a counter (brace_level) to find the matching closing brace
+    brace_level = 1
+    for i in range(content_start_pos, len(text)):
+        char = text[i]
+        if char == '{':
+            brace_level += 1
+        elif char == '}':
+            brace_level -= 1
+
+        # 4. When the brace level is 0, we've found the matching brace
+        if brace_level == 0:
+            # The content is the substring between the start and this point
+            return text[content_start_pos:i]
+
+    # If the loop finishes, it means a matching closing brace was not found
+    return None
 
 
 # -----------------------------------------------------------------------------
@@ -51,15 +124,45 @@ def load_model_and_tokenizer(
     dtype: str = "bfloat16",
     load_in_4bit: bool = True,
 ):
-    """Load an Unsloth model and its tokenizer ready for inference."""
+    """Load a standard transformers model and its tokenizer ready for inference."""
 
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=model_name,
-        max_seq_length=max_seq_length,
-        dtype=dtype,
-        load_in_4bit=load_in_4bit,
+    import torch
+    from transformers import BitsAndBytesConfig
+    
+    # Set up quantization config if needed
+    quantization_config = None
+    # if load_in_4bit:
+    #     quantization_config = BitsAndBytesConfig(
+    #         load_in_4bit=True,
+    #         bnb_4bit_quant_type="nf4",
+    #         bnb_4bit_compute_dtype=torch.bfloat16 if dtype == "bfloat16" else torch.float16,
+    #         bnb_4bit_use_double_quant=True,
+    #     )
+    
+    # Load model
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype=torch.bfloat16 if dtype == "bfloat16" else torch.float16,
+        quantization_config=quantization_config,
+        device_map="auto",
+        trust_remote_code=True,
+        max_position_embeddings=max_seq_length if hasattr(AutoModelForCausalLM, 'config') else None,
     )
-    FastLanguageModel.for_inference(model)  # Enable native 2× faster inference
+    
+    # Load tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        trust_remote_code=True,
+        max_length=max_seq_length,
+    )
+    
+    # Set pad token if not available
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    
+    # Set model to eval mode
+    model.eval()
+    
     return model, tokenizer
 
 
@@ -75,18 +178,19 @@ def create_uats_searcher(config: UATSConfig) -> GuidedTreeSearch:
         model.dtype if hasattr(model, "dtype") else next(model.parameters()).dtype
     )
 
+    # Load uncertainty probe
     logger.info(
-        f"Loading probes (hidden_size={hidden_size}, dtype={model_dtype}, device={config.probe_device})"
+        f"Loading uncertainty probe (hidden_size={hidden_size}, dtype={model_dtype}, device={config.probe_device})"
     )
     try:
-        uncertainty_probe, value_probe = load_probes(
+        uncertainty_probe, _ = load_probes(
             hidden_size=hidden_size,
             model_dtype=model_dtype,
             uncertainty_probe_path=config.uncertainty_probe_path,
-            value_probe_path=config.value_probe_path,
+            value_probe_path=None,  # We don't need the value probe anymore
             device=config.probe_device,
         )
-        logger.info("Probes loaded successfully")
+        logger.info("Uncertainty probe loaded successfully")
     except FileNotFoundError as e:
         logger.error(f"Probe file not found: {e}")
         raise
@@ -94,11 +198,24 @@ def create_uats_searcher(config: UATSConfig) -> GuidedTreeSearch:
         logger.error(f"Failed to load probe: {e}")
         raise
 
+    # Load value model
+    logger.info(f"Loading value model: {config.value_model_path}")
+    try:
+        value_model = UATSValueModel(
+            model_path=config.value_model_path,
+            device=config.value_device,
+            scoring_method=config.value_scoring_method
+        )
+        logger.info("Value model loaded successfully")
+    except Exception as e:
+        logger.error(f"Failed to load value model: {e}")
+        raise
+
     return GuidedTreeSearch(
         model=model,
         tokenizer=tokenizer,
         uncertainty_probe=uncertainty_probe,
-        value_probe=value_probe,
+        value_model=value_model,
         config=config,
     )
 
@@ -173,7 +290,7 @@ def save_branches(
             extracted_answer = extract_final_answer(branch.text, branch.final_answer)
             all_answers.append(extracted_answer)
             # Check if this answer is correct
-            if correct_answer and extracted_answer.strip().upper() == correct_answer.strip().upper():
+            if correct_answer and normalize_answer(extracted_answer) == normalize_answer(correct_answer):
                 correct_count += 1
 
         summary_data["branches"].append(
@@ -211,7 +328,7 @@ def save_branches(
 
 def run_uats(
     user_question: str,
-    system_prompt: str = MMLU_SYSTEM_PROMPT,
+    system_prompt: str = MATH_SYSTEM_PROMPT,
     config: Optional[UATSConfig] = None,
     save_dir: Optional[Union[str, Path]] = "uats_results",
     correct_answer: Optional[str] = None,

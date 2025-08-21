@@ -4,23 +4,92 @@ import json
 import logging
 import re
 from pathlib import Path
-from datetime import datetime
 
 from vllm import LLM, SamplingParams, RequestOutput
 
-from rely.utils.text_utils import (
-    format_system_prompt,
-    ensure_think_ending,
-    MMLU_SYSTEM_PROMPT,
-)
+# Import helpers from sbs.py
+from rely.utils import MATH_SYSTEM_PROMPT
 
-def ensure_think_ending(text: str) -> str:
-    end_tag = "</think>"
-    if text.rstrip().endswith(end_tag):
-        return text
-    return text.rstrip() + f"\n{end_tag}\n"
 
 logger = logging.getLogger(__name__)
+
+
+def create_prompt(question: str, partial_solution: str = "", system_prompt: str = MATH_SYSTEM_PROMPT) -> str:
+    """Create a formatted prompt using the chat template format from sbs.py."""
+    prompt = f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{question}<|im_end|>\n<|im_start|>assistant\n{partial_solution}"
+    return prompt
+
+
+def normalize_answer(answer: str) -> str:
+    """
+    Normalize an answer for comparison by:
+    - Converting to lowercase
+    - Removing all whitespace (spaces, tabs, newlines)
+    - Removing common punctuation that doesn't affect mathematical meaning
+    - Handling special cases like fractions, decimals, etc.
+    """
+    if not answer or answer == "?":
+        return answer
+    
+    # Convert to string and lowercase
+    normalized = str(answer).lower()
+    
+    # Remove all whitespace
+    normalized = re.sub(r'\s+', '', normalized)
+    
+    # Remove common punctuation that doesn't affect meaning
+    # Keep mathematical operators and decimal points
+    normalized = re.sub(r'[,;:()[\]{}"]', '', normalized)
+    
+    # Handle common mathematical expressions
+    # Convert fractions like "1/2" to consistent format
+    normalized = re.sub(r'(\d+)/(\d+)', r'\1/\2', normalized)
+    
+    # Remove trailing zeros after decimal point
+    if '.' in normalized:
+        normalized = normalized.rstrip('0').rstrip('.')
+    
+    return normalized
+
+
+def extract_final_answer(text: str) -> Optional[str]:
+    """
+    Finds the last \\boxed{} in a string and extracts its content,
+    correctly handling nested braces.
+    """
+    # 1. Find the starting position of the last \boxed{
+    start_marker = r'\boxed{'
+    last_box_start_pos = text.rfind(start_marker)
+
+    # If \boxed{ is not found, return None
+    if last_box_start_pos == -1:
+        return None
+
+    # 2. The actual content starts right after the marker
+    content_start_pos = last_box_start_pos + len(start_marker)
+
+    # 3. Use a counter (brace_level) to find the matching closing brace
+    brace_level = 1
+    for i in range(content_start_pos, len(text)):
+        char = text[i]
+        if char == '{':
+            brace_level += 1
+        elif char == '}':
+            brace_level -= 1
+
+        # 4. When the brace level is 0, we've found the matching brace
+        if brace_level == 0:
+            # The content is the substring between the start and this point
+            return text[content_start_pos:i]
+
+    # If the loop finishes, it means a matching closing brace was not found
+    return None
+
+
+
+def format_prompt(system_prompt: str, user_question: str) -> str:
+    """Format a prompt with system and user messages."""
+    return create_prompt(user_question, "", system_prompt)
 
 
 @dataclass
@@ -29,11 +98,8 @@ class SelfConsistencyConfig:
     model_name: str = "Qwen/Qwen2-7B-Instruct"
     num_samples: int = 20
     max_new_tokens: int = 500
-    follow_up_tokens: int = 64
     temperature: float = 1.0
     top_p: float = 0.95
-    end_think_token: str = "</think>"
-    answer_pattern: str = r"\(([A-Z])\)"
     tensor_parallel_size: int = 1
     gpu_memory_utilization: float = 0.9
 
@@ -43,19 +109,10 @@ class SelfConsistencyResult:
     """Holds results from self-consistency inference."""
     answers: List[str]
     generated_texts: List[str]
-    # MODIFICATION: Added field to store token counts for each generation
-    generated_tokens: List[int]
     distribution: Dict[str, int]
     most_consistent_answer: Optional[str]
     config: SelfConsistencyConfig
 
-
-@dataclass
-class BatchSelfConsistencyResult:
-    """Holds results from batch self-consistency inference."""
-    results: List[SelfConsistencyResult]
-    questions: List[str]
-    config: SelfConsistencyConfig
 
 
 class SelfConsistencyInference:
@@ -80,9 +137,8 @@ class SelfConsistencyInference:
             logger.error(f"Failed to load model: {e}")
             raise
 
-    # MODIFICATION: Updated to return both text and token count
-    def _generate(self, prompt: str, max_tokens: int, n: int = 1) -> List[tuple[str, int]]:
-        """Generate text from the model. Returns a list of (text, token_count) tuples."""
+    def _generate(self, prompt: str, max_tokens: int, n: int = 1) -> List[str]:
+        """Generate text from the model."""
         if self.llm is None:
             raise ValueError("LLM not initialized")
 
@@ -94,102 +150,59 @@ class SelfConsistencyInference:
         )
         outputs = self.llm.generate([prompt], sampling_params)
         
-        # Capture both the generated text and the number of tokens
-        generated_with_tokens = [
-            (output.text, len(output.token_ids)) 
-            for output in outputs[0].outputs
-        ]
-        return generated_with_tokens
+        return [output.text for output in outputs[0].outputs]
 
-    # MODIFICATION: Updated to return both text and token count
-    def _generate_batch(self, prompts: List[str], max_tokens: int) -> List[tuple[str, int]]:
-        """Generate text for a batch of *different* prompts."""
-        if self.llm is None:
-            raise ValueError("LLM not initialized")
-
-        sampling_params = SamplingParams(
-            temperature=self.config.temperature,
-            top_p=self.config.top_p,
-            max_tokens=max_tokens,
-        )
-        outputs = self.llm.generate(prompts, sampling_params)
-        # Capture text and token count for each prompt in the batch
-        return [
-            (output.outputs[0].text, len(output.outputs[0].token_ids))
-            for output in outputs
-        ]
-
-    def _extract_answer(self, text: str) -> Optional[str]:
-        matches = list(re.finditer(self.config.answer_pattern, text))
-        if not matches:
-            return None
-        return matches[-1].group(1)
-
-
-    def _get_consistent_samples(self, system_prompt: str, user_question: str) -> List[tuple[str, str, int]]:
+    def _get_consistent_samples(self, system_prompt: str, user_question: str) -> List[tuple[str, str]]:
         """
-        Generates N samples and efficiently handles follow-ups.
+        Generates N samples with single generation only.
 
         Returns:
-            A list of tuples: (answer, full_generated_text, total_token_count).
+            A list of tuples: (answer, full_generated_text).
         """
-        base_prompt = format_system_prompt(system_prompt, user_question)
+        base_prompt = format_prompt(system_prompt, user_question)
 
-        # 1. Generate all N samples; this now returns (text, token_count) tuples
-        initial_samples = self._generate(base_prompt, self.config.max_new_tokens, n=self.config.num_samples)
+        # Generate all N samples
+        generated_texts = self._generate(base_prompt, self.config.max_new_tokens, n=self.config.num_samples)
 
-        complete_results = []
-        # Store (prompt, initial_token_count) for follow-up
-        follow_up_queue = []
-
-        # 2. Partition samples
-        for generated_text, token_count in initial_samples:
+        results = []
+        for generated_text in generated_texts:
             full_text = base_prompt + generated_text
-            if self.config.end_think_token in generated_text:
-                answer = self._extract_answer(full_text)
-                # Store answer, text, and the initial token count
-                complete_results.append((answer or "?", full_text, token_count))
-            else:
-                follow_up_prompt = ensure_think_ending(full_text)
-                # Queue the prompt and its token count so far
-                follow_up_queue.append((follow_up_prompt, token_count))
+            answer = extract_final_answer(full_text)
+            results.append(("?" if answer is None else answer, full_text))
 
-        # 3. Process the follow-up batch
-        if follow_up_queue:
-            follow_up_prompts = [item[0] for item in follow_up_queue]
-            logger.debug(f"Issuing a batch follow-up for {len(follow_up_prompts)} incomplete samples...")
-            
-            # This returns (completion_text, follow_up_token_count)
-            follow_up_completions = self._generate_batch(follow_up_prompts, self.config.follow_up_tokens)
+        return results
 
-            for (original_prompt, initial_tokens), (completion, follow_up_tokens) in zip(follow_up_queue, follow_up_completions):
-                final_text = original_prompt + completion
-                answer = self._extract_answer(final_text)
-                # Sum the tokens from both generation steps
-                total_tokens = initial_tokens + follow_up_tokens
-                complete_results.append((answer or "?", final_text, total_tokens))
-
-        return complete_results
-
-    # MODIFICATION: Updated to unpack token counts and add to the result object
     def run_inference(self, system_prompt: str, user_question: str) -> SelfConsistencyResult:
         """Run self-consistency for a single question and return aggregated results."""
         logger.info(f"Running self-consistency for '{user_question[:50]}...' with {self.config.num_samples} samples...")
         
-        # `results` now contains (answer, text, token_count)
+        # `results` now contains (answer, text)
         results = self._get_consistent_samples(system_prompt, user_question)
 
         # Unpack the results into separate lists
         answers = [res[0] for res in results]
         generated_texts = [res[1] for res in results]
-        token_counts = [res[2] for res in results] # <-- Extract token counts
 
-        for i, (answer, tokens) in enumerate(zip(answers, token_counts)):
-            logger.debug(f"Sample {i + 1}/{self.config.num_samples} ⇒ {answer} ({tokens} tokens)")
+        for i, answer in enumerate(answers):
+            logger.debug(f"Sample {i + 1}/{self.config.num_samples} ⇒ {answer}")
 
-        distribution: Dict[str, int] = {}
+        # Create distribution based on normalized answers for better grouping
+        normalized_distribution: Dict[str, List[str]] = {}
         for ans in answers:
-            distribution[ans] = distribution.get(ans, 0) + 1
+            normalized_ans = normalize_answer(str(ans))
+            if normalized_ans not in normalized_distribution:
+                normalized_distribution[normalized_ans] = []
+            normalized_distribution[normalized_ans].append(ans)
+
+        # Create final distribution with counts and select most frequent original answer for each group
+        distribution: Dict[str, int] = {}
+        for normalized_ans, original_answers in normalized_distribution.items():
+            # For the distribution, use the most common original form of this normalized answer
+            original_counts = {}
+            for orig_ans in original_answers:
+                original_counts[orig_ans] = original_counts.get(orig_ans, 0) + 1
+            most_common_original = max(original_counts.items(), key=lambda kv: kv[1])[0]
+            distribution[most_common_original] = len(original_answers)
 
         most_consistent: Optional[str] = None
         if distribution:
@@ -198,113 +211,103 @@ class SelfConsistencyInference:
         return SelfConsistencyResult(
             answers=answers,
             generated_texts=generated_texts,
-            generated_tokens=token_counts, # <-- Pass token counts to the result object
             distribution=distribution,
             most_consistent_answer=most_consistent,
             config=self.config,
         )
 
-    def run_batch_inference(self, system_prompt: str, user_questions: List[str]) -> BatchSelfConsistencyResult:
-        logger.info(f"Running batch self-consistency for {len(user_questions)} questions with {self.config.num_samples} samples each...")
-        all_results = []
-        for i, user_question in enumerate(user_questions):
-            logger.info(f"Processing question {i + 1}/{len(user_questions)}: {user_question[:50]}...")
-            question_result = self.run_inference(system_prompt, user_question)
-            all_results.append(question_result)
 
-        return BatchSelfConsistencyResult(
-            results=all_results,
-            questions=user_questions,
-            config=self.config,
-        )
-
-# MODIFICATION: Updated to save token counts in both individual files and the summary
 def save_self_consistency_result(
     result: SelfConsistencyResult,
     system_prompt: str,
     user_question: str,
     output_path: Union[str, Path],
-    correct_answer: Optional[str] = None,
+    correct_answer: Optional[Union[str, List[str]]] = None,
 ) -> None:
     """Persist results to disk for later inspection."""
     output_path = Path(output_path)
-    run_dir = output_path
-    run_dir.mkdir(parents=True, exist_ok=True)
+    output_path.mkdir(parents=True, exist_ok=True)
 
-    # Save individual generation files with token counts
-    for i, (answer, text, tokens) in enumerate(zip(result.answers, result.generated_texts, result.generated_tokens)):
-        with open(run_dir / f"generation_{i}.txt", "w") as f:
-            f.write(f"# System Prompt\n{system_prompt}\n\n")
-            f.write(f"# Question\n{user_question}\n\n")
-            f.write(f"# Generated Text\n{text}\n\n")
-            f.write(f"# Extracted Answer\n{answer}\n\n")
-            f.write(f"# Generated Tokens\n{tokens}\n") # <-- Added token count
+    # Save individual generation files - name them beam_01.txt, beam_02.txt, etc.
+    for i, (answer, text) in enumerate(zip(result.answers, result.generated_texts), 1):
+        with open(output_path / f"beam_{i:02d}.txt", "w") as f:
+            f.write(text)
     
-    # Prepare and save summary file
-    summary_data = {
-        "model": result.config.model_name,
-        "num_samples": result.config.num_samples,
-        "temperature": result.config.temperature,
-        "top_p": result.config.top_p,
-        "most_consistent_answer": result.most_consistent_answer,
-        "answer_distribution": {
-            ans: {
-                "count": count,
-                "percentage": round((count / len(result.answers)) * 100, 2)
-            } for ans, count in sorted(result.distribution.items(), key=lambda item: item[1], reverse=True)
-        },
-        # MODIFICATION: Replaced `all_answers` with a more detailed structure
-        "generations": [
-            {"answer": ans, "tokens": tok}
-            for ans, tok in zip(result.answers, result.generated_tokens)
-        ],
-    }
-    
-    if correct_answer is not None:
-        correct_count = sum(1 for ans in result.answers if ans.strip().upper() == correct_answer.strip().upper())
-        summary_data["evaluation"] = {
-            "correct_answer": correct_answer,
-            "is_most_consistent_correct": result.most_consistent_answer == correct_answer,
-            "correct_count": correct_count,
-            "accuracy": round(correct_count / len(result.answers), 4)
-        }
+    # Calculate accuracy
+    accuracy = 0.0
+    correct_answer_str = ""
+    if correct_answer:
+        # Handle the case where correct_answer might be a list or string
+        if isinstance(correct_answer, list):
+            correct_answer_str = str(correct_answer[0]) if correct_answer else ""
+        else:
+            correct_answer_str = str(correct_answer)
         
-    with open(run_dir / "summary.json", "w") as f:
+        # Normalize the correct answer for comparison
+        normalized_correct = normalize_answer(correct_answer_str)
+        
+        # Count matches using normalized comparison
+        correct_count = sum(1 for ans in result.answers 
+                          if normalize_answer(str(ans)) == normalized_correct)
+        accuracy = correct_count / len(result.answers) if result.answers else 0.0
+    
+    # Prepare and save summary file in the new format
+    summary_data = {
+        "question": user_question,
+        "ground_truth": correct_answer_str if correct_answer else "",
+        "majority_vote": result.most_consistent_answer or "",
+        "accuracy": f"{accuracy:.2%}",
+        "solutions": [
+            {
+                "beam_index": i + 1,
+                "value": 1.0,  # Placeholder value since we don't have actual beam scores
+                "final_answer": answer,
+                "depth": 1,  # Placeholder depth since we don't have step counting
+                "termination_reason": "answer_found" if answer != "?" else "max_tokens",
+                "solution_path": text.split("<|im_start|>assistant\n")[-1] if "<|im_start|>assistant\n" in text else text
+            }
+            for i, (answer, text) in enumerate(zip(result.answers, result.generated_texts))
+        ]
+    }
+        
+    with open(output_path / "summary.json", "w") as f:
         json.dump(summary_data, f, indent=2)
 
-    logger.info(f"Saved self-consistency results to {run_dir}")
+    logger.info(f"Saved self-consistency results to {output_path}")
 
 
 def run_self_consistency(
-    system_prompt: str,
     user_question: Union[str, List[str]],
     config: Optional[SelfConsistencyConfig] = None,
     save_path: Optional[Union[str, Path]] = None,
     correct_answer: Optional[Union[str, List[str]]] = None,
-) -> Union[SelfConsistencyResult, BatchSelfConsistencyResult]:
+    system_prompt: str = MATH_SYSTEM_PROMPT,
+) -> Union[SelfConsistencyResult, List[SelfConsistencyResult]]:
     if config is None:
         config = SelfConsistencyConfig()
     inference = SelfConsistencyInference(config)
 
-    is_batch = isinstance(user_question, list)
-    questions = user_question if is_batch else [user_question]
-    
-    answers = None
-    if correct_answer:
-        answers = correct_answer if isinstance(correct_answer, list) else [correct_answer]
-        if len(answers) != len(questions):
-            raise ValueError("Number of correct answers must match the number of questions.")
-
-    if not is_batch:
-        result = inference.run_inference(system_prompt, questions[0])
+    # Handle single question case
+    if isinstance(user_question, str):
+        result = inference.run_inference(system_prompt, user_question)
         if save_path:
-            save_self_consistency_result(result, system_prompt, questions[0], save_path, answers[0] if answers else None)
+            save_self_consistency_result(result, system_prompt, user_question, save_path, correct_answer)
         return result
-    else:
-        batch_result = inference.run_batch_inference(system_prompt, questions)
+    
+    # Handle list of questions case
+    results = []
+    questions = user_question
+    answers = correct_answer if isinstance(correct_answer, list) else [correct_answer] * len(questions)
+    
+    for i, (question, answer) in enumerate(zip(questions, answers)):
+        logger.info(f"Processing question {i+1}/{len(questions)}")
+        result = inference.run_inference(system_prompt, question)
+        
         if save_path:
-            run_dir = Path(save_path) / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            for i, (res, q) in enumerate(zip(batch_result.results, batch_result.questions)):
-                question_save_path = run_dir / f"question_{i}"
-                save_self_consistency_result(res, system_prompt, q, question_save_path, answers[i] if answers else None)
-        return batch_result
+            # Create individual directory for each question
+            question_save_path = Path(save_path) / f"question_{i}"
+            save_self_consistency_result(result, system_prompt, question, question_save_path, answer)
+        
+        results.append(result)
+    
+    return results

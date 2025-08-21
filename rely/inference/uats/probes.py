@@ -1,4 +1,3 @@
-import unsloth
 import torch
 import torch.nn as nn
 import numpy as np
@@ -9,7 +8,7 @@ from pathlib import Path
 class MLPProbe(nn.Module):
     """A more advanced MLP probe with configurable depth, width, dropout, and batch norm."""
 
-    def __init__(self, input_dim, hidden_dims=[512, 128], dropout_p=0.3):
+    def __init__(self, input_dim, hidden_dims=[256, 128], dropout_p=0.3):
         super(MLPProbe, self).__init__()
 
         layers = []
@@ -37,7 +36,7 @@ def load_probes(
     uncertainty_probe_path: Optional[str] = None,
     value_probe_path: Optional[str] = None,
     device: str = "cuda",
-) -> Tuple[nn.Module, nn.Module]:
+) -> Tuple[nn.Module, Optional[nn.Module]]:
     """
     Load uncertainty and value probes from saved checkpoints.
 
@@ -45,24 +44,20 @@ def load_probes(
         hidden_size: Hidden size of the model
         model_dtype: Data type of the model
         uncertainty_probe_path: Path to uncertainty probe checkpoint
-        value_probe_path: Path to value probe checkpoint
+        value_probe_path: Path to value probe checkpoint (can be None)
         device: Device to load probes on
 
     Returns:
-        Tuple of (uncertainty_probe, value_probe)
+        Tuple of (uncertainty_probe, value_probe). value_probe can be None.
 
     Raises:
-        FileNotFoundError: If either probe file is not found
+        FileNotFoundError: If uncertainty probe file is not found
         RuntimeError: If probe loading fails
     """
 
     # Check if uncertainty probe path exists
     if not uncertainty_probe_path or not Path(uncertainty_probe_path).exists():
         raise FileNotFoundError(f"Uncertainty probe file not found: {uncertainty_probe_path}")
-
-    # Check if value probe path exists
-    if not value_probe_path or not Path(value_probe_path).exists():
-        raise FileNotFoundError(f"Value probe file not found: {value_probe_path}")
 
     uncertainty_probe = None
     try:
@@ -76,15 +71,20 @@ def load_probes(
 
     uncertainty_probe.eval()
 
+    # Load value probe only if path is provided
     value_probe = None
-    try:
-        value_probe = MLPProbe(hidden_size, hidden_dims=[256, 128]).to(device).to(model_dtype)
-        value_probe.load_state_dict(torch.load(value_probe_path, map_location=device))
-        print(f"Successfully loaded value probe as MLPProbe from {value_probe_path}")
-    except Exception as e:
-        raise RuntimeError(f"Failed to load value probe from {value_probe_path}: {e}")
-
-    value_probe.eval()
+    if value_probe_path:
+        # Check if value probe path exists
+        if not Path(value_probe_path).exists():
+            raise FileNotFoundError(f"Value probe file not found: {value_probe_path}")
+        
+        try:
+            value_probe = MLPProbe(hidden_size, hidden_dims=[256, 128]).to(device).to(model_dtype)
+            value_probe.load_state_dict(torch.load(value_probe_path, map_location=device))
+            print(f"Successfully loaded value probe as MLPProbe from {value_probe_path}")
+            value_probe.eval()
+        except Exception as e:
+            raise RuntimeError(f"Failed to load value probe from {value_probe_path}: {e}")
 
     return uncertainty_probe, value_probe
 

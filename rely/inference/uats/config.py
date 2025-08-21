@@ -7,15 +7,17 @@ import torch
 class UATSConfig:
     """Configuration for UATS inference."""
 
-    model_name: str = "unsloth/Qwen3-1.7B-unsloth-bnb-4"
+    model_name: str = "Qwen/Qwen2.5-1.5B-Instruct"
     uncertainty_probe_path: Optional[str] = None
-    value_probe_path: Optional[str] = None
+    value_model_path: str = "Qwen/Qwen2.5-Math-PRM-7B"  # HF model with classification head
+    value_scoring_method: str = "product"  # "product", "minimum", "average", or "last_step"
     beam_width: int = 3
     budget: int = 1024 
     uncertainty_threshold: Union[float, None] = 0.8
     max_step_tokens: int = 256
     device: str = "auto"
     probe_device: str = "cuda"
+    value_device: str = "cuda:1"  # Separate device for value model
     temperature: float = 1.0
     top_p: float = 0.95 
 
