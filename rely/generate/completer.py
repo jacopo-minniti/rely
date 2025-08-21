@@ -34,6 +34,27 @@ class Completer:
         self.config = config
 
 
+    def _format_prompt_with_completion_type(self, question: str, cut_cot: str) -> str:
+        """
+        Format the prompt based on completion_type.
+        
+        Args:
+            question: The question text to format.
+            cut_cot: The partial chain of thought to include.
+            
+        Returns:
+            A formatted prompt string.
+        """
+        if self.config.completion_type == "short":
+            # For short completion, add forcing text to make the model provide a final answer
+            forcing_text = "\n\nI reasoned enough, the user wants a final answer.\n## Final Answer\n\\boxed{"
+            modified_cot = cut_cot + forcing_text
+            return format_prompt(question, system_prompt=self.config.system_prompt, cot=modified_cot)
+        else:
+            # For long completion (default behavior), use the original format
+            return format_prompt(question, system_prompt=self.config.system_prompt, cot=cut_cot)
+
+
     def _get_num_steps(self, item: dict) -> int:
         """Get the number of steps in the CoT for an item."""
         if self.config.forking_strategy == "entropy":
@@ -213,6 +234,7 @@ class Completer:
             logging.warning(f"DP rank {global_dp_rank} has no items to process. Exiting worker.")
             return
         logging.info(f"DP rank {global_dp_rank} preparing {len(data_chunk)} items.")
+        logging.info(f"DP rank {global_dp_rank} using completion_type: {self.config.completion_type}")
 
         prompts_to_process = []
         source_indices = []
@@ -226,7 +248,7 @@ class Completer:
             # Handle entropy strategy which doesn't have multiple steps
             if self.config.forking_strategy == "entropy":
                 cut_cot = item.get("cut_cot", "")
-                prompt = format_prompt(question, cot=cut_cot)
+                prompt = self._format_prompt_with_completion_type(question, cut_cot)
                 prompts_to_process.append(prompt)
                 source_indices.append({
                     "item_idx": item_idx,
@@ -251,7 +273,7 @@ class Completer:
             # Create a prompt for each step prefix
             for step_index in range(max_step_to_sample + 1):
                 cut_cot = "\n\n".join(steps[:step_index + 1])
-                prompt = format_prompt(question, cot=cut_cot)
+                prompt = self._format_prompt_with_completion_type(question, cut_cot)
                 prompts_to_process.append(prompt)
                 
                 source_indices.append({
@@ -273,9 +295,16 @@ class Completer:
         )
 
         logging.info(f"DP rank {global_dp_rank} starting generation for {len(prompts_to_process)} prompts...")
+        
+        # Adjust max_tokens based on completion_type
+        adjusted_max_tokens = max_new_tokens
+        if self.config.completion_type == "short":
+            # For short completions, we expect much shorter outputs (just the final answer)
+            adjusted_max_tokens = min(50, max_new_tokens)
+        
         sampling_params = SamplingParams(
             temperature=temperature,
-            max_tokens=max_new_tokens,
+            max_tokens=adjusted_max_tokens,
             n=n_completions_per_item,
         )
 
