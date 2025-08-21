@@ -56,6 +56,7 @@ from .text_utils import (
     count_tokens_after_marker,
     format_prompt,
     extract_final_answer,
+    normalize_answer,
     ensure_think_ending,
     MMLU_SYSTEM_PROMPT,
     MATH_SYSTEM_PROMPT
@@ -112,7 +113,9 @@ __all__ = [
     "format_prompt",
     "ensure_think_ending",
     "MMLU_SYSTEM_PROMPT",
-    "MATH_SYSTEM_PROMPT"
+    "MATH_SYSTEM_PROMPT",
+    "extract_final_answer",
+    "normalize_answer"
 ]
 
 __version__ = "1.0.0" 

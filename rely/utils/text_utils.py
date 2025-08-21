@@ -1,3 +1,4 @@
+import re
 from typing import Tuple, Optional
 import torch
 from transformers import AutoTokenizer
@@ -109,3 +110,35 @@ def extract_final_answer(text: str) -> Optional[str]:
 
     # 2. The actual content starts right after the marker
     content_start_pos = last_box_start_pos + len(start_marker)
+
+
+def normalize_answer(answer: str) -> str:
+    """
+    Normalize an answer for comparison by:
+    - Converting to lowercase
+    - Removing all whitespace (spaces, tabs, newlines)
+    - Removing common punctuation that doesn't affect mathematical meaning
+    - Handling special cases like fractions, decimals, etc.
+    """
+    if not answer or answer == "?":
+        return answer
+    
+    # Convert to string and lowercase
+    normalized = str(answer).lower()
+    
+    # Remove all whitespace
+    normalized = re.sub(r'\s+', '', normalized)
+    
+    # Remove common punctuation that doesn't affect meaning
+    # Keep mathematical operators and decimal points
+    normalized = re.sub(r'[,;:()[\]{}"]', '', normalized)
+    
+    # Handle common mathematical expressions
+    # Convert fractions like "1/2" to consistent format
+    normalized = re.sub(r'(\d+)/(\d+)', r'\1/\2', normalized)
+    
+    # Remove trailing zeros after decimal point
+    if '.' in normalized:
+        normalized = normalized.rstrip('0').rstrip('.')
+    
+    return normalized

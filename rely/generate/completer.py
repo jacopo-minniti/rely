@@ -122,7 +122,7 @@ class Completer:
         node_rank = 0
         master_addr = "127.0.0.1"
         master_port = 13345
-        gpu_memory_utilization = 0.9
+        gpu_memory_utilization = 0.8
         tp_size = self.config.tp_size
         dp_size = self.config.dp_size
         max_num_seqs = self.config.max_num_seqs
