@@ -54,7 +54,8 @@ from .entropy_stats import (
 from .text_utils import (
     get_last_step_pos,
     count_tokens_after_marker,
-    format_system_prompt,
+    format_prompt,
+    extract_final_answer,
     ensure_think_ending,
     MMLU_SYSTEM_PROMPT,
     MATH_SYSTEM_PROMPT
@@ -108,7 +109,7 @@ __all__ = [
     # Text utilities
     "get_last_step_pos",
     "count_tokens_after_marker",
-    "format_system_prompt",
+    "format_prompt",
     "ensure_think_ending",
     "MMLU_SYSTEM_PROMPT",
     "MATH_SYSTEM_PROMPT"

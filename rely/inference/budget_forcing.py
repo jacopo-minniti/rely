@@ -10,7 +10,7 @@ from vllm import LLM, SamplingParams
 from transformers import AutoTokenizer
 
 from rely.utils.text_utils import (
-    format_system_prompt,
+    format_prompt,
     ensure_think_ending,
     MMLU_SYSTEM_PROMPT
 )

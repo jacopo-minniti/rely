@@ -11,7 +11,7 @@ from .probes import MLPProbe
 from .value_model import UATSValueModel
 from rely.utils.text_utils import (
     count_tokens_after_marker,
-    format_system_prompt,
+    format_prompt,
     MMLU_SYSTEM_PROMPT,
 )
 

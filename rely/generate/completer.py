@@ -3,13 +3,13 @@ import random
 from multiprocessing import Process
 from time import sleep
 import logging
-from typing import Optional, Literal
+from typing import Optional, Literal, Union
 
 from vllm import LLM, SamplingParams
 from vllm.utils import get_open_port
 from pydantic import BaseModel
 
-from rely.utils import load_dataset, save_dataset, merge, MMLU_SYSTEM_PROMPT
+from rely.utils import format_prompt, load_dataset, save_dataset, merge, extract_final_answer, MATH_SYSTEM_PROMPT
 
 logging.basicConfig(level=logging.INFO)
 
@@ -21,7 +21,7 @@ class CompleterConfig(BaseModel):
     max_num_seqs: int = 512
     forking_strategy: Literal["entropy", "newline"] = "newline"
     completion_type: Literal["short", "long"] = "long"
-    system_prompt: str = MMLU_SYSTEM_PROMPT
+    system_prompt: str = MATH_SYSTEM_PROMPT
     dataset: str  # Can be local file path or HF dataset name
     subset: Optional[str] = None  # For HF datasets
     split: str = "train"  # For HF datasets
@@ -32,6 +32,19 @@ class Completer:
 
     def __init__(self, config: CompleterConfig):
         self.config = config
+
+
+    def _get_num_steps(self, item: dict) -> int:
+        """Get the number of steps in the CoT for an item."""
+        if self.config.forking_strategy == "entropy":
+            # For entropy strategy, we don't have step information
+            return 1
+        else:
+            attempt = item.get("attempt", "")
+            if not attempt:
+                return 0
+            steps = attempt.split("\n\n")
+            return len(steps)
 
 
     def split_attempt(self, item: dict, cot_percentage: float = 1.0, used_steps: Optional[set] = None) -> str:
@@ -66,35 +79,23 @@ class Completer:
             return "\n\n".join(cut_steps)
 
 
-    def build_prompt(self, question: str, cut_cot: str) -> str:
-        if self.config.completion_type == "short":
-            return f"<|im_start|>system\n{self.config.system_prompt}<|im_end|>\n<|im_start|>user\n{question}<|im_end|>\n<|im_start|>assistant\n<think>\n{cut_cot}\n\nConsidering the limited time by the user, I have to give the solution based on the thinking directly now.</think>\n## Final Answer\n"
-        else:
-            return f"<|im_start|>system\n{self.config.system_prompt}<|im_end|>\n<|im_start|>user\n{question}<|im_end|>\n<|im_start|>assistant\n<think>\n{cut_cot}\n\n"
-
-
     def generate(
         self,
         output_file: str,
         n_completions_per_item: int = 100,
-        n_items_per_cot: int = 1,  # Number of random samples per CoT
         max_new_tokens: int = 512,
         temperature: float = 1.0,
         cot_percentage: float = 1.0,  # Max percentage of CoT to sample from (0.0 to 1.0)
     ):
         """
-        Generate completions from the dataset with support for multiple random samples per CoT.
+        Generate completions from the dataset, sampling every step of the CoT.
         
         Args:
-            output_file: Path to save the generated completions
-            n_completions_per_item: Number of completions to generate per prompt
-            n_items_per_cot: Number of random samples to generate from each CoT. 
-                           Each sample will have n_completions_per_item completions.
-                           For example, if n_items_per_cot=3 and n_completions_per_item=100,
-                           each CoT will generate 3 different random cuts, each with 100 completions.
-            max_new_tokens: Maximum number of new tokens to generate
-            temperature: Sampling temperature for generation
-            cot_percentage: Maximum percentage of CoT steps to sample from (0.0 to 1.0)
+            output_file: Path to save the generated completions.
+            n_completions_per_item: Number of completions to generate for each CoT step.
+            max_new_tokens: Maximum number of new tokens to generate.
+            temperature: Sampling temperature for generation.
+            cot_percentage: Maximum percentage of CoT steps to sample from (0.0 to 1.0).
         """
         node_size = 1
         node_rank = 0
@@ -105,7 +106,6 @@ class Completer:
         dp_size = self.config.dp_size
         max_num_seqs = self.config.max_num_seqs
         model = self.config.model
-        trust_remote_code = True
 
         if dp_size > 1:
             if node_size > 1:
@@ -126,12 +126,10 @@ class Completer:
                     args=(
                         output_file,
                         n_completions_per_item,
-                        n_items_per_cot,
                         max_new_tokens,
                         temperature,
                         cot_percentage,
                         model,
-                        trust_remote_code,
                         dp_size,
                         tp_size,
                         gpu_memory_utilization,
@@ -165,12 +163,10 @@ class Completer:
             self._worker(
                 output_file,
                 n_completions_per_item,
-                n_items_per_cot,
                 max_new_tokens,
                 temperature,
                 cot_percentage,
                 model,
-                trust_remote_code,
                 dp_size,
                 tp_size,
                 gpu_memory_utilization,
@@ -185,7 +181,7 @@ class Completer:
             logging.info(f"Processing complete! Output written to {output_file}")
 
 
-    def _worker(self, output_file, n_completions_per_item, n_items_per_cot, max_new_tokens, temperature, cot_percentage, model, trust_remote_code, dp_size, tp_size, gpu_memory_utilization, max_num_seqs, global_dp_rank, local_dp_rank, master_addr, master_port):
+    def _worker(self, output_file, n_completions_per_item, max_new_tokens, temperature, cot_percentage, model, dp_size, tp_size, gpu_memory_utilization, max_num_seqs, global_dp_rank, local_dp_rank, master_addr, master_port):
         logging.info(f"Starting worker: global_rank={global_dp_rank}, local_rank={local_dp_rank}")
         os.environ["VLLM_DP_RANK"] = str(global_dp_rank)
         os.environ["VLLM_DP_RANK_LOCAL"] = str(local_dp_rank)
@@ -219,30 +215,49 @@ class Completer:
         logging.info(f"DP rank {global_dp_rank} preparing {len(data_chunk)} items.")
 
         prompts_to_process = []
-        # CHANGE 1: Track the original item's index instead of copying the whole item.
         source_indices = []
 
-        # Use enumerate to get a unique, hashable index for each item.
         for item_idx, item in enumerate(data_chunk):
             question = item.get("question", "")
             if not question:
                 logging.warning(f"Skipping item on rank {global_dp_rank}: missing question")
                 continue
             
-            # Track sampled steps to ensure different samples
-            used_steps = set()
-            
-            for sample_idx in range(n_items_per_cot):
-                cut_cot = self.split_attempt(item, cot_percentage, used_steps)
-                # You might want to check for empty cut_cot here as well.
-                
-                prompt = self.build_prompt(question, cut_cot)
+            # Handle entropy strategy which doesn't have multiple steps
+            if self.config.forking_strategy == "entropy":
+                cut_cot = item.get("cut_cot", "")
+                prompt = format_prompt(question, cot=cut_cot)
                 prompts_to_process.append(prompt)
-                # Store the index and the cut_cot for later reconstruction.
+                source_indices.append({
+                    "item_idx": item_idx,
+                    "cut_cot": cut_cot,
+                    "sample_idx": 0
+                })
+                continue
+            
+            # For "newline" strategy, sample every step of the CoT
+            attempt = item.get("attempt", "")
+            if not attempt:
+                continue
+
+            steps = attempt.split("\n\n")
+            num_steps = len(steps)
+            if num_steps == 0:
+                continue
+            
+            # Determine the maximum step to sample based on cot_percentage
+            max_step_to_sample = int((num_steps - 1) * cot_percentage)
+
+            # Create a prompt for each step prefix
+            for step_index in range(max_step_to_sample + 1):
+                cut_cot = "\n\n".join(steps[:step_index + 1])
+                prompt = format_prompt(question, cot=cut_cot)
+                prompts_to_process.append(prompt)
+                
                 source_indices.append({
                     "item_idx": item_idx, 
                     "cut_cot": cut_cot,
-                    "sample_idx": sample_idx
+                    "sample_idx": step_index
                 })
 
         if not prompts_to_process:
@@ -252,7 +267,6 @@ class Completer:
         llm = LLM(
             model=model,
             tensor_parallel_size=tp_size,
-            trust_remote_code=trust_remote_code,
             max_num_seqs=max_num_seqs,
             gpu_memory_utilization=gpu_memory_utilization,
             enable_prefix_caching=True
@@ -269,22 +283,17 @@ class Completer:
         base, ext = os.path.splitext(output_file)
         output_file_path = f"{base}.rank{global_dp_rank}{ext}"
 
-        # CHANGE 2: Use a much more efficient aggregation strategy.
-        # This dictionary will hold the final structured data, indexed by the item's original index.
         processed_outputs = {}
 
         for source_info, output_group in zip(source_indices, all_outputs):
             item_idx = source_info["item_idx"]
             
-            # If we haven't seen this item before, initialize its entry.
-            # This only runs ONCE per original item, avoiding data duplication.
             if item_idx not in processed_outputs:
                 processed_outputs[item_idx] = {
                     "original_item": data_chunk[item_idx],
                     "samples": []
                 }
             
-            # Append the new sample's results to the correct item.
             completions = [out.text for out in output_group.outputs]
             processed_outputs[item_idx]["samples"].append({
                 "sample_idx": source_info["sample_idx"],
@@ -292,7 +301,6 @@ class Completer:
                 "completions": completions
             })
 
-        # CHANGE 3: Convert the dictionary values to a list for saving.
         output_data = list(processed_outputs.values())
         
         save_dataset(output_data, output_file_path)

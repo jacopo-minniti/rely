@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Optional
 import torch
 from transformers import AutoTokenizer
 
@@ -59,20 +59,6 @@ def count_tokens_after_marker(text: str, tokenizer: AutoTokenizer, marker: str =
     return len(tokenizer(after_marker_text, return_tensors="pt").input_ids[0])
 
 
-def format_system_prompt(system_prompt: str, user_question: str) -> str:
-    """
-    Format a system prompt and user question into the expected chat format.
-    
-    Args:
-        system_prompt: System prompt
-        user_question: User question
-    
-    Returns:
-        Formatted prompt string
-    """
-    return f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{user_question} \\think<|im_end|>\n<|im_start|>assistant\n"
-
-
 def ensure_think_ending(text: str) -> str:
     """
     Ensure the text ends with the think closing tag.
@@ -88,15 +74,38 @@ def ensure_think_ending(text: str) -> str:
     return text
 
 
-def format_prompt(user_prompt: str, system_prompt: str = MMLU_SYSTEM_PROMPT) -> str:
+def format_prompt(question: str, system_prompt: str = MMLU_SYSTEM_PROMPT, add_think: bool = False, cot="") -> str:
     """
-    Formats the user prompt with the system prompt into a single string for LLM chat completion.
+    Format the question into a prompt for the model.
 
     Args:
-        user_prompt: The user's message to the model.
-        system_prompt: The system prompt to prepend (defaults to DEFAULT_SYSTEM_PROMPT).
+        question: The question text to format.
+        system_prompt: The system prompt to prepend to the question.
 
     Returns:
-        A formatted prompt string ready for the LLM.
+        A formatted prompt string.
     """
-    return f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{user_prompt}<|im_end|>\n<|im_start|>assistant\n<think>\n"
+
+    user_question = question.strip()
+    if add_think:
+        user_question += " \\think"
+        cot = "<think>\n" + cot.lstrip()
+
+    return f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{user_question}<|im_end|>\n<|im_start|>assistant\n{cot}"
+
+
+def extract_final_answer(text: str) -> Optional[str]:
+    """
+    Finds the last \\boxed{} in a string and extracts its content,
+    correctly handling nested braces.
+    """
+    # 1. Find the starting position of the last \boxed{
+    start_marker = r'\boxed{'
+    last_box_start_pos = text.rfind(start_marker)
+
+    # If \boxed{ is not found, return None
+    if last_box_start_pos == -1:
+        return None
+
+    # 2. The actual content starts right after the marker
+    content_start_pos = last_box_start_pos + len(start_marker)
