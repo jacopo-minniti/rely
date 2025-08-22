@@ -10,18 +10,16 @@ strict: false
 process_reward_model: true
 
 datasets:
-  - path: jacopo-minniti/MATH-PUM-qwen2.5-1.5B
+  - path: jacopo-minniti/MATH-PUM-qwen2.5-1.5B # axolotl-ai-co/prm800k_phase_1
     type: stepwise_supervised
     step_separator: "\n\n"
-    max_completion_length:
     train_on_last_step_only: false
     splt: train
 
-eval_datasets:
-  - path: jacopo-minniti/MATH-PUM-qwen2.5-1.5B
+test_datasets:
+  - path: jacopo-minniti/MATH-PUM-qwen2.5-1.5B # axolotl-ai-co/prm800k_phase_1
     type: stepwise_supervised
     step_separator: "\n\n"
-    max_completion_length:
     train_on_last_step_only: false
     splt: test
 
@@ -41,10 +39,10 @@ wandb_name: Math-Qwen2.5-1.5B
 wandb_log_model:
 
 
-gradient_accumulation_steps: 2
-micro_batch_size: 16
-eval_batch_size: 32
-num_epochs: 1
+gradient_accumulation_steps: 1
+micro_batch_size: 8
+eval_batch_size: 64
+num_epochs: 3
 optimizer: adamw_torch_fused
 lr_scheduler: cosine
 learning_rate: 5e-5
@@ -68,9 +66,12 @@ xformers_attention:
 flash_attention: true
 # torch_compile: true
 
-warmup_ratio: 0.1
-evals_per_epoch: 10
-saves_per_epoch: 2
+warmup_ratio: 0.2
+eval_strategy: steps
+save_strategy: no
+# save_steps: 100
+eval_steps: 50
+
 debug:
 deepspeed: deepspeed_configs/zero1.json
 weight_decay: 0.0
