@@ -41,9 +41,9 @@ wandb_name: Math-Qwen2.5-1.5B
 wandb_log_model:
 
 
-gradient_accumulation_steps: 1
+gradient_accumulation_steps: 2
 micro_batch_size: 16
-eval_batch_size: 64
+eval_batch_size: 32
 num_epochs: 1
 optimizer: adamw_torch_fused
 lr_scheduler: cosine

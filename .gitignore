@@ -10,6 +10,7 @@ sbs_results/
 tests/
 prm-v1/
 prm-v2/
+last_run_prepared/
 
 *.pdf
 *.jsonl
