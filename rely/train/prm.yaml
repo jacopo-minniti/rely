@@ -12,7 +12,7 @@ liger_glu_activation: true
 process_reward_model: true
 chat_template:
 datasets:
-  - path: jacopo-minniti/MATH-PUM-qwen2.5
+  - path: jacopo-minniti/MATH-PUM-qwen2.5-1.5B
     type: stepwise_supervised
     step_separator: "\n\n"
     max_completion_length:
@@ -20,7 +20,7 @@ datasets:
     splt: train
 
 eval_datasets:
-  - path: jacopo-minniti/MATH-PUM-qwen2.5
+  - path: jacopo-minniti/MATH-PUM-qwen2.5-1.5B
     type: stepwise_supervised
     step_separator: "\n\n"
     max_completion_length:
