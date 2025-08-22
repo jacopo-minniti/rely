@@ -7,10 +7,8 @@ load_in_8bit: false
 load_in_4bit: false
 strict: false
 
-liger_rms_norm: true
-liger_glu_activation: true
 process_reward_model: true
-chat_template:
+
 datasets:
   - path: jacopo-minniti/MATH-PUM-qwen2.5-1.5B
     type: stepwise_supervised
@@ -36,10 +34,10 @@ sample_packing: true
 eval_sample_packing: true
 pad_to_sequence_len: true
 
-wandb_project: prm
+wandb_project: pum
 wandb_entity:
 wandb_watch:
-wandb_name: PRM800k-v0
+wandb_name: Math-Qwen2.5-1.5B
 wandb_log_model:
 
 
@@ -66,14 +64,12 @@ early_stopping_patience:
 resume_from_checkpoint:
 local_rank:
 logging_steps: 10
-evals_steps: 100
 xformers_attention:
 flash_attention: true
 # torch_compile: true
 
 warmup_ratio: 0.1
-# evals_per_epoch: 10
-# eval_max_new_tokens: 128
+evals_per_epoch: 10
 saves_per_epoch: 2
 debug:
 deepspeed: deepspeed_configs/zero1.json

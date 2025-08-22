@@ -122,7 +122,7 @@ class Completer:
         node_rank = 0
         master_addr = "127.0.0.1"
         master_port = 13345
-        gpu_memory_utilization = 0.80
+        gpu_memory_utilization = 0.9
         tp_size = self.config.tp_size
         dp_size = self.config.dp_size
         max_num_seqs = self.config.max_num_seqs
@@ -291,7 +291,8 @@ class Completer:
             tensor_parallel_size=tp_size,
             max_num_seqs=max_num_seqs,
             gpu_memory_utilization=gpu_memory_utilization,
-            enable_prefix_caching=True
+            enable_prefix_caching=True,
+            max_model_len=8192,
         )
 
         logging.info(f"DP rank {global_dp_rank} starting generation for {len(prompts_to_process)} prompts...")

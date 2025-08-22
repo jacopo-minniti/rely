@@ -18,9 +18,10 @@ def upload_as_separate_files(repo_id, token=None):
     """Upload v2 files directly with their current names."""
     api = HfApi(token=token)
     
+    ### TO UPDATE
     files_to_upload = [
-        "data/math_train.jsonl",
-        "data/math_test.jsonl"
+        "math_first_half_train.jsonl",
+        "math_first_half_test.jsonl"
     ]
     
     for file_name in files_to_upload:
@@ -83,5 +84,5 @@ def main():
         upload_as_configuration(args.repo_id, args.config_name, args.token)
 
 if __name__ == "__main__":
-    # python upload_dataset.py jacopo-minniti/MATH-PUM-qwen2.5 --method config --config-name default
+    # python upload_dataset.py jacopo-minniti/MATH-PUM-qwen2.5-1.5B --method config --config-name default
     main()

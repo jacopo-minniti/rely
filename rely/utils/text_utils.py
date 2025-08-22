@@ -110,6 +110,27 @@ def extract_final_answer(text: str) -> Optional[str]:
 
     # 2. The actual content starts right after the marker
     content_start_pos = last_box_start_pos + len(start_marker)
+    
+    # 3. Find the matching closing brace by counting nested braces
+    brace_count = 1
+    pos = content_start_pos
+    
+    while pos < len(text) and brace_count > 0:
+        if text[pos] == '{':
+            brace_count += 1
+        elif text[pos] == '}':
+            brace_count -= 1
+        pos += 1
+    
+    # 4. If we didn't find a matching closing brace, return None
+    if brace_count > 0:
+        return None
+    
+    # 5. Extract the content between the braces
+    content_end_pos = pos - 1  # pos is one past the closing brace
+    content = text[content_start_pos:content_end_pos]
+    
+    return content.strip()
 
 
 def normalize_answer(answer: str) -> str:

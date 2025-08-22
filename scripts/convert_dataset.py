@@ -1,10 +1,3 @@
-#!/usr/bin/env python3
-"""
-Convert dataset script that:
-1. Formats the dataset from completer output to process-reward model format
-2. Splits the data to avoid contamination between train and test sets
-"""
-
 import argparse
 import math
 import random
@@ -12,8 +5,8 @@ import re
 from collections import defaultdict, Counter
 from typing import List, Dict, Any
 
-from rely.utils import load_dataset, save_dataset, extract_final_answer, normalize_answer
-
+from rely.generate import Completer, CompleterConfig
+from rely.utils import load_dataset, save_dataset, extract_final_answer, normalize_answer, merge
 
 def extract_question_from_prompt(prompt: str) -> str:
     """
@@ -74,7 +67,7 @@ def calculate_entropy(completions: List[str]) -> float:
     return entropy
 
 
-def format_dataset_item(item: Dict[str, Any], evaluation_method: str = "hard_label") -> Dict[str, Any]:
+def format_dataset_item(item: Dict[str, Any], evaluation_method: str = "hard_label", entropy_threshold: float = 0.1) -> Dict[str, Any]:
     """
     Convert a single item from completer format to process-reward format.
     Returns a single formatted item with full CoT and labels for each step.
@@ -82,6 +75,7 @@ def format_dataset_item(item: Dict[str, Any], evaluation_method: str = "hard_lab
     Args:
         item: The dataset item to format
         evaluation_method: Either "hard_label" or "entropy"
+        entropy_threshold: Threshold for entropy-based labeling (default: 0.1)
     """
     original_item = item["original_item"]
     samples = item["samples"]
@@ -128,8 +122,8 @@ def format_dataset_item(item: Dict[str, Any], evaluation_method: str = "hard_lab
                 # Calculate entropy of completion final answers
                 entropy_score = calculate_entropy(completions)
                 
-                # Label is 1 if entropy > 0.1, otherwise 0
-                entropy_label = 1 if entropy_score > 0.1 else 0
+                # Label is 1 if entropy > entropy_threshold, otherwise 0
+                entropy_label = 1 if entropy_score > entropy_threshold else 0
                 
                 # Store the result for this step (use OR logic if multiple samples for same step)
                 if step_index not in step_labels:
@@ -151,13 +145,14 @@ def format_dataset_item(item: Dict[str, Any], evaluation_method: str = "hard_lab
     return formatted_item
 
 
-def convert_dataset(input_file: str, evaluation_method: str = "hard_label") -> List[Dict[str, Any]]:
+def convert_dataset(input_file: str, evaluation_method: str = "hard_label", entropy_threshold: float = 0.1) -> List[Dict[str, Any]]:
     """
     Convert the entire dataset from completer format to process-reward format.
     
     Args:
         input_file: Path to the input JSONL file
         evaluation_method: Either "hard_label" or "entropy"
+        entropy_threshold: Threshold for entropy-based labeling (default: 0.1)
     """
     print(f"Loading dataset from {input_file}...")
     data = load_dataset(input_file)
@@ -167,15 +162,66 @@ def convert_dataset(input_file: str, evaluation_method: str = "hard_label") -> L
     
     print(f"Loaded {len(data)} items from the dataset")
     print(f"Using evaluation method: {evaluation_method}")
+    if evaluation_method == "entropy":
+        print(f"Entropy threshold: {entropy_threshold}")
     
     all_formatted_items = []
     
     for item in data:
-        formatted_item = format_dataset_item(item, evaluation_method)
+        formatted_item = format_dataset_item(item, evaluation_method, entropy_threshold)
         all_formatted_items.append(formatted_item)
     
     print(f"Converted to {len(all_formatted_items)} formatted items")
     return all_formatted_items
+
+
+def print_label_statistics(data: List[Dict[str, Any]], dataset_name: str = "Dataset") -> None:
+    """
+    Print statistics about the labels in the dataset.
+    
+    Args:
+        data: List of formatted dataset items
+        dataset_name: Name of the dataset for display purposes
+    """
+    if not data:
+        print(f"{dataset_name} is empty")
+        return
+    
+    total_items = len(data)
+    total_steps = sum(len(item['labels']) for item in data)
+    
+    # Count labels
+    true_labels = sum(sum(item['labels']) for item in data)
+    false_labels = total_steps - true_labels
+    
+    # Calculate percentages
+    true_percentage = (true_labels / total_steps * 100) if total_steps > 0 else 0
+    false_percentage = (false_labels / total_steps * 100) if total_steps > 0 else 0
+    
+    # Calculate average steps per item
+    avg_steps_per_item = total_steps / total_items if total_items > 0 else 0
+    
+    print(f"\n{dataset_name} Label Statistics:")
+    print(f"  Total items: {total_items}")
+    print(f"  Total steps: {total_steps}")
+    print(f"  Average steps per item: {avg_steps_per_item:.2f}")
+    print(f"  True labels (1): {true_labels} ({true_percentage:.1f}%)")
+    print(f"  False labels (0): {false_labels} ({false_percentage:.1f}%)")
+    
+    # Additional statistics: distribution of steps per item
+    steps_per_item = [len(item['labels']) for item in data]
+    min_steps = min(steps_per_item) if steps_per_item else 0
+    max_steps = max(steps_per_item) if steps_per_item else 0
+    
+    print(f"  Steps per item - Min: {min_steps}, Max: {max_steps}")
+    
+    # Distribution of true labels per item
+    true_per_item = [sum(item['labels']) for item in data]
+    avg_true_per_item = sum(true_per_item) / len(true_per_item) if true_per_item else 0
+    min_true_per_item = min(true_per_item) if true_per_item else 0
+    max_true_per_item = max(true_per_item) if true_per_item else 0
+    
+    print(f"  True labels per item - Avg: {avg_true_per_item:.2f}, Min: {min_true_per_item}, Max: {max_true_per_item}")
 
 
 def split_dataset_without_contamination(
@@ -262,12 +308,21 @@ def main():
         default="hard_label",
         help="Evaluation method: 'hard_label' checks final answer correctness, 'entropy' uses answer distribution entropy (default: hard_label)"
     )
+    parser.add_argument(
+        "--entropy-threshold",
+        type=float,
+        default=0.1,
+        help="Threshold for entropy-based labeling. Labels are True if entropy > threshold (default: 0.1)"
+    )
     
     args = parser.parse_args()
     
     # Validate arguments
     if not 0.0 < args.train_ratio < 1.0:
         raise ValueError("train_ratio must be between 0 and 1")
+    
+    if args.entropy_threshold < 0:
+        raise ValueError("entropy_threshold must be non-negative")
     
     # Generate output file names
     base_name = args.output_file
@@ -279,13 +334,20 @@ def main():
     
     try:
         # Step 1: Convert dataset format
-        formatted_data = convert_dataset(args.input_file, args.evaluation)
+        formatted_data = convert_dataset(args.input_file, args.evaluation, args.entropy_threshold)
+        
+        # Print overall dataset statistics
+        print_label_statistics(formatted_data, "Overall Dataset")
         
         # Step 2: Split without contamination
         train_data, test_data = split_dataset_without_contamination(
             formatted_data, 
             train_ratio=args.train_ratio
         )
+        
+        # Print statistics for train and test sets
+        print_label_statistics(train_data, "Training Set")
+        print_label_statistics(test_data, "Test Set")
         
         # Step 3: Save the datasets
         print(f"\nSaving datasets...")
@@ -304,4 +366,6 @@ def main():
 
 
 if __name__ == "__main__":
+    
+    # python test.py data/math_completions_first_half.jsonl math_first_half.jsonl --evaluation entropy --entropy-threshold 0.01
     exit(main())
