@@ -1,0 +1,84 @@
+base_model: Qwen/Qwen2.5-Math-7B
+model_type: AutoModelForTokenClassification
+num_labels: 2
+tokenizer_type: AutoTokenizer
+
+load_in_8bit: false
+load_in_4bit: false
+strict: false
+
+liger_rms_norm: true
+liger_glu_activation: true
+process_reward_model: true
+chat_template:
+datasets:
+  - path: jacopo-minniti/MATH-PUM-qwen2.5
+    type: stepwise_supervised
+    step_separator: "\n\n"
+    max_completion_length:
+    train_on_last_step_only: false
+    splt: train
+
+eval_datasets:
+  - path: jacopo-minniti/MATH-PUM-qwen2.5
+    type: stepwise_supervised
+    step_separator: "\n\n"
+    max_completion_length:
+    train_on_last_step_only: false
+    splt: test
+
+
+output_dir: ./outputs/out
+remove_unused_columns: false
+
+sequence_len: 4096
+sample_packing: true
+eval_sample_packing: true
+pad_to_sequence_len: true
+
+wandb_project: prm
+wandb_entity:
+wandb_watch:
+wandb_name: PRM800k-v0
+wandb_log_model:
+
+
+gradient_accumulation_steps: 1
+micro_batch_size: 16
+eval_batch_size: 64
+num_epochs: 1
+optimizer: adamw_torch_fused
+lr_scheduler: cosine
+learning_rate: 5e-5
+
+
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+
+train_on_inputs: false
+group_by_length: false
+bf16: auto
+fp16:
+tf32: true
+
+early_stopping_patience:
+resume_from_checkpoint:
+local_rank:
+logging_steps: 10
+evals_steps: 100
+xformers_attention:
+flash_attention: true
+# torch_compile: true
+
+warmup_ratio: 0.1
+# evals_per_epoch: 10
+# eval_max_new_tokens: 128
+saves_per_epoch: 2
+debug:
+deepspeed: deepspeed_configs/zero1.json
+weight_decay: 0.0
+fsdp:
+fsdp_config:
+special_tokens:
+
