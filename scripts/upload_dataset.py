@@ -79,7 +79,7 @@ def main():
                        help="Upload method: 'files' for separate files, 'config' for configuration")
     parser.add_argument("--config-name", default="v2", help="Configuration name (for config method)")
     parser.add_argument("--files", nargs="+", 
-                       default=["math_first_half_train.jsonl", "math_first_half_test.jsonl"],
+                       default=["math_dataset_train.jsonl", "math_dataset_test.jsonl"],
                        help="Files to upload (for files method)")
     parser.add_argument("--token", help="Hugging Face token (optional if logged in)")
     

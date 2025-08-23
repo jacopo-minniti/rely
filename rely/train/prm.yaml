@@ -68,9 +68,9 @@ flash_attention: true
 
 warmup_ratio: 0.2
 eval_strategy: steps
-save_strategy: no
+save_strategy: "no"
 # save_steps: 100
-eval_steps: 50
+eval_steps: 100
 
 debug:
 deepspeed: deepspeed_configs/zero1.json

@@ -1,11 +1,9 @@
 import argparse
 import math
 import random
-import re
 from collections import defaultdict, Counter
 from typing import List, Dict, Any
 
-from rely.generate import Completer, CompleterConfig
 from rely.utils import load_dataset, save_dataset, extract_final_answer, normalize_answer, merge
 
 def extract_question_from_prompt(prompt: str) -> str:
@@ -367,5 +365,5 @@ def main():
 
 if __name__ == "__main__":
     
-    # python test.py data/math_completions_first_half.jsonl math_first_half.jsonl --evaluation entropy --entropy-threshold 0.01
+    # python test.py data/math_completions.jsonl math_dataset.jsonl --evaluation entropy --entropy-threshold 1
     exit(main())
