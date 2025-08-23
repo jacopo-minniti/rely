@@ -121,7 +121,7 @@ def format_dataset_item(item: Dict[str, Any], evaluation_method: str = "hard_lab
                 entropy_score = calculate_entropy(completions)
                 
                 # Label is 1 if entropy > entropy_threshold, otherwise 0
-                entropy_label = 1 if entropy_score > entropy_threshold else 0
+                entropy_label = True if entropy_score > entropy_threshold else False
                 
                 # Store the result for this step (use OR logic if multiple samples for same step)
                 if step_index not in step_labels:

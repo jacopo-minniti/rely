@@ -95,5 +95,5 @@ def main():
         upload_as_configuration(args.repo_id, args.config_name, args.token)
 
 if __name__ == "__main__":
-    # python upload_dataset.py jacopo-minniti/MATH-PUM-qwen2.5-1.5B --method config --config-name default
+    # python upload_dataset.py jacopo-minniti/MATH-PUM-qwen2.5-1.5B --method files 
     main()
