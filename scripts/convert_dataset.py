@@ -222,6 +222,81 @@ def print_label_statistics(data: List[Dict[str, Any]], dataset_name: str = "Data
     print(f"  True labels per item - Avg: {avg_true_per_item:.2f}, Min: {min_true_per_item}, Max: {max_true_per_item}")
 
 
+def balance_dataset(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Balance the dataset by removing samples from the majority class at the step level.
+    """
+    print("Balancing dataset...")
+    
+    # Count total labels
+    total_true = sum(sum(item['labels']) for item in data)
+    total_false = sum(len(item['labels']) - sum(item['labels']) for item in data)
+    total_steps = total_true + total_false
+    
+    print(f"Before balancing: True={total_true}, False={total_false}, Total={total_steps}")
+    
+    if total_true == total_false:
+        print("Dataset is already balanced.")
+        return data
+    
+    # Determine majority and minority counts
+    majority_count = max(total_true, total_false)
+    minority_count = min(total_true, total_false)
+    majority_is_true = total_true > total_false
+    
+    # Calculate how many majority samples to remove
+    samples_to_remove = majority_count - minority_count
+    
+    print(f"Majority class ({'True' if majority_is_true else 'False'}): {majority_count}")
+    print(f"Minority class ({'False' if majority_is_true else 'True'}): {minority_count}")
+    print(f"Need to remove {samples_to_remove} majority samples")
+    
+    # Create a list of all step indices with their labels
+    step_indices = []
+    for item_idx, item in enumerate(data):
+        for step_idx, label in enumerate(item['labels']):
+            step_indices.append((item_idx, step_idx, bool(label)))
+    
+    # Filter to majority class steps and shuffle
+    majority_steps = [(item_idx, step_idx) for item_idx, step_idx, label in step_indices 
+                      if label == majority_is_true]
+    random.shuffle(majority_steps)
+    
+    # Select steps to remove
+    steps_to_remove = set(majority_steps[:samples_to_remove])
+    
+    # Create new balanced dataset
+    balanced_data = []
+    for item_idx, item in enumerate(data):
+        new_completions = []
+        new_labels = []
+        
+        for step_idx, (completion, label) in enumerate(zip(item['completions'], item['labels'])):
+            if (item_idx, step_idx) not in steps_to_remove:
+                new_completions.append(completion)
+                new_labels.append(label)
+        
+        # Only keep items that still have steps
+        if new_completions:
+            balanced_item = {
+                'prompt': item['prompt'],
+                'completions': new_completions,
+                'labels': new_labels
+            }
+            balanced_data.append(balanced_item)
+    
+    # Verify balancing
+    new_total_true = sum(sum(item['labels']) for item in balanced_data)
+    new_total_false = sum(len(item['labels']) - sum(item['labels']) for item in balanced_data)
+    new_total_steps = new_total_true + new_total_false
+    
+    print(f"After balancing: True={new_total_true}, False={new_total_false}, Total={new_total_steps}")
+    print(f"Removed {total_steps - new_total_steps} steps from the majority class")
+    print(f"Removed {len(data) - len(balanced_data)} items with no remaining steps")
+    
+    return balanced_data
+
+
 def split_dataset_without_contamination(
     formatted_data: List[Dict[str, Any]], 
     train_ratio: float = 0.85
@@ -312,6 +387,11 @@ def main():
         default=0.1,
         help="Threshold for entropy-based labeling. Labels are True if entropy > threshold (default: 0.1)"
     )
+    parser.add_argument(
+        "--balance",
+        action="store_true",
+        help="Balance the two classes in the training set only by removing samples from the majority class (test set keeps original distribution)"
+    )
     
     args = parser.parse_args()
     
@@ -343,11 +423,16 @@ def main():
             train_ratio=args.train_ratio
         )
         
+        # Step 3: Balance only the training data if requested
+        if args.balance:
+            train_data = balance_dataset(train_data)
+            print_label_statistics(train_data, "Balanced Training Set")
+        
         # Print statistics for train and test sets
         print_label_statistics(train_data, "Training Set")
-        print_label_statistics(test_data, "Test Set")
+        print_label_statistics(test_data, "Test Set (Original Distribution)")
         
-        # Step 3: Save the datasets
+        # Step 4: Save the datasets
         print(f"\nSaving datasets...")
         save_dataset(train_data, train_output)
         save_dataset(test_data, test_output)
@@ -365,5 +450,5 @@ def main():
 
 if __name__ == "__main__":
     
-    # python test.py data/math_completions.jsonl math_dataset.jsonl --evaluation entropy --entropy-threshold 1
+    # python test.py data/math_completions.jsonl math_dataset.jsonl --evaluation entropy --entropy-threshold 0.01 --balance
     exit(main())
