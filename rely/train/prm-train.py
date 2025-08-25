@@ -15,8 +15,10 @@ eval_dataset = load_dataset(DATASET, "pp-1", split="test")
 training_args = PRMConfig(
     output_dir="PUM",
     num_train_epochs=10,
-    per_device_train_batch_size=32,
-    per_device_eval_batch_size=32,
+    per_device_train_batch_size=1,
+    per_device_eval_batch_size=1,
+    gradient_accumulation_steps=2,
+    max_grad_norm=1.0,
     logging_steps=10,
     eval_strategy="steps",
     eval_steps=100,
