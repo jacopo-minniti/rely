@@ -179,15 +179,5 @@ def normalize_answer(answer: str) -> str:
         normalized = normalized.rstrip('0').rstrip('.')
         if normalized == "":
             normalized = "0"
-
-    # Evaluate simple fractions if possible (e.g., 1/2 -> 0.5) to handle cases like 2/4 vs 1/2
-    try:
-        # Use a safe eval for simple arithmetic
-        if re.match(r'^[0-9\.\/\*\-\+ \(\)]+$', normalized):
-             # Round to a reasonable number of decimal places to handle floating point inaccuracies
-            normalized = str(round(eval(normalized), 9))
-    except (SyntaxError, NameError, ZeroDivisionError):
-        # If it's not a simple evaluatable expression, leave it as is
-        pass
         
     return normalized
