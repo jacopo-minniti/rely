@@ -141,6 +141,10 @@ def save_branches(
     # Collect all answers for evaluation
     all_answers = []
     correct_count = 0
+    # Track best_of_n (answer from branch with highest value)
+    best_of_n_answer = None
+    best_of_n_value = float('-inf')
+    best_of_n_branch = None
 
     for i, branch in enumerate(final_branches):
         filepath = output_path / f"branch_{i}.txt"
@@ -168,6 +172,11 @@ def save_branches(
                 # Check if this answer is correct
                 if correct_answer and normalize_answer(extracted_answer) == normalize_answer(correct_answer):
                     correct_count += 1
+            # Track best_of_n (highest value)
+            if branch.value is not None and branch.value > best_of_n_value:
+                best_of_n_value = branch.value
+                best_of_n_answer = extracted_answer
+                best_of_n_branch = i
 
         summary_data["branches"].append(
             {
@@ -181,17 +190,20 @@ def save_branches(
             }
         )
 
+
     # Add evaluation metrics if correct_answer is provided
     if correct_answer is not None:
         hard_label = 1 if correct_count > 0 else 0
         soft_label = correct_count / len(all_answers) if all_answers else 0.0
-        
         summary_data["correct_answer"] = correct_answer
         summary_data["all_answers"] = all_answers
         summary_data["hard_label"] = hard_label
         summary_data["soft_label"] = soft_label
         summary_data["correct_count"] = correct_count
         summary_data["total_answers"] = len(all_answers)
+
+    # Add best_of_n (answer from branch with highest value)
+    summary_data["best_of_n"] = best_of_n_answer
 
     summary_filepath = output_path / "results.json"
     with open(summary_filepath, "w", encoding="utf-8") as f:
