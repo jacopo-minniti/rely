@@ -1,25 +1,18 @@
 import json
 import logging
-import random
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Union
 
+import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from .config import UATSConfig, Branch
 from .guided_tree_search import GuidedTreeSearch
 from .uncertainty_model import UATSUncertaintyModel
 from .value_model import UATSValueModel
-from rely.utils.text_utils import MMLU_SYSTEM_PROMPT, MATH_SYSTEM_PROMPT
-import random
-import re
-from datetime import datetime
-from pathlib import Path
-from typing import List, Optional, Union
-
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from rely.utils.text_utils import MATH_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -27,26 +20,6 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 # Small helpers / utilities
 # -----------------------------------------------------------------------------
-
-# def extract_final_answer(branch_text: str, final_answer_text: str) -> str:
-#     """Extract the final answer string (e.g. "(A)") from the concatenated texts."""
-
-#     full_text = branch_text + final_answer_text
-
-#     # Look for patterns like "(A)", "(B)", "(C)", "(D)" in the final answer section
-#     if "## Final Answer" in full_text:
-#         final_answer_section = full_text.split("## Final Answer")[-1].strip()
-#     else:
-#         final_answer_section = full_text
-
-#     letter_pattern = r"\([A-Z]\)"
-#     matches = re.findall(letter_pattern, final_answer_section)
-
-#     if matches:
-#         # Return the last match (most recent formatting)
-#         return matches[-1].replace("(", "").replace(")", "")
-
-#     return final_answer_section.strip()
 
 def normalize_answer(answer: str) -> str:
     """
@@ -126,25 +99,11 @@ def load_model_and_tokenizer(
     load_in_4bit: bool = True,
 ):
     """Load a standard transformers model and its tokenizer ready for inference."""
-
-    import torch
-    from transformers import BitsAndBytesConfig
-    
-    # Set up quantization config if needed
-    quantization_config = None
-    # if load_in_4bit:
-    #     quantization_config = BitsAndBytesConfig(
-    #         load_in_4bit=True,
-    #         bnb_4bit_quant_type="nf4",
-    #         bnb_4bit_compute_dtype=torch.bfloat16 if dtype == "bfloat16" else torch.float16,
-    #         bnb_4bit_use_double_quant=True,
-    #     )
     
     # Load model
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         torch_dtype=torch.bfloat16 if dtype == "bfloat16" else torch.float16,
-        quantization_config=quantization_config,
         device_map="auto" if device == "auto" else {"": device},
         trust_remote_code=True,
         max_position_embeddings=max_seq_length if hasattr(AutoModelForCausalLM, 'config') else None,
@@ -224,11 +183,8 @@ def save_branches(
 ) -> None:
     """Save the *active* branches at the end of the search to disk."""
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    random_suffix = f"_{random.randint(0, 100):03d}"
     output_path = Path(output_dir)
-    run_dir = output_path / f"run_{timestamp}{random_suffix}"
-    run_dir.mkdir(parents=True, exist_ok=True)
+    output_path.mkdir(parents=True, exist_ok=True)
 
     if not branches:
         return
@@ -242,11 +198,10 @@ def save_branches(
     # Log summary of selected branches
     if final_branches:
         step_counts = [b.step_count for b in final_branches]
-        think_counts = sum(1 for b in final_branches if "</think>" in b.text)
-        logger.info(f"Selected branches: max_step={max(step_counts)}, min_step={min(step_counts)}, with_</think>={think_counts}")
+        logger.info(f"Selected branches: max_step={max(step_counts)}, min_step={min(step_counts)}")
 
     summary_data = {
-        "timestamp": timestamp,
+        "timestamp": datetime.now().isoformat(),
         "user_question": user_question,
         "system_prompt": system_prompt,
         "total_branches": len(final_branches),
@@ -258,7 +213,7 @@ def save_branches(
     correct_count = 0
 
     for i, branch in enumerate(final_branches):
-        filepath = run_dir / f"branch_{i}.txt"
+        filepath = output_path / f"branch_{i}.txt"
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(f"Step count: {branch.step_count}\n")
             f.write(f"Score: {branch.score:.4f}\n")
@@ -308,13 +263,13 @@ def save_branches(
         summary_data["correct_count"] = correct_count
         summary_data["total_answers"] = len(all_answers)
 
-    summary_filepath = run_dir / "results.json"
+    summary_filepath = output_path / "results.json"
     with open(summary_filepath, "w", encoding="utf-8") as f:
         json.dump(summary_data, f, indent=2, ensure_ascii=False)
 
-    logger.info(f"Saved {len(final_branches)} branches and summary to {run_dir}")
+    logger.info(f"Saved {len(final_branches)} branches and summary to {output_path}")
 
-    _generate_tree_image(all_branches, run_dir)
+    _generate_tree_image(all_branches, output_path)
 
 
 def run_uats(
@@ -359,6 +314,18 @@ def run_uats(
 # Tree visualisation helpers
 # -----------------------------------------------------------------------------
 
+def _safe_text_for_matplotlib(text: str) -> str:
+    """Escape or remove problematic characters for matplotlib text rendering."""
+    # Replace dollar signs with escaped versions to prevent LaTeX parsing
+    text = text.replace('$', r'\$')
+    # Remove other problematic LaTeX characters
+    text = text.replace('\\', '\\\\')
+    text = text.replace('{', '\\{')
+    text = text.replace('}', '\\}')
+    text = text.replace('_', '\\_')
+    text = text.replace('^', '\\^')
+    return text
+
 def _generate_tree_image(
     branches: List[Branch],
     output_dir: Path,
@@ -392,8 +359,11 @@ def _generate_tree_image(
         # get only first 25 chars and then ellipsis
         latest_step = latest_step[:25] + '...'
         
+        # Safely escape the text for matplotlib
+        safe_text = _safe_text_for_matplotlib(latest_step)
+        
         # Wrap the text for better display in the node
-        wrapped_text = textwrap.fill(latest_step, width=30)
+        wrapped_text = textwrap.fill(safe_text, width=30)
         
         label = ""
         if branch.uncertainty is not None and branch.value is not None:
@@ -416,8 +386,9 @@ def _generate_tree_image(
         if branch.final_answer:
             full_text = branch.text + branch.final_answer
             final_answer = extract_final_answer(full_text)
+            safe_answer = _safe_text_for_matplotlib(final_answer or "No answer")
             final_node_id = f"final_{branch.id}"
-            G.add_node(final_node_id, label=final_answer or "No answer", is_final_answer=True)
+            G.add_node(final_node_id, label=safe_answer, is_final_answer=True)
             G.add_edge(branch.id, final_node_id)
     
     pos = nx.nx_agraph.graphviz_layout(G, prog="dot")

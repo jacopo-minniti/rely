@@ -100,12 +100,7 @@ class GuidedTreeSearch:
             reasoning_part = reasoning_part.replace("<|im_end|>", "").strip()
             return reasoning_part
         
-        # Fallback: look for the \\think marker
-        if "\\think" in full_text:
-            reasoning_part = full_text.split("\\think", 1)[1]
-            return reasoning_part.strip()
-        
-        # Last fallback: return the whole text
+        # Fallback: return the whole text
         return full_text
 
     def _generate_step(
@@ -143,11 +138,7 @@ class GuidedTreeSearch:
         """Generate final answer for a completed branch."""
         text = branch.text.strip()
         # Determine which header should be added so that the output text explicitly
-        # contains the </think> marker and the "## Final Answer" section.
-        if not text.endswith("</think>") and not text.endswith("</think>\n"):
-            header = "\n</think>\n## Final Answer\n"
-        else:
-            header = "\n## Final Answer\n"
+        header = "\n## Final Answer\n"
 
         # Prompt fed to the language model consists of the reasoning trace plus the header.
         # Ensure consistent single newline formatting
@@ -170,9 +161,6 @@ class GuidedTreeSearch:
 
         new_tokens = generated.sequences[0][gen_ids.shape[1]:]
         generated_answer = self.tokenizer.decode(new_tokens, skip_special_tokens=False)  # type: ignore[attr-defined]
-        # Return the header together with the generated answer so that callers will
-        # see </think> and "## Final Answer" in the saved output.
-        # Ensure consistent single newline formatting
         return header + generated_answer
 
     def _get_num_branches(self, ids: torch.Tensor) -> tuple[int, float]:
@@ -316,8 +304,9 @@ class GuidedTreeSearch:
 
                     # Check termination conditions
                     finished_here = False
-                    if "</think>" in step_text:
-                        logger.info(f"Branch {branch_idx} finished with '</think>' token.")
+                    # Check if EOS token was generated
+                    if self.tokenizer.eos_token_id in new_tokens:
+                        logger.info(f"Branch {branch_idx} finished with EOS token.")
                         finished_here = True
                     # Check if the global token budget has been exhausted after this generation
                     if tokens_used >= self.config.budget:
@@ -357,130 +346,17 @@ class GuidedTreeSearch:
 
         logger.info("Search finished – all branches have terminated.")
 
-
-        
-        # --- NEW LOGIC: Select all leaf nodes as final branches ---
-        # A leaf node is a branch that was never used as a parent for another branch.
-        # This logic finds all paths from the start to a terminal node in the tree.
-
-        # 1. Collect the ID of every branch that served as a parent.
-        #    We filter out `None` which is the parent_id for the initial branches.
-        parent_ids = {branch.parent_id for branch in all_branches if branch.parent_id is not None}
-
-        # 2. A branch is a "leaf" if its own ID never appears in the set of parent IDs.
-        #    These are the terminal nodes of the search tree.
-        final_branches = [branch for branch in all_branches if branch.id not in parent_ids]
-        
-        logger.info(f"Identified {len(final_branches)} leaf nodes as final branches from a total of {len(all_branches)} generated nodes.")
-
-        # final_branches.sort(key=lambda b: b.value, reverse=True)
-        # final_branches = final_branches[:self.config.beam_width]
-
-        # Generate final answers only for the branches that will be saved
-        for branch in final_branches:
-            branch.final_answer = self._generate_final_answer(branch)
-
-        return final_branches, all_branches
-        ''''''
-
-        # Final branches comprise both those naturally finished *and* any that
-        # were still in the beam when the optional safety net triggered.
-        final_branches = finished.copy() if finished else []
-        
-        # Add any branches that were still in the beam
-        if beam:
-            final_branches.extend(beam)
-        
-        # Ensure we don't have duplicates
-        seen_ids = set()
-        unique_final_branches = []
-        for branch in final_branches:
-            if branch.id not in seen_ids:
-                seen_ids.add(branch.id)
-                unique_final_branches.append(branch)
-        
-        final_branches = unique_final_branches
-        
-        # Check if we have enough total explored branches to potentially fill up to beam_width
-        total_explored_branches = len(all_branches)
-        logger.info(f"Total explored branches: {total_explored_branches}, beam_width: {self.config.beam_width}")
-        
-        # If we have enough total explored branches (≥ beam_width), we can fill up to beam_width
-        # by selecting from all explored branches, not just finished/beam ones
-        if total_explored_branches >= self.config.beam_width:
-            logger.info(f"Total explored branches ({total_explored_branches}) >= beam_width ({self.config.beam_width}), filling up to beam_width")
-            
-            # Start with finished and beam branches
-            candidate_branches = final_branches.copy()
-            
-            # Add remaining branches from all_branches to fill up to beam_width
-            remaining_branches = [b for b in all_branches if b not in candidate_branches]
-            remaining_branches.sort(key=lambda b: (b.step_count, b.score), reverse=True)
-            
-            for branch in remaining_branches:
-                if len(candidate_branches) >= self.config.beam_width:
-                    break
-                candidate_branches.append(branch)
-                logger.info(f"Added branch {branch.id} with step count {branch.step_count} to fill beam_width")
-            
-            final_branches = candidate_branches
+        # --- Select the top beam_width branches by value score, but only among terminated branches ---
+        # Sort only the finished branches by value score (highest first) and take the top beam_width
+        if finished:
+            finished.sort(key=lambda b: b.value, reverse=True)
+            final_branches = finished[:self.config.beam_width]
+            logger.info(f"Selected top {len(final_branches)} branches by value score from {len(finished)} terminated branches (out of {len(all_branches)} generated nodes).")
         else:
-            logger.info(f"Total explored branches ({total_explored_branches}) < beam_width ({self.config.beam_width}), returning only actual explored branches")
-        
-        logger.info(f"Final branch selection: {len(final_branches)} branches selected from {len(all_branches)} total branches")
-        if final_branches:
-            step_counts = [b.step_count for b in final_branches]
-            logger.info(f"Selected branches have step counts: {step_counts}")
-
-        # Apply sophisticated priority-based selection before beam width limiting
-        if len(final_branches) > self.config.beam_width:
-            # Helper function to check if a branch has the </think> token
-            def has_think_token(branch: Branch) -> bool:
-                return "</think>" in branch.text
-
-            # Get the maximum step count among all branches
-            max_step_count = max(b.step_count for b in final_branches)
-            
-            # Categorize branches by our priority criteria
-            largest_with_think = [b for b in final_branches if b.step_count == max_step_count and has_think_token(b)]
-            largest_without_think = [b for b in final_branches if b.step_count == max_step_count and not has_think_token(b)]
-            think_branches = [b for b in final_branches if has_think_token(b) and b.step_count < max_step_count]
-            
-            # Build prioritized_branches list in priority order
-            prioritized_branches = []
-            
-            # 1. Add largest branches with </think> token
-            prioritized_branches.extend(largest_with_think)
-            logger.debug(f"Added {len(largest_with_think)} largest branches with </think> token")
-            
-            # 2. Add largest branches without </think> token (if we haven't reached beam_width)
-            if len(prioritized_branches) < self.config.beam_width:
-                prioritized_branches.extend(largest_without_think)
-                logger.debug(f"Added {len(largest_without_think)} largest branches without </think> token")
-            
-            # 3. Add branches with </think> token but smaller step count (if we haven't reached beam_width)
-            if len(prioritized_branches) < self.config.beam_width:
-                prioritized_branches.extend(think_branches)
-                logger.debug(f"Added {len(think_branches)} branches with </think> token but smaller step count")
-            
-            # 4. If we still haven't reached beam_width, add remaining branches sorted by step count (descending)
-            if len(prioritized_branches) < self.config.beam_width:
-                remaining_branches = [b for b in final_branches if b not in prioritized_branches]
-                remaining_branches.sort(key=lambda b: (b.step_count, b.score), reverse=True)
-                prioritized_branches.extend(remaining_branches)
-                logger.debug(f"Added {len(remaining_branches)} remaining branches sorted by step count")
-            
-            # Trim to beam_width if we have more than needed
-            if len(prioritized_branches) > self.config.beam_width:
-                prioritized_branches = prioritized_branches[:self.config.beam_width]
-                logger.debug(f"Trimmed to {self.config.beam_width} branches due to beam_width limit")
-
-            final_branches = prioritized_branches
-            logger.info(f"Applied priority-based selection: selected {len(final_branches)} branches")
-
+            final_branches = []
+            logger.info("No terminated branches found. Returning empty final_branches list.")
 
         # Generate final answers only for the branches that will be saved
         for branch in final_branches:
             branch.final_answer = self._generate_final_answer(branch)
-
         return final_branches, all_branches
