@@ -1,0 +1,56 @@
+{
+  "timestamp": "2025-08-26T17:31:44.402545",
+  "user_question": "The point $(a, b)$ lies on the line with the equation $3x + 2y = 12.$ When $a = 4$, what is the value of $b$?",
+  "system_prompt": "The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer.",
+  "total_branches": 4,
+  "branches": [
+    {
+      "branch_id": 0,
+      "step_count": 12,
+      "score": 0.00537934850473873,
+      "uncertainty": 0.416015625,
+      "value": 0.9844207763671875,
+      "total_tokens": 183,
+      "extracted_answer": "0"
+    },
+    {
+      "branch_id": 1,
+      "step_count": 14,
+      "score": 0.005127429973245377,
+      "uncertainty": 0.408203125,
+      "value": 0.9690842649433762,
+      "total_tokens": 189,
+      "extracted_answer": "0"
+    },
+    {
+      "branch_id": 2,
+      "step_count": 16,
+      "score": 0.0055799340313618245,
+      "uncertainty": 0.39453125,
+      "value": 0.9653285874255957,
+      "total_tokens": 173,
+      "extracted_answer": "0"
+    },
+    {
+      "branch_id": 3,
+      "step_count": 13,
+      "score": 0.004672059083457538,
+      "uncertainty": 0.37109375,
+      "value": 0.9577721121087953,
+      "total_tokens": 205,
+      "extracted_answer": "0"
+    }
+  ],
+  "correct_answer": "0",
+  "all_answers": [
+    "0",
+    "0",
+    "0",
+    "0"
+  ],
+  "hard_label": 1,
+  "soft_label": 1.0,
+  "correct_count": 4,
+  "total_answers": 4,
+  "best_of_n": "0"
+}

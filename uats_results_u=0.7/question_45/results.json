@@ -1,0 +1,46 @@
+{
+  "timestamp": "2025-08-26T17:57:28.237002",
+  "user_question": "If $re^{i \\theta}$ is a root of\n\\[z^8 - z^7 + z^6 - z^5 + z^4 - z^3 + z^2 - z + 1 = 0,\\]where $r > 0$ and $0 \\le \\theta < 2 \\pi,$ then find the sum of all possible values of $\\theta.$",
+  "system_prompt": "The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer.",
+  "total_branches": 3,
+  "branches": [
+    {
+      "branch_id": 0,
+      "step_count": 22,
+      "score": 2.9256996205585322e-05,
+      "uncertainty": 0.87890625,
+      "value": 0.013692274224213931,
+      "total_tokens": 468,
+      "extracted_answer": "0"
+    },
+    {
+      "branch_id": 1,
+      "step_count": 22,
+      "score": 2.9256996205585322e-05,
+      "uncertainty": 0.87890625,
+      "value": 0.013692274224213931,
+      "total_tokens": 468,
+      "extracted_answer": "0"
+    },
+    {
+      "branch_id": 2,
+      "step_count": 22,
+      "score": 7.407186696424364e-06,
+      "uncertainty": 0.91015625,
+      "value": 0.004162838923390493,
+      "total_tokens": 562,
+      "extracted_answer": "\\frac{\\pi}{4}"
+    }
+  ],
+  "correct_answer": "8 \\pi",
+  "all_answers": [
+    "0",
+    "0",
+    "\\frac{\\pi}{4}"
+  ],
+  "hard_label": 0,
+  "soft_label": 0.0,
+  "correct_count": 0,
+  "total_answers": 3,
+  "best_of_n": "0"
+}

@@ -1,0 +1,56 @@
+{
+  "timestamp": "2025-08-26T18:01:23.386183",
+  "user_question": "Suppose that $f$ is a function and $f^{-1}$ is the inverse of $f$.  If $f(1)=2$, $f(2) = 6$, and $f(3)=5$, then what is $f^{-1}(f^{-1}(6))$?",
+  "system_prompt": "The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer.",
+  "total_branches": 4,
+  "branches": [
+    {
+      "branch_id": 0,
+      "step_count": 17,
+      "score": 0.0027436660916617746,
+      "uncertainty": 0.453125,
+      "value": 0.9767451286315918,
+      "total_tokens": 356,
+      "extracted_answer": "1"
+    },
+    {
+      "branch_id": 1,
+      "step_count": 17,
+      "score": 0.0027131809128655327,
+      "uncertainty": 0.443359375,
+      "value": 0.9767451286315918,
+      "total_tokens": 360,
+      "extracted_answer": "1"
+    },
+    {
+      "branch_id": 2,
+      "step_count": 17,
+      "score": 0.00274838903382168,
+      "uncertainty": 0.439453125,
+      "value": 0.9729297179728746,
+      "total_tokens": 354,
+      "extracted_answer": "1"
+    },
+    {
+      "branch_id": 3,
+      "step_count": 17,
+      "score": 0.00274838903382168,
+      "uncertainty": 0.470703125,
+      "value": 0.9729297179728746,
+      "total_tokens": 354,
+      "extracted_answer": "1"
+    }
+  ],
+  "correct_answer": "1",
+  "all_answers": [
+    "1",
+    "1",
+    "1",
+    "1"
+  ],
+  "hard_label": 1,
+  "soft_label": 1.0,
+  "correct_count": 4,
+  "total_answers": 4,
+  "best_of_n": "1"
+}

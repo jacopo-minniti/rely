@@ -1,0 +1,56 @@
+{
+  "timestamp": "2025-08-26T17:41:58.506178",
+  "user_question": "In right triangle $ABC$ with $\\angle B = 90^\\circ$, we have $\\sin A = 2\\cos A$.  What is $\\tan A$?",
+  "system_prompt": "The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer.",
+  "total_branches": 4,
+  "branches": [
+    {
+      "branch_id": 0,
+      "step_count": 11,
+      "score": 0.0028267884865785255,
+      "uncertainty": 0.5078125,
+      "value": 0.9922027587890625,
+      "total_tokens": 351,
+      "extracted_answer": "2"
+    },
+    {
+      "branch_id": 1,
+      "step_count": 11,
+      "score": 0.0027715160860029677,
+      "uncertainty": 0.5078125,
+      "value": 0.9922027587890625,
+      "total_tokens": 358,
+      "extracted_answer": "2"
+    },
+    {
+      "branch_id": 2,
+      "step_count": 10,
+      "score": 0.002856436320122956,
+      "uncertainty": 0.72265625,
+      "value": 0.9883269667625427,
+      "total_tokens": 346,
+      "extracted_answer": "2"
+    },
+    {
+      "branch_id": 3,
+      "step_count": 11,
+      "score": 0.002523617513361387,
+      "uncertainty": 0.6796875,
+      "value": 0.9690691251307726,
+      "total_tokens": 384,
+      "extracted_answer": "2"
+    }
+  ],
+  "correct_answer": "2",
+  "all_answers": [
+    "2",
+    "2",
+    "2",
+    "2"
+  ],
+  "hard_label": 1,
+  "soft_label": 1.0,
+  "correct_count": 4,
+  "total_answers": 4,
+  "best_of_n": "2"
+}

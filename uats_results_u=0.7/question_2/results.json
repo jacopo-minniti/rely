@@ -1,0 +1,56 @@
+{
+  "timestamp": "2025-08-26T17:33:19.170090",
+  "user_question": "At 50 miles per hour, how far would a car travel in $2\\frac{3}{4}$ hours? Express your answer as a mixed number.",
+  "system_prompt": "The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer.",
+  "total_branches": 4,
+  "branches": [
+    {
+      "branch_id": 0,
+      "step_count": 15,
+      "score": 0.0026907162232832475,
+      "uncertainty": 0.490234375,
+      "value": 0.9767299890518188,
+      "total_tokens": 363,
+      "extracted_answer": "137 \\frac{1}{2}"
+    },
+    {
+      "branch_id": 1,
+      "step_count": 19,
+      "score": 0.0018852023686122266,
+      "uncertainty": 0.490234375,
+      "value": 0.96522361272946,
+      "total_tokens": 512,
+      "extracted_answer": "137\\frac{1}{2}"
+    },
+    {
+      "branch_id": 2,
+      "step_count": 17,
+      "score": 0.0023602112962860787,
+      "uncertainty": 0.54296875,
+      "value": 0.9275630394404288,
+      "total_tokens": 393,
+      "extracted_answer": "137\\frac{1}{2}"
+    },
+    {
+      "branch_id": 3,
+      "step_count": 18,
+      "score": 0.0022730738636899633,
+      "uncertainty": 0.44140625,
+      "value": 0.9205949147944352,
+      "total_tokens": 405,
+      "extracted_answer": "137\\frac{1}{2}"
+    }
+  ],
+  "correct_answer": "137 \\frac{1}{2}",
+  "all_answers": [
+    "137 \\frac{1}{2}",
+    "137\\frac{1}{2}",
+    "137\\frac{1}{2}",
+    "137\\frac{1}{2}"
+  ],
+  "hard_label": 1,
+  "soft_label": 1.0,
+  "correct_count": 4,
+  "total_answers": 4,
+  "best_of_n": "137 \\frac{1}{2}"
+}

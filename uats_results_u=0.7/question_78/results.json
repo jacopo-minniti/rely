@@ -1,0 +1,55 @@
+{
+  "timestamp": "2025-08-26T18:00:47.855030",
+  "user_question": "What is the remainder when $129^{34}+96^{38}$ is divided by $11$?",
+  "system_prompt": "The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer.",
+  "total_branches": 4,
+  "branches": [
+    {
+      "branch_id": 0,
+      "step_count": 27,
+      "score": 0.001961585903881065,
+      "uncertainty": 0.79296875,
+      "value": 0.7630569166097343,
+      "total_tokens": 389,
+      "extracted_answer": "0"
+    },
+    {
+      "branch_id": 1,
+      "step_count": 27,
+      "score": 0.0020292076792101654,
+      "uncertainty": 0.75390625,
+      "value": 0.7568944643453918,
+      "total_tokens": 373,
+      "extracted_answer": "1"
+    },
+    {
+      "branch_id": 2,
+      "step_count": 27,
+      "score": 0.0019608664879414294,
+      "uncertainty": 0.75390625,
+      "value": 0.7568944643453918,
+      "total_tokens": 386,
+      "extracted_answer": ""
+    },
+    {
+      "branch_id": 3,
+      "step_count": 27,
+      "score": 0.0019922223997557035,
+      "uncertainty": 0.83203125,
+      "value": 0.7450911775086331,
+      "total_tokens": 374,
+      "extracted_answer": "7"
+    }
+  ],
+  "correct_answer": "9",
+  "all_answers": [
+    "0",
+    "1",
+    "7"
+  ],
+  "hard_label": 0,
+  "soft_label": 0.0,
+  "correct_count": 0,
+  "total_answers": 3,
+  "best_of_n": "0"
+}

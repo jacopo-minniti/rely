@@ -1,0 +1,56 @@
+{
+  "timestamp": "2025-08-26T17:59:06.075926",
+  "user_question": "How many elements are in the intersection of the set of all the prime numbers less than 30 and the set of all the odd numbers greater than zero?",
+  "system_prompt": "The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer.",
+  "total_branches": 4,
+  "branches": [
+    {
+      "branch_id": 0,
+      "step_count": 6,
+      "score": 0.0033713040286547516,
+      "uncertainty": 0.79296875,
+      "value": 0.9844207763671875,
+      "total_tokens": 292,
+      "extracted_answer": "9"
+    },
+    {
+      "branch_id": 1,
+      "step_count": 6,
+      "score": 0.0033466736611245844,
+      "uncertainty": 0.82421875,
+      "value": 0.9805753827095032,
+      "total_tokens": 293,
+      "extracted_answer": "9"
+    },
+    {
+      "branch_id": 2,
+      "step_count": 7,
+      "score": 0.0028121722803179975,
+      "uncertainty": 0.6015625,
+      "value": 0.8886464405804873,
+      "total_tokens": 316,
+      "extracted_answer": "9"
+    },
+    {
+      "branch_id": 3,
+      "step_count": 6,
+      "score": 0.0018331529338548173,
+      "uncertainty": 0.75,
+      "value": 0.4564550805298495,
+      "total_tokens": 249,
+      "extracted_answer": "9"
+    }
+  ],
+  "correct_answer": "9",
+  "all_answers": [
+    "9",
+    "9",
+    "9",
+    "9"
+  ],
+  "hard_label": 1,
+  "soft_label": 1.0,
+  "correct_count": 4,
+  "total_answers": 4,
+  "best_of_n": "9"
+}

@@ -1,0 +1,56 @@
+{
+  "timestamp": "2025-08-26T18:12:48.438081",
+  "user_question": "Compute $\\arcsin \\left( -\\frac{1}{2} \\right).$  Express your answer in radians.",
+  "system_prompt": "The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer.",
+  "total_branches": 4,
+  "branches": [
+    {
+      "branch_id": 0,
+      "step_count": 6,
+      "score": 0.0032441912457661414,
+      "uncertainty": 0.5859375,
+      "value": 0.9537922262552456,
+      "total_tokens": 294,
+      "extracted_answer": "-\\frac{\\pi}{6}"
+    },
+    {
+      "branch_id": 1,
+      "step_count": 6,
+      "score": 0.0032331939873059172,
+      "uncertainty": 0.5703125,
+      "value": 0.9537922262552456,
+      "total_tokens": 295,
+      "extracted_answer": "-\\frac{\\pi}{6}"
+    },
+    {
+      "branch_id": 2,
+      "step_count": 5,
+      "score": 0.002741291512839893,
+      "uncertainty": 0.6875,
+      "value": 0.9265565313398838,
+      "total_tokens": 338,
+      "extracted_answer": "-\\frac{\\pi}{6}"
+    },
+    {
+      "branch_id": 3,
+      "step_count": 4,
+      "score": 0.004098449273132035,
+      "uncertainty": 0.5625,
+      "value": 0.8647727966308594,
+      "total_tokens": 211,
+      "extracted_answer": "-\\frac{\\pi}{6}"
+    }
+  ],
+  "correct_answer": "-\\frac{\\pi}{6}",
+  "all_answers": [
+    "-\\frac{\\pi}{6}",
+    "-\\frac{\\pi}{6}",
+    "-\\frac{\\pi}{6}",
+    "-\\frac{\\pi}{6}"
+  ],
+  "hard_label": 1,
+  "soft_label": 1.0,
+  "correct_count": 4,
+  "total_answers": 4,
+  "best_of_n": "-\\frac{\\pi}{6}"
+}

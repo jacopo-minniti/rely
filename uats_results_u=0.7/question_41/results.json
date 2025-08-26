@@ -1,0 +1,56 @@
+{
+  "timestamp": "2025-08-26T17:49:49.147021",
+  "user_question": "For how many two-digit primes is the sum of the digits equal to 8?",
+  "system_prompt": "The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer.",
+  "total_branches": 4,
+  "branches": [
+    {
+      "branch_id": 0,
+      "step_count": 10,
+      "score": 0.0005488975672865331,
+      "uncertainty": 0.89453125,
+      "value": 0.34964775036152157,
+      "total_tokens": 637,
+      "extracted_answer": "3"
+    },
+    {
+      "branch_id": 1,
+      "step_count": 9,
+      "score": 0.0004872742154478378,
+      "uncertainty": 0.76953125,
+      "value": 0.33865557973624727,
+      "total_tokens": 695,
+      "extracted_answer": "3"
+    },
+    {
+      "branch_id": 2,
+      "step_count": 11,
+      "score": 0.0005241647973682132,
+      "uncertainty": 0.5078125,
+      "value": 0.33598963511302465,
+      "total_tokens": 641,
+      "extracted_answer": "3"
+    },
+    {
+      "branch_id": 3,
+      "step_count": 11,
+      "score": 0.0003508774995192927,
+      "uncertainty": 0.640625,
+      "value": 0.2357896796769647,
+      "total_tokens": 672,
+      "extracted_answer": "3"
+    }
+  ],
+  "correct_answer": "3",
+  "all_answers": [
+    "3",
+    "3",
+    "3",
+    "3"
+  ],
+  "hard_label": 1,
+  "soft_label": 1.0,
+  "correct_count": 4,
+  "total_answers": 4,
+  "best_of_n": "3"
+}

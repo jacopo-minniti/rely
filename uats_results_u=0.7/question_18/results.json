@@ -1,0 +1,56 @@
+{
+  "timestamp": "2025-08-26T18:08:39.699274",
+  "user_question": "Find $k$, if ${(3^k)}^6=3^6$.",
+  "system_prompt": "The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer.",
+  "total_branches": 4,
+  "branches": [
+    {
+      "branch_id": 0,
+      "step_count": 5,
+      "score": 0.004373060918487279,
+      "uncertainty": 0.53125,
+      "value": 0.988311767578125,
+      "total_tokens": 226,
+      "extracted_answer": "1"
+    },
+    {
+      "branch_id": 1,
+      "step_count": 5,
+      "score": 0.004241681405914699,
+      "uncertainty": 0.51953125,
+      "value": 0.988311767578125,
+      "total_tokens": 233,
+      "extracted_answer": "1"
+    },
+    {
+      "branch_id": 2,
+      "step_count": 7,
+      "score": 0.003606977253934763,
+      "uncertainty": 0.60546875,
+      "value": 0.988311767578125,
+      "total_tokens": 274,
+      "extracted_answer": "1"
+    },
+    {
+      "branch_id": 3,
+      "step_count": 6,
+      "score": 0.0015733114545055005,
+      "uncertainty": 0.5078125,
+      "value": 0.6072982214391232,
+      "total_tokens": 386,
+      "extracted_answer": "1"
+    }
+  ],
+  "correct_answer": "1",
+  "all_answers": [
+    "1",
+    "1",
+    "1",
+    "1"
+  ],
+  "hard_label": 1,
+  "soft_label": 1.0,
+  "correct_count": 4,
+  "total_answers": 4,
+  "best_of_n": "1"
+}

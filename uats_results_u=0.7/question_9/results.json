@@ -1,0 +1,56 @@
+{
+  "timestamp": "2025-08-26T17:51:36.899043",
+  "user_question": "The quadratic $x^2+(2.6)x+3.6$ can be written in the form $(x+b)^2+c$, where $b$ and $c$ are constants. What is $b+c$ (as a decimal)?",
+  "system_prompt": "The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer.",
+  "total_branches": 4,
+  "branches": [
+    {
+      "branch_id": 0,
+      "step_count": 23,
+      "score": 1.4495810333140478e-06,
+      "uncertainty": 0.87109375,
+      "value": 0.0010987824232520482,
+      "total_tokens": 758,
+      "extracted_answer": "831.2"
+    },
+    {
+      "branch_id": 1,
+      "step_count": 23,
+      "score": 1.4495810333140478e-06,
+      "uncertainty": 0.87109375,
+      "value": 0.0010987824232520482,
+      "total_tokens": 758,
+      "extracted_answer": "2.8"
+    },
+    {
+      "branch_id": 2,
+      "step_count": 23,
+      "score": 1.0354351387685236e-06,
+      "uncertainty": 0.94140625,
+      "value": 0.0007962496217129946,
+      "total_tokens": 769,
+      "extracted_answer": "2.8"
+    },
+    {
+      "branch_id": 3,
+      "step_count": 23,
+      "score": 5.826082101029738e-07,
+      "uncertainty": 0.81640625,
+      "value": 0.0004486083217792898,
+      "total_tokens": 770,
+      "extracted_answer": "2"
+    }
+  ],
+  "correct_answer": "3.21",
+  "all_answers": [
+    "831.2",
+    "2.8",
+    "2.8",
+    "2"
+  ],
+  "hard_label": 0,
+  "soft_label": 0.0,
+  "correct_count": 0,
+  "total_answers": 4,
+  "best_of_n": "831.2"
+}

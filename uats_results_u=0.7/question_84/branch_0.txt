@@ -1,0 +1,58 @@
+Step count: 22
+Score: 0.0026
+Uncertainty: 0.59375
+Value: 0.9464
+Total tokens: 364
+
+--- Branch Text ---
+<|im_start|>system
+The following are questions about mathematics. Think step by step and provide your answer in the format '\boxed{}' with inside your final answer.<|im_end|>
+<|im_start|>user
+Jim and Martha are standing together at the corner of a rectangular field. Jim walks diagonally across the field. Martha gets to the same location by walking along its length and width. The field is 300 feet wide and 400 feet long. How many feet less than Martha does Jim walk?<|im_end|>
+<|im_start|>assistant
+To solve this problem, we need to calculate the distance walked by both Jim and Martha.
+
+First, let's determine the diagonal distance Jim walks. The diagonal across the rectangle can be found using the Pythagorean theorem:
+
+\[ d = \sqrt{a^2 + b^2} \]
+where \( a \) is the width (300 feet), and \( b \) is the length (400 feet).
+
+\[ d = \sqrt{300^2 + 400^2} \]
+
+Calculate the squares:
+
+\[ 300^2 = 90000 \]
+\[ 400^2 = 160000 \]
+
+Add them up:
+
+\[ 90000 + 160000 = 250000 \]
+
+Take the square root:
+
+\[ d = \sqrt{250000} \approx 500 \text{ feet} \]
+
+Next, for Martha, she walks along both dimensions of the rectangle:
+
+Distance along the length:
+
+\[ L = 400 \text{ feet} \]
+
+Distance along the width:
+
+\[ W = 300 \text{ feet} \]
+
+Total distance traveled by Martha:
+
+\[ d_M = 400 + 300 = 700 \text{ feet} \]
+
+Now, find how much less distance Jim walks compared to Martha:
+
+\[ \text{Difference} = d_M - d \]
+
+Substitute the values:
+
+\[ \text{Difference} = 700 - 500 = 200 \text{ feet} \]
+
+Thus, Jim walks **200 feet** less than Martha.<|im_end|>## Final Answer
+\[\boxed{200}\]<|im_end|>

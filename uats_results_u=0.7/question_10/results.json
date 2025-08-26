@@ -1,0 +1,56 @@
+{
+  "timestamp": "2025-08-26T17:54:05.562448",
+  "user_question": "Consider the rectangular region with the following points as vertices: $$(5,4), (-5,4), (-5,-4), (5,-4).$$ How many points with integer coordinates will be strictly in the interior of this rectangular region?",
+  "system_prompt": "The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer.",
+  "total_branches": 4,
+  "branches": [
+    {
+      "branch_id": 0,
+      "step_count": 15,
+      "score": 0.00044821865977710026,
+      "uncertainty": 0.390625,
+      "value": 0.1694266533957439,
+      "total_tokens": 378,
+      "extracted_answer": "63"
+    },
+    {
+      "branch_id": 1,
+      "step_count": 16,
+      "score": 0.00041023402759260023,
+      "uncertainty": 0.5234375,
+      "value": 0.1694266533957439,
+      "total_tokens": 413,
+      "extracted_answer": "63"
+    },
+    {
+      "branch_id": 2,
+      "step_count": 16,
+      "score": 0.000408997121407597,
+      "uncertainty": 0.6015625,
+      "value": 0.16809781689852238,
+      "total_tokens": 411,
+      "extracted_answer": "63"
+    },
+    {
+      "branch_id": 3,
+      "step_count": 16,
+      "score": 0.0004109843160361114,
+      "uncertainty": 0.53125,
+      "value": 0.16809258525876955,
+      "total_tokens": 409,
+      "extracted_answer": "63"
+    }
+  ],
+  "correct_answer": "63",
+  "all_answers": [
+    "63",
+    "63",
+    "63",
+    "63"
+  ],
+  "hard_label": 1,
+  "soft_label": 1.0,
+  "correct_count": 4,
+  "total_answers": 4,
+  "best_of_n": "63"
+}

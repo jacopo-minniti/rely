@@ -1,0 +1,56 @@
+{
+  "timestamp": "2025-08-26T18:10:25.184071",
+  "user_question": "What is the maximum value of $4(x + 7)(2 - x)$, over all real numbers $x$?",
+  "system_prompt": "The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer.",
+  "total_branches": 4,
+  "branches": [
+    {
+      "branch_id": 0,
+      "step_count": 28,
+      "score": 0.001570239335072789,
+      "uncertainty": 0.6171875,
+      "value": 0.9578459943944012,
+      "total_tokens": 610,
+      "extracted_answer": "81"
+    },
+    {
+      "branch_id": 1,
+      "step_count": 30,
+      "score": 0.0015378039200051698,
+      "uncertainty": 0.66015625,
+      "value": 0.9503628225631949,
+      "total_tokens": 618,
+      "extracted_answer": "81"
+    },
+    {
+      "branch_id": 2,
+      "step_count": 29,
+      "score": 0.0015392215230042143,
+      "uncertainty": 0.435546875,
+      "value": 0.9466212366475918,
+      "total_tokens": 615,
+      "extracted_answer": "81"
+    },
+    {
+      "branch_id": 3,
+      "step_count": 28,
+      "score": 0.0006695495231394651,
+      "uncertainty": 0.640625,
+      "value": 0.4137816053001894,
+      "total_tokens": 618,
+      "extracted_answer": "81"
+    }
+  ],
+  "correct_answer": "81",
+  "all_answers": [
+    "81",
+    "81",
+    "81",
+    "81"
+  ],
+  "hard_label": 1,
+  "soft_label": 1.0,
+  "correct_count": 4,
+  "total_answers": 4,
+  "best_of_n": "81"
+}

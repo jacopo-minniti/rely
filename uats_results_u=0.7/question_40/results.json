@@ -1,0 +1,56 @@
+{
+  "timestamp": "2025-08-26T17:47:53.577490",
+  "user_question": "Evaluate $\\lceil{\\sqrt{20}}\\rceil^2$.",
+  "system_prompt": "The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer.",
+  "total_branches": 4,
+  "branches": [
+    {
+      "branch_id": 0,
+      "step_count": 4,
+      "score": 0.004938065378289474,
+      "uncertainty": 0.65625,
+      "value": 0.938232421875,
+      "total_tokens": 190,
+      "extracted_answer": "25"
+    },
+    {
+      "branch_id": 1,
+      "step_count": 6,
+      "score": 2.7442009830615537e-06,
+      "uncertainty": 0.58203125,
+      "value": 0.0008095392900031584,
+      "total_tokens": 295,
+      "extracted_answer": "25"
+    },
+    {
+      "branch_id": 2,
+      "step_count": 7,
+      "score": 2.5105995719574695e-06,
+      "uncertainty": 0.53125,
+      "value": 0.0007556904711591983,
+      "total_tokens": 301,
+      "extracted_answer": "25"
+    },
+    {
+      "branch_id": 3,
+      "step_count": 6,
+      "score": 1.0769999410816429e-06,
+      "uncertainty": 0.5703125,
+      "value": 0.0003489479809104523,
+      "total_tokens": 324,
+      "extracted_answer": "25"
+    }
+  ],
+  "correct_answer": "25",
+  "all_answers": [
+    "25",
+    "25",
+    "25",
+    "25"
+  ],
+  "hard_label": 1,
+  "soft_label": 1.0,
+  "correct_count": 4,
+  "total_answers": 4,
+  "best_of_n": "25"
+}

@@ -1,0 +1,56 @@
+{
+  "timestamp": "2025-08-26T17:46:56.790603",
+  "user_question": "In a certain isosceles right triangle, the altitude to the hypotenuse has length $4\\sqrt{2}$.  What is the area of the triangle?",
+  "system_prompt": "The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer.",
+  "total_branches": 4,
+  "branches": [
+    {
+      "branch_id": 0,
+      "step_count": 18,
+      "score": 5.217175064301114e-05,
+      "uncertainty": 0.6328125,
+      "value": 0.026190218822791593,
+      "total_tokens": 502,
+      "extracted_answer": "32"
+    },
+    {
+      "branch_id": 1,
+      "step_count": 16,
+      "score": 6.755039599023807e-05,
+      "uncertainty": 0.83203125,
+      "value": 0.025196297704358796,
+      "total_tokens": 373,
+      "extracted_answer": "32"
+    },
+    {
+      "branch_id": 2,
+      "step_count": 17,
+      "score": 4.584651505161436e-05,
+      "uncertainty": 0.52734375,
+      "value": 0.024298652977355614,
+      "total_tokens": 530,
+      "extracted_answer": "32"
+    },
+    {
+      "branch_id": 3,
+      "step_count": 18,
+      "score": 4.921215327160897e-05,
+      "uncertainty": 0.8046875,
+      "value": 0.024212379409631613,
+      "total_tokens": 492,
+      "extracted_answer": "32"
+    }
+  ],
+  "correct_answer": "32",
+  "all_answers": [
+    "32",
+    "32",
+    "32",
+    "32"
+  ],
+  "hard_label": 1,
+  "soft_label": 1.0,
+  "correct_count": 4,
+  "total_answers": 4,
+  "best_of_n": "32"
+}

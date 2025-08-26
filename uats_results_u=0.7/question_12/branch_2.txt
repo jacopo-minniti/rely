@@ -1,0 +1,62 @@
+Step count: 17
+Score: 0.0020
+Uncertainty: 0.318359375
+Value: 0.7603
+Total tokens: 386
+
+--- Branch Text ---
+<|im_start|>system
+The following are questions about mathematics. Think step by step and provide your answer in the format '\boxed{}' with inside your final answer.<|im_end|>
+<|im_start|>user
+The 7th and 8th grades have enrollments of 520 and 650 respectively. The two grades have a total of 18 representatives on the Student Council. How many representatives should the 8th grade have if there is to be a fair representation of the two grades?<|im_end|>
+<|im_start|>assistant
+To determine how many representatives the 8th grade should have, we need to ensure that the number of representatives from each grade fairly reflects their respective enrollments in proportion to the total enrollment.
+
+First, let's define:
+- \( r_7 \) as the number of representatives for the 7th grade.
+- \( r_8 \) as the number of representatives for the 8th grade.
+
+We know the following:
+- Total number of representatives: \( r_7 + r_8 = 18 \)
+- Enrollments: 7th grade has 520 students, and 8th grade has 650 students.
+
+The fair allocation requires that the ratio of representatives from each grade to the total number of students in that grade approximates this ratio:
+
+\[
+\frac{r_7}{520} = \frac{r_8}{650}
+\]
+
+Let’s denote the proportionality constant by \( k \):
+
+\[
+r_7 = 520k, \quad r_8 = 650k
+\]
+
+Substituting these into the total representative equation:
+
+\[
+520k + 650k = 18
+\]
+
+Combine like terms:
+
+\[
+1170k = 18
+\]
+
+Now, solve for \( k \):
+
+\[
+k = \frac{18}{1170} = \frac{3}{195} = \frac{1}{65}
+\]
+
+Now substitute back to find \( r_8 \):
+
+\[
+r_8 = 650k = 650 \times \frac{1}{65} = 10
+\]
+
+Thus, the number of representatives the 8th grade should have is 
+
+\(\boxed{10}\)<|im_end|>## Final Answer
+\(\boxed{10}\)<|im_end|>

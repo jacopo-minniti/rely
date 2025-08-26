@@ -1,0 +1,56 @@
+{
+  "timestamp": "2025-08-26T18:02:57.970001",
+  "user_question": "Determine the number of ways to arrange the letters of the word ELLIPSE.",
+  "system_prompt": "The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer.",
+  "total_branches": 4,
+  "branches": [
+    {
+      "branch_id": 0,
+      "step_count": 8,
+      "score": 0.0015359917980324674,
+      "uncertainty": 0.70703125,
+      "value": 0.6420445715775713,
+      "total_tokens": 418,
+      "extracted_answer": "420"
+    },
+    {
+      "branch_id": 1,
+      "step_count": 8,
+      "score": 0.0015410520119755336,
+      "uncertainty": 0.703125,
+      "value": 0.6395365849698464,
+      "total_tokens": 415,
+      "extracted_answer": "420"
+    },
+    {
+      "branch_id": 2,
+      "step_count": 8,
+      "score": 0.00152634029825739,
+      "uncertainty": 0.7734375,
+      "value": 0.6395365849698464,
+      "total_tokens": 419,
+      "extracted_answer": "420"
+    },
+    {
+      "branch_id": 3,
+      "step_count": 9,
+      "score": 0.001622864975446981,
+      "uncertainty": 0.6796875,
+      "value": 0.6345402053997695,
+      "total_tokens": 391,
+      "extracted_answer": "420"
+    }
+  ],
+  "correct_answer": "1260",
+  "all_answers": [
+    "420",
+    "420",
+    "420",
+    "420"
+  ],
+  "hard_label": 0,
+  "soft_label": 0.0,
+  "correct_count": 0,
+  "total_answers": 4,
+  "best_of_n": "420"
+}

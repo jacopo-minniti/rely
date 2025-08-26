@@ -1,0 +1,56 @@
+{
+  "timestamp": "2025-08-26T18:08:13.689128",
+  "user_question": "A square and a regular heptagon  are coplanar and share a common side $\\overline{AD}$, as shown. What is the degree measure of angle $BAC$?  Express your answer as a common fraction.\n\n[asy]\nfor(int i=0; i <=7; ++i) {\ndraw(dir(360*i/7+90)--dir(360*(i+1)/7+90));\n}\npair A = dir(360*3/7+90);\npair F = dir(360*4/7+90);\npair C = A+dir(90)*(F-A);\npair D = C+F-A;\npair B = dir(360*2/7+90);\n\ndraw(A--C--D--F);\n\nlabel(\"$A$\",A,S);\nlabel(\"$B$\",B,W);\nlabel(\"$C$\",C,SE);\nlabel(\"$D$\",F,S);\n\n[/asy]",
+  "system_prompt": "The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer.",
+  "total_branches": 4,
+  "branches": [
+    {
+      "branch_id": 0,
+      "step_count": 14,
+      "score": 0.00010382160323575725,
+      "uncertainty": 0.92578125,
+      "value": 0.04381271656548956,
+      "total_tokens": 422,
+      "extracted_answer": "\\frac{90}{360}"
+    },
+    {
+      "branch_id": 1,
+      "step_count": 14,
+      "score": 5.667381993535626e-05,
+      "uncertainty": 0.96484375,
+      "value": 0.027486802668647788,
+      "total_tokens": 485,
+      "extracted_answer": "\\frac{2}{7}"
+    },
+    {
+      "branch_id": 2,
+      "step_count": 14,
+      "score": 5.0805133953066533e-05,
+      "uncertainty": 0.96484375,
+      "value": 0.025554982378392467,
+      "total_tokens": 503,
+      "extracted_answer": "45^\\circ"
+    },
+    {
+      "branch_id": 3,
+      "step_count": 14,
+      "score": 4.683131431335453e-05,
+      "uncertainty": 0.98046875,
+      "value": 0.02037162172630922,
+      "total_tokens": 435,
+      "extracted_answer": "\\frac{1}{2}"
+    }
+  ],
+  "correct_answer": "\\frac{270}7\\text{ degrees}",
+  "all_answers": [
+    "\\frac{90}{360}",
+    "\\frac{2}{7}",
+    "45^\\circ",
+    "\\frac{1}{2}"
+  ],
+  "hard_label": 0,
+  "soft_label": 0.0,
+  "correct_count": 0,
+  "total_answers": 4,
+  "best_of_n": "\\frac{90}{360}"
+}

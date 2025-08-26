@@ -1,0 +1,56 @@
+{
+  "timestamp": "2025-08-26T17:58:06.206658",
+  "user_question": "The 7th and 8th grades have enrollments of 520 and 650 respectively. The two grades have a total of 18 representatives on the Student Council. How many representatives should the 8th grade have if there is to be a fair representation of the two grades?",
+  "system_prompt": "The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer.",
+  "total_branches": 4,
+  "branches": [
+    {
+      "branch_id": 0,
+      "step_count": 18,
+      "score": 0.0018753476594770137,
+      "uncertainty": 0.671875,
+      "value": 0.7632664974071446,
+      "total_tokens": 407,
+      "extracted_answer": "10"
+    },
+    {
+      "branch_id": 1,
+      "step_count": 18,
+      "score": 0.0017152056121508866,
+      "uncertainty": 0.734375,
+      "value": 0.7632664974071446,
+      "total_tokens": 445,
+      "extracted_answer": "10"
+    },
+    {
+      "branch_id": 2,
+      "step_count": 17,
+      "score": 0.001969650227076808,
+      "uncertainty": 0.318359375,
+      "value": 0.760284987651648,
+      "total_tokens": 386,
+      "extracted_answer": "10"
+    },
+    {
+      "branch_id": 3,
+      "step_count": 20,
+      "score": 0.0016172348002942186,
+      "uncertainty": 0.44921875,
+      "value": 0.7309901297329868,
+      "total_tokens": 452,
+      "extracted_answer": "10"
+    }
+  ],
+  "correct_answer": "10",
+  "all_answers": [
+    "10",
+    "10",
+    "10",
+    "10"
+  ],
+  "hard_label": 1,
+  "soft_label": 1.0,
+  "correct_count": 4,
+  "total_answers": 4,
+  "best_of_n": "10"
+}

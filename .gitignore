@@ -13,6 +13,7 @@ prm-v2/
 last_run_prepared/
 wandb/
 outputs/
+uats_results_u=0.7
 
 *.pdf
 *.jsonl

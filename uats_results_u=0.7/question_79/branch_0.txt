@@ -1,0 +1,58 @@
+Step count: 11
+Score: 0.0009
+Uncertainty: 0.65234375
+Value: 0.3483
+Total tokens: 380
+
+--- Branch Text ---
+<|im_start|>system
+The following are questions about mathematics. Think step by step and provide your answer in the format '\boxed{}' with inside your final answer.<|im_end|>
+<|im_start|>user
+How many positive two-digit integers are factors of both 100 and 150?<|im_end|>
+<|im_start|>assistant
+To determine how many positive two-digit integers are factors of both 100 and 150, we start by finding the greatest common divisor (GCD) of 100 and 150. Using the Euclidean algorithm:
+
+\[
+150 = 1 \cdot 100 + 50 \\
+100 = 2 \cdot 50 + 0
+\]
+
+Thus,
+
+\[
+\text{GCD}(100, 150) = 50.
+\]
+
+Next, we identify all positive two-digit numbers that are multiples of \(50\). These numbers can be written as \(50k\) where \(k\) is a positive integer.
+
+We need to find which values of \(k\) produce a number between 10 and 99 inclusive:
+\[
+10 < 50k \leq 99.
+\]
+Dividing the inequality by 50:
+\[
+0.2 < k \leq 1.98.
+\]
+
+Since \(k\) must be an integer, the possible values for \(k\) are \(1\) and \(2\).
+
+Calculating these values:
+- For \(k=1\),
+\[
+50k = 50 \times 1 = 50,
+\]
+which is indeed between 10 and 99.
+
+- For \(k=2\),
+\[
+50k = 50 \times 2 = 100,
+\]
+but \(100\) exceeds our upper limit so it is not included.
+
+Therefore, the only positive two-digit integers that are factors of both 100 and 150 are **50**.
+
+Finally, we box the answer:
+\[
+\boxed{1}
+\]<|im_end|>## Final Answer
+\(\boxed{1}\)<|im_end|>
