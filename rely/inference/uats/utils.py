@@ -12,79 +12,9 @@ from .config import UATSConfig, Branch
 from .guided_tree_search import GuidedTreeSearch
 from .uncertainty_model import UATSUncertaintyModel
 from .value_model import UATSValueModel
-from rely.utils.text_utils import MATH_SYSTEM_PROMPT, normalize_answer
+from rely.utils import MATH_SYSTEM_PROMPT, normalize_answer, extract_final_answer
 
 logger = logging.getLogger(__name__)
-
-
-# -----------------------------------------------------------------------------
-# Small helpers / utilities
-# -----------------------------------------------------------------------------
-
-def normalize_answer(answer: str) -> str:
-    """
-    Normalize an answer for comparison by:
-    - Converting to lowercase
-    - Removing all whitespace (spaces, tabs, newlines)
-    - Removing common punctuation that doesn't affect mathematical meaning
-    - Handling special cases like fractions, decimals, etc.
-    """
-    if not answer or answer == "?":
-        return answer
-    
-    # Convert to string and lowercase
-    normalized = str(answer).lower()
-    
-    # Remove all whitespace
-    normalized = re.sub(r'\s+', '', normalized)
-    
-    # Remove common punctuation that doesn't affect meaning
-    # Keep mathematical operators and decimal points
-    normalized = re.sub(r'[,;:()[\]{}"]', '', normalized)
-    
-    # Handle common mathematical expressions
-    # Convert fractions like "1/2" to consistent format
-    normalized = re.sub(r'(\d+)/(\d+)', r'\1/\2', normalized)
-    
-    # Remove trailing zeros after decimal point
-    if '.' in normalized:
-        normalized = normalized.rstrip('0').rstrip('.')
-    
-    return normalized
-
-
-def extract_final_answer(text: str) -> Optional[str]:
-    """
-    Finds the last \\boxed{} in a string and extracts its content,
-    correctly handling nested braces.
-    """
-    # 1. Find the starting position of the last \boxed{
-    start_marker = r'\boxed{'
-    last_box_start_pos = text.rfind(start_marker)
-
-    # If \boxed{ is not found, return None
-    if last_box_start_pos == -1:
-        return None
-
-    # 2. The actual content starts right after the marker
-    content_start_pos = last_box_start_pos + len(start_marker)
-
-    # 3. Use a counter (brace_level) to find the matching closing brace
-    brace_level = 1
-    for i in range(content_start_pos, len(text)):
-        char = text[i]
-        if char == '{':
-            brace_level += 1
-        elif char == '}':
-            brace_level -= 1
-
-        # 4. When the brace level is 0, we've found the matching brace
-        if brace_level == 0:
-            # The content is the substring between the start and this point
-            return text[content_start_pos:i]
-
-    # If the loop finishes, it means a matching closing brace was not found
-    return None
 
 
 # -----------------------------------------------------------------------------
@@ -269,7 +199,7 @@ def save_branches(
 
     logger.info(f"Saved {len(final_branches)} branches and summary to {output_path}")
 
-    _generate_tree_image(all_branches, output_path)
+    _generate_tree_image(all_branches, output_path, correct_answer=correct_answer)
 
 
 def run_uats(
@@ -330,6 +260,7 @@ def _generate_tree_image(
     branches: List[Branch],
     output_dir: Path,
     filename: str = "search_tree.png",
+    correct_answer: Optional[str] = None,
 ) -> None:
     """Render a simple tree visualisation of the explored search space using matplotlib and networkx."""
     import matplotlib.pyplot as plt
@@ -391,10 +322,8 @@ def _generate_tree_image(
             # Determine correctness
             correct = False
             # Use normalized comparison
-            if final_answer is not None and hasattr(branch, 'correct_answer') and branch.correct_answer is not None:
-                correct = normalize_answer(final_answer) == normalize_answer(branch.correct_answer)
-            elif final_answer is not None and hasattr(branch, 'expected_answer') and branch.expected_answer is not None:
-                correct = normalize_answer(final_answer) == normalize_answer(branch.expected_answer)
+            if final_answer is not None and correct_answer is not None:
+                correct = normalize_answer(final_answer) == normalize_answer(correct_answer)
             # Store correctness for coloring
             G.add_node(final_node_id, label=safe_answer, is_final_answer=True, is_correct=correct)
             G.add_edge(branch.id, final_node_id)
@@ -433,7 +362,7 @@ def _generate_tree_image(
             G, pos,
             nodelist=correct_final_nodes,
             node_shape="o",
-            node_color="green",
+            node_color="lightgreen",
             node_size=3500
         )
     if incorrect_final_nodes:
@@ -441,7 +370,7 @@ def _generate_tree_image(
             G, pos,
             nodelist=incorrect_final_nodes,
             node_shape="o",
-            node_color="red",
+            node_color="lightcoral",
             node_size=3500
         )
 
