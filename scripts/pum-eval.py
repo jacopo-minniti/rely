@@ -1,142 +1,144 @@
 import torch
-from transformers import AutoModel, AutoTokenizer, AutoModelForTokenClassification
 import torch.nn.functional as F
-from rely.utils import MATH_SYSTEM_PROMPT
+from transformers import AutoTokenizer, AutoModelForTokenClassification
+from torch.utils.data import DataLoader
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 import numpy as np
 from tqdm import tqdm
 from datasets import load_dataset
+from rely.utils import MATH_SYSTEM_PROMPT
 
-skipped = 0
+def create_collate_fn(tokenizer, separator_token="<extra_0>"):
+    """
+    Creates a collate function to process batches of data.
+    This function tokenizes the input, finds the exact positions of the separator tokens,
+    and pads the sequences for batch processing. This is the robust method.
+    """
+    # Pre-tokenize the separator to get its ID
+    separator_id = tokenizer.encode(separator_token, add_special_tokens=False)[0]
 
-def make_step_rewards(logits, token_masks):
-    # Get probabilities from logits
-    probabilities = F.softmax(logits, dim=-1)  # shape: [batch, seq_len, 2] for binary classification
-    
-    # Apply token masks to only consider step separator positions
-    masked_probs = probabilities * token_masks.unsqueeze(-1)  # [batch, seq_len, 2]
-    
-    all_scores_res = []
-    for i in range(probabilities.size(0)):  # for each batch
-        sample_probs = masked_probs[i]  # [seq_len, 2]
+    def collate_fn(batch):
+        all_input_ids = []
+        all_labels = []
+        all_score_indices = []
+
+        for sample in batch:
+            # 1. Apply the chat template to format the conversation
+            messages = [
+                {"role": "system", "content": MATH_SYSTEM_PROMPT},
+                {"role": "user", "content": sample['prompt']},
+                # Join completions with the separator token
+                {"role": "assistant", "content": separator_token.join(sample['completions']) + separator_token},
+            ]
+            conversation_str = tokenizer.apply_chat_template(
+                messages, 
+                tokenize=False, 
+                add_generation_prompt=False
+            )
+            
+            # 2. Tokenize the entire conversation string
+            input_ids = tokenizer.encode(conversation_str, add_special_tokens=False)
+            
+            # 3. Find the exact indices of the separator token
+            # This is the robust part: we find indices by ID, not by decoding strings
+            score_indices = [i for i, token_id in enumerate(input_ids) if token_id == separator_id]
+
+            # 4. Important Check: Ensure the number of found separators matches the number of labels
+            # This check replaces the old "skipped" logic.
+            if len(score_indices) == len(sample['labels']):
+                all_input_ids.append(torch.tensor(input_ids, dtype=torch.long))
+                all_labels.append(sample['labels'])
+                all_score_indices.append(score_indices)
+            # Silently skip if there's a mismatch, though this should be rare now.
+            else:
+                print("Skipped one sample...")
+
+        if not all_input_ids:
+            return None
+
+        # 5. Pad the sequences to the same length for batching
+        padded_input_ids = torch.nn.utils.rnn.pad_sequence(
+            all_input_ids, 
+            batch_first=True, 
+            padding_value=tokenizer.pad_token_id
+        )
+        attention_mask = (padded_input_ids != tokenizer.pad_token_id)
+
+        return {
+            'input_ids': padded_input_ids,
+            'attention_mask': attention_mask,
+            'labels': all_labels,
+            'score_indices': all_score_indices
+        }
         
-        # Find positions where we have step separators
-        step_positions = torch.where(token_masks[i])[0]
-        
-        # For binary classification, extract the positive class probability (index 1)
-        step_rewards = []
-        for pos in step_positions:
-            pos_probs = sample_probs[pos]  # [2]
-            positive_prob = pos_probs[1].item()  # probability of positive class
-            step_rewards.append(positive_prob)
-        
-        all_scores_res.append(step_rewards)
-    
-    return all_scores_res
+    return collate_fn
 
 
-model_name = "jacopo-minniti/PUM-Qwen2.5-Math-7B-PP-1"
-device = "auto"
+def evaluate_dataset(dataset, tokenizer, model, batch_size=8):
+    """
+    Evaluate the model on the entire dataset using the robust batching method.
+    """
+    # Use the robust collate function with a DataLoader
+    collate_fn = create_collate_fn(tokenizer)
+    dataloader = DataLoader(dataset, batch_size=batch_size, collate_fn=collate_fn)
 
-tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-model = AutoModelForTokenClassification.from_pretrained(
-    model_name, 
-    device_map=device, 
-    torch_dtype=torch.bfloat16,
-    trust_remote_code=True,
-).eval()
-
-
-def process_sample(sample, tokenizer, model):
-    """Process a single sample and return predictions and labels"""
-    
-    messages = [
-        {"role": "system", "content": MATH_SYSTEM_PROMPT},
-        {"role": "user", "content": sample['prompt']},
-        {"role": "assistant", "content": "\n\n".join(sample['completions']) + "\n\n"},
-    ]
-    conversation_str = tokenizer.apply_chat_template(
-        messages, 
-        tokenize=False, 
-        add_generation_prompt=False
-    )
-
-    input_ids = tokenizer.encode(
-        conversation_str, 
-        return_tensors="pt", 
-    ).to(model.device)
-
-    with torch.no_grad():
-        outputs = model(input_ids=input_ids)
-
-    # Find tokens that contain step separators (\n\n)
-    token_masks = torch.zeros_like(input_ids, dtype=torch.bool)
-    for i, token_id in enumerate(input_ids[0]):
-        decoded = tokenizer.decode([token_id])
-        if '\n\n' in decoded:
-            token_masks[0, i] = True
-
-    step_rewards = make_step_rewards(outputs.logits, token_masks)
-    
-    # Get the predictions (probabilities for positive class)
-    predictions = step_rewards[0] if step_rewards and step_rewards[0] else []
-    
-    # Get the labels
-    labels = sample['labels']
-    
-    # Ensure we have the same number of predictions and labels
-    min_len = min(len(predictions), len(labels))
-    if len(predictions) != len(labels):
-        global skipped
-        skipped += 1
-        return None, None
-    
-    predictions = predictions[:min_len]
-    labels = labels[:min_len]
-    
-    return predictions, labels
-
-
-def evaluate_dataset(dataset, tokenizer, model):
-    """Evaluate the model on the entire dataset"""
     all_predictions = []
     all_labels = []
     all_probabilities = []
     
-    print(f"Evaluating {len(dataset)} samples...")
+    print(f"Evaluating {len(dataset)} samples with batch size {batch_size}...")
     
-    for sample in tqdm(dataset):
-        predictions, labels = process_sample(sample, tokenizer, model)
-        
-        if predictions and labels:  # Only add if we have valid predictions and labels
-            all_probabilities.extend(predictions)  # Raw probabilities for AUROC
-            all_predictions.extend([1 if p > 0.5 else 0 for p in predictions])  # Binary predictions
-            all_labels.extend([1 if label else 0 for label in labels])  # Convert boolean to int
-    
+    model.eval()
+    with torch.no_grad():
+        for batch in tqdm(dataloader):
+            if batch is None: # Skip empty batches that might result from filtering
+                continue
+
+            input_ids = batch['input_ids'].to(model.device)
+            attention_mask = batch['attention_mask'].to(model.device)
+            
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+            logits = outputs.logits # Shape: [batch_size, seq_len, num_classes]
+
+            # Get probabilities for the relevant tokens
+            probabilities = F.softmax(logits, dim=-1)
+
+            # Iterate through each sample in the batch
+            for i in range(len(batch['labels'])):
+                score_indices = batch['score_indices'][i]
+                labels = batch['labels'][i]
+                
+                # Extract the probabilities ONLY at the separator token locations
+                # This is precise because we pre-calculated the indices.
+                step_probs = probabilities[i, score_indices, :] # Shape: [num_steps, num_classes]
+                
+                # Get the probability of the positive class (class 1)
+                positive_probs = step_probs[:, 1].cpu().tolist()
+                
+                all_probabilities.extend(positive_probs)
+                all_predictions.extend([1 if p > 0.5 else 0 for p in positive_probs])
+                all_labels.extend([1 if label else 0 for label in labels])
+
     if not all_predictions:
         print("No valid predictions found!")
         return None
     
-    # Calculate metrics
+    # --- The rest of the function is for calculating and printing metrics, same as before ---
     accuracy = accuracy_score(all_labels, all_predictions)
     f1 = f1_score(all_labels, all_predictions)
     auroc = roc_auc_score(all_labels, all_probabilities)
     
-    # Calculate diagnostic statistics
     unique_labels, label_counts = np.unique(all_labels, return_counts=True)
     unique_predictions, pred_counts = np.unique(all_predictions, return_counts=True)
     
-    # Label distribution
     label_distribution = dict(zip(unique_labels, label_counts))
     pred_distribution = dict(zip(unique_predictions, pred_counts))
     
-    # Probability statistics
     prob_mean = np.mean(all_probabilities)
     prob_std = np.std(all_probabilities)
     prob_min = np.min(all_probabilities)
     prob_max = np.max(all_probabilities)
     
-    # Prediction confidence (how far from 0.5 threshold)
     prob_distances = np.abs(np.array(all_probabilities) - 0.5)
     avg_confidence = np.mean(prob_distances)
     
@@ -148,93 +150,64 @@ def evaluate_dataset(dataset, tokenizer, model):
         'label_distribution': label_distribution,
         'prediction_distribution': pred_distribution,
         'probability_stats': {
-            'mean': prob_mean,
-            'std': prob_std,
-            'min': prob_min,
-            'max': prob_max,
-            'avg_confidence': avg_confidence
+            'mean': prob_mean, 'std': prob_std, 'min': prob_min,
+            'max': prob_max, 'avg_confidence': avg_confidence
         }
     }
 
-# Load model
-model_name = "jacopo-minniti/PUM-Qwen2.5-Math-7B-PP-1"
-device = "auto"
+# --- Main Execution ---
+if __name__ == "__main__":
+    # 1. Load Model and Tokenizer
+    model_name = "jacopo-minniti/Qwen2.5-Math-7B-PUM-nn"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-model = AutoModelForTokenClassification.from_pretrained(
-    model_name, 
-    device_map=device, 
-    torch_dtype=torch.bfloat16,
-    trust_remote_code=True,
-).eval()
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    # Add a pad token if it doesn't exist
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
-dataset = load_dataset("jacopo-minniti/MATH-PUM-qwen2.5-1.5B", "pp-1", split="test")
-# seed=42
-dataset = dataset.shuffle().select(range(1000))
+    model = AutoModelForTokenClassification.from_pretrained(
+        model_name, 
+        device_map=device, 
+        torch_dtype=torch.bfloat16,
+        trust_remote_code=True,
+    )
 
-# Evaluate the dataset
-results = evaluate_dataset(dataset, tokenizer, model)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-if results:
-    print(f"\nEvaluation Results:")
-    print(f"Number of step predictions: {results['num_samples']}")
-    print(f"Skipped samples due to length mismatch: {skipped}")
-    print(f"Accuracy: {results['accuracy']:.4f}")
-    print(f"F1 Score: {results['f1']:.4f}")
-    print(f"AUROC: {results['auroc']:.4f}")
-    
-    print(f"\n--- Diagnostic Statistics ---")
-    
-    # Label distribution
-    print(f"Ground Truth Label Distribution:")
-    for label, count in results['label_distribution'].items():
-        percentage = count / results['num_samples'] * 100
-        print(f"  Label {label}: {count} ({percentage:.1f}%)")
-    
-    # Prediction distribution
-    print(f"\nModel Prediction Distribution:")
-    for pred, count in results['prediction_distribution'].items():
-        percentage = count / results['num_samples'] * 100
-        print(f"  Prediction {pred}: {count} ({percentage:.1f}%)")
-    
-    # Probability statistics
-    prob_stats = results['probability_stats']
-    print(f"\nProbability Statistics:")
-    print(f"  Mean probability: {prob_stats['mean']:.4f}")
-    print(f"  Std deviation: {prob_stats['std']:.4f}")
-    print(f"  Min probability: {prob_stats['min']:.4f}")
-    print(f"  Max probability: {prob_stats['max']:.4f}")
-    print(f"  Average confidence (distance from 0.5): {prob_stats['avg_confidence']:.4f}")
-    
-    # Check for potential issues
-    print(f"\n--- Potential Issues Check ---")
-    
-    # Check if model is predicting only one class
-    if len(results['prediction_distribution']) == 1:
-        only_class = list(results['prediction_distribution'].keys())[0]
-        print(f"⚠️  WARNING: Model is predicting only class {only_class}!")
-    else:
-        print("✓ Model is predicting both classes")
-    
-    # Check for extreme probability bias
-    if prob_stats['mean'] > 0.8:
-        print(f"⚠️  WARNING: Mean probability is very high ({prob_stats['mean']:.3f}) - model may be overconfident in positive class")
-    elif prob_stats['mean'] < 0.2:
-        print(f"⚠️  WARNING: Mean probability is very low ({prob_stats['mean']:.3f}) - model may be overconfident in negative class")
-    else:
-        print(f"✓ Mean probability seems reasonable ({prob_stats['mean']:.3f})")
-    
-    # Check for low confidence/variance
-    if prob_stats['std'] < 0.1:
-        print(f"⚠️  WARNING: Very low probability variance ({prob_stats['std']:.3f}) - model may not be well calibrated")
-    else:
-        print(f"✓ Probability variance seems reasonable ({prob_stats['std']:.3f})")
-    
-    # Check if predictions are too close to threshold
-    if prob_stats['avg_confidence'] < 0.1:
-        print(f"⚠️  WARNING: Low average confidence ({prob_stats['avg_confidence']:.3f}) - many predictions near 0.5 threshold")
-    else:
-        print(f"✓ Average confidence seems reasonable ({prob_stats['avg_confidence']:.3f})")
+    # 2. Load Dataset
+    dataset = load_dataset("jacopo-minniti/MATH-PUM-qwen2.5-1.5B", "pp-1", split="test")
+    dataset = dataset.shuffle(seed=42).select(range(1000))
+
+    # 3. Evaluate the dataset with the new robust function
+    results = evaluate_dataset(dataset, tokenizer, model, batch_size=24) # Adjust batch size based on VRAM
+
+    # 4. Print Results
+    if results:
+        print(f"\nEvaluation Results:")
+        print(f"Number of step predictions: {results['num_samples']}")
+        print(f"Accuracy: {results['accuracy']:.4f}")
+        print(f"F1 Score: {results['f1']:.4f}")
+        print(f"AUROC: {results['auroc']:.4f}")
         
-else:
-    print("Evaluation failed - no valid predictions found.")
+        print(f"\n--- Diagnostic Statistics ---")
+        
+        print(f"Ground Truth Label Distribution:")
+        for label, count in results['label_distribution'].items():
+            percentage = count / results['num_samples'] * 100
+            print(f"  Label {label}: {count} ({percentage:.1f}%)")
+        
+        print(f"\nModel Prediction Distribution:")
+        for pred, count in results['prediction_distribution'].items():
+            percentage = count / results['num_samples'] * 100
+            print(f"  Prediction {pred}: {count} ({percentage:.1f}%)")
+        
+        prob_stats = results['probability_stats']
+        print(f"\nProbability Statistics:")
+        print(f"  Mean probability: {prob_stats['mean']:.4f}")
+        print(f"  Std deviation: {prob_stats['std']:.4f}")
+        print(f"  Min probability: {prob_stats['min']:.4f}")
+        print(f"  Max probability: {prob_stats['max']:.4f}")
+        print(f"  Average confidence (distance from 0.5): {prob_stats['avg_confidence']:.4f}")
+    else:
+        print("Evaluation failed - no valid predictions found.")
