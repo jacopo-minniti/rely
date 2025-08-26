@@ -2,6 +2,7 @@
 
 from .config import UATSConfig, Branch
 from .guided_tree_search import GuidedTreeSearch
+from .uncertainty_model import UATSUncertaintyModel
 from .value_model import UATSValueModel
 from .utils import (
     load_model_and_tokenizer,
@@ -14,6 +15,7 @@ __all__ = [
     "UATSConfig",
     "Branch",
     "GuidedTreeSearch",
+    "UATSUncertaintyModel",
     "UATSValueModel",
     "load_model_and_tokenizer",
     "create_uats_searcher",

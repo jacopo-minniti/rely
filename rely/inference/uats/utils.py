@@ -10,7 +10,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from .config import UATSConfig, Branch
 from .guided_tree_search import GuidedTreeSearch
-from .probes import load_probes
+from .uncertainty_model import UATSUncertaintyModel
 from .value_model import UATSValueModel
 from rely.utils.text_utils import MMLU_SYSTEM_PROMPT, MATH_SYSTEM_PROMPT
 import random
@@ -115,11 +115,12 @@ def extract_final_answer(text: str) -> Optional[str]:
 
 
 # -----------------------------------------------------------------------------
-# Model & probe loading helpers
+# Model loading helpers
 # -----------------------------------------------------------------------------
 
 def load_model_and_tokenizer(
     model_name: str,
+    device: str = "auto",
     max_seq_length: int = 16384,
     dtype: str = "bfloat16",
     load_in_4bit: bool = True,
@@ -144,7 +145,7 @@ def load_model_and_tokenizer(
         model_name,
         torch_dtype=torch.bfloat16 if dtype == "bfloat16" else torch.float16,
         quantization_config=quantization_config,
-        device_map="auto",
+        device_map="auto" if device == "auto" else {"": device},
         trust_remote_code=True,
         max_position_embeddings=max_seq_length if hasattr(AutoModelForCausalLM, 'config') else None,
     )
@@ -170,32 +171,20 @@ def create_uats_searcher(config: UATSConfig) -> GuidedTreeSearch:
     """Instantiate a fully-configured :class:`GuidedTreeSearch` ready to run."""
 
     logger.info(f"Loading model: {config.model_name}")
-    model, tokenizer = load_model_and_tokenizer(config.model_name)
+    model, tokenizer = load_model_and_tokenizer(config.model_name, device=config.device)
     logger.info("Model and tokenizer loaded successfully")
 
-    hidden_size = model.config.hidden_size
-    model_dtype = (
-        model.dtype if hasattr(model, "dtype") else next(model.parameters()).dtype
-    )
-
-    # Load uncertainty probe
-    logger.info(
-        f"Loading uncertainty probe (hidden_size={hidden_size}, dtype={model_dtype}, device={config.probe_device})"
-    )
+    # Load uncertainty model
+    logger.info(f"Loading uncertainty model: {config.uncertainty_model_path}")
     try:
-        uncertainty_probe, _ = load_probes(
-            hidden_size=hidden_size,
-            model_dtype=model_dtype,
-            uncertainty_probe_path=config.uncertainty_probe_path,
-            value_probe_path=None,  # We don't need the value probe anymore
-            device=config.probe_device,
+        uncertainty_model = UATSUncertaintyModel(
+            model_path=config.uncertainty_model_path,
+            device=config.uncertainty_device,
+            scoring_method=config.uncertainty_scoring_method
         )
-        logger.info("Uncertainty probe loaded successfully")
-    except FileNotFoundError as e:
-        logger.error(f"Probe file not found: {e}")
-        raise
-    except RuntimeError as e:
-        logger.error(f"Failed to load probe: {e}")
+        logger.info("Uncertainty model loaded successfully")
+    except Exception as e:
+        logger.error(f"Failed to load uncertainty model: {e}")
         raise
 
     # Load value model
@@ -214,7 +203,7 @@ def create_uats_searcher(config: UATSConfig) -> GuidedTreeSearch:
     return GuidedTreeSearch(
         model=model,
         tokenizer=tokenizer,
-        uncertainty_probe=uncertainty_probe,
+        uncertainty_model=uncertainty_model,
         value_model=value_model,
         config=config,
     )
@@ -287,11 +276,13 @@ def save_branches(
 
         extracted_answer = ""
         if branch.final_answer:
-            extracted_answer = extract_final_answer(branch.text, branch.final_answer)
-            all_answers.append(extracted_answer)
-            # Check if this answer is correct
-            if correct_answer and normalize_answer(extracted_answer) == normalize_answer(correct_answer):
-                correct_count += 1
+            full_text = branch.text + branch.final_answer
+            extracted_answer = extract_final_answer(full_text)
+            if extracted_answer:
+                all_answers.append(extracted_answer)
+                # Check if this answer is correct
+                if correct_answer and normalize_answer(extracted_answer) == normalize_answer(correct_answer):
+                    correct_count += 1
 
         summary_data["branches"].append(
             {
@@ -332,11 +323,16 @@ def run_uats(
     config: Optional[UATSConfig] = None,
     save_dir: Optional[Union[str, Path]] = "uats_results",
     correct_answer: Optional[str] = None,
+    uncertainty_threshold: Optional[float] = None,
 ) -> List[Branch]:
     """High-level one-shot helper wrapping search & persistence."""
 
     if config is None:
         config = UATSConfig()
+    
+    # Override uncertainty threshold if provided
+    if uncertainty_threshold is not None:
+        config.uncertainty_threshold = uncertainty_threshold
 
     logger.info("Creating UATS searcher…")
     searcher = create_uats_searcher(config)
@@ -344,16 +340,17 @@ def run_uats(
     final_branches, all_branches = searcher.search(user_question, system_prompt)
     logger.info(f"UATS search completed with {len(final_branches)} branches explored")
 
-    logger.info(f"Saving branches to {save_dir}")
-    save_branches(
-        final_branches,
-        all_branches,
-        save_dir,
-        max_branch_tokens=config.budget,
-        user_question=user_question,
-        system_prompt=system_prompt,
-        correct_answer=correct_answer,
-    )
+    if save_dir is not None:
+        logger.info(f"Saving branches to {save_dir}")
+        save_branches(
+            final_branches,
+            all_branches,
+            save_dir,
+            max_branch_tokens=config.budget,
+            user_question=user_question,
+            system_prompt=system_prompt,
+            correct_answer=correct_answer,
+        )
 
     return final_branches
 
@@ -417,9 +414,10 @@ def _generate_tree_image(
     # Add final answer nodes for branches that have them
     for branch in branches:
         if branch.final_answer:
-            final_answer = extract_final_answer(branch.text, branch.final_answer)
+            full_text = branch.text + branch.final_answer
+            final_answer = extract_final_answer(full_text)
             final_node_id = f"final_{branch.id}"
-            G.add_node(final_node_id, label=final_answer, is_final_answer=True)
+            G.add_node(final_node_id, label=final_answer or "No answer", is_final_answer=True)
             G.add_edge(branch.id, final_node_id)
     
     pos = nx.nx_agraph.graphviz_layout(G, prog="dot")

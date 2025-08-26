@@ -22,7 +22,9 @@ def main():
     parser.add_argument('--dataset_name', type=str, default="TIGER-Lab/MMLU-Pro", help='Dataset name')
     parser.add_argument('--split', type=str, default="validation", help='Dataset split')
     parser.add_argument('--model_name', type=str, default="Qwen/Qwen2.5-1.5B-Instruct", help='Model name')
-    parser.add_argument('--uncertainty_probe_path', type=str, default="models/c_uncertainty_probe.pth", help='Path to uncertainty probe')
+    parser.add_argument('--uncertainty_model_path', type=str, default="models/uncertainty_model", help='Path to uncertainty model')
+    parser.add_argument('--uncertainty_scoring_method', type=str, default="last_step", choices=["product", "minimum", "average", "last_step"], help='Uncertainty scoring method')
+    parser.add_argument('--uncertainty_threshold', type=float, default=0.5, help='Uncertainty threshold for branching')
     parser.add_argument('--value_model_path', type=str, default="Qwen/Qwen2.5-Math-PRM-7B", help='HuggingFace path to value model')
     parser.add_argument('--value_scoring_method', type=str, default="product", choices=["product", "minimum", "average", "last_step"], help='Value scoring method')
     parser.add_argument('--budget', type=int, default=4000, help='Token budget')
@@ -30,6 +32,11 @@ def main():
     parser.add_argument('--beam_width', type=int, default=4, help='Beam width')
     parser.add_argument('--temperature', type=float, default=1.0, help='Temperature')
     parser.add_argument('--base_save_dir', type=str, default="uats_results", help='Base directory for saving results')
+    
+    # Device configuration arguments
+    parser.add_argument('--device', type=str, default="cuda:0", help='Device for policy/generation model')
+    parser.add_argument('--uncertainty_device', type=str, default="cuda:1", help='Device for uncertainty model')
+    parser.add_argument('--value_device', type=str, default="cuda:2", help='Device for value model')
     
     args = parser.parse_args()
     
@@ -66,14 +73,18 @@ def main():
             system_prompt=MMLU_SYSTEM_PROMPT,
             config=UATSConfig(
                 model_name=args.model_name,
-                uncertainty_probe_path=args.uncertainty_probe_path,
+                uncertainty_model_path=args.uncertainty_model_path,
+                uncertainty_scoring_method=args.uncertainty_scoring_method,
                 value_model_path=args.value_model_path,
                 value_scoring_method=args.value_scoring_method,
                 budget=args.budget,
-                uncertainty_threshold=0.5,
+                uncertainty_threshold=args.uncertainty_threshold,
                 max_step_tokens=args.max_step_tokens,
                 beam_width=args.beam_width,
                 temperature=args.temperature,
+                device=args.device,
+                uncertainty_device=args.uncertainty_device,
+                value_device=args.value_device,
             ),
             save_dir=question_save_dir,
             correct_answer=answer

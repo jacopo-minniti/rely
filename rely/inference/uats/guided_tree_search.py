@@ -7,12 +7,12 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers.generation.stopping_criteria import StopStringCriteria
 
 from .config import UATSConfig, Branch
-from .probes import MLPProbe
+from .uncertainty_model import UATSUncertaintyModel
 from .value_model import UATSValueModel
 from rely.utils.text_utils import (
     count_tokens_after_marker,
     format_prompt,
-    MMLU_SYSTEM_PROMPT,
+    MATH_SYSTEM_PROMPT,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,14 +41,14 @@ class GuidedTreeSearch:
         self,
         model: AutoModelForCausalLM,
         tokenizer: AutoTokenizer,
-        uncertainty_probe: MLPProbe,
+        uncertainty_model: UATSUncertaintyModel,
         value_model: UATSValueModel,
         config: UATSConfig,
         question: str = "",  # Store question for value model calls
     ):
         self.model = model
         self.tokenizer = tokenizer
-        self.uncertainty_probe = uncertainty_probe
+        self.uncertainty_model = uncertainty_model
         self.value_model = value_model
         self.config = config
         self.question = question  # Store question for value estimation
@@ -176,34 +176,24 @@ class GuidedTreeSearch:
         return header + generated_answer
 
     def _get_num_branches(self, ids: torch.Tensor) -> tuple[int, float]:
-        """Compute the number of branches to sample based on the uncertainty probe.
+        """Compute the number of branches to sample based on the uncertainty model.
 
         Accepts a pre-tokenised ``ids`` tensor to avoid repeated calls to the
         tokenizer.
         """
 
+        # Get the current text for uncertainty model evaluation
         ids_tensor = ids if ids.dim() == 2 else ids.unsqueeze(0)
-        attention_mask = torch.ones_like(ids_tensor, dtype=torch.long)
+        full_text = self.tokenizer.decode(ids_tensor[0], skip_special_tokens=True)
+        reasoning_text = self._extract_reasoning_from_full_text(full_text)
 
-        with torch.no_grad():
-            outputs = self.model(
-                ids_tensor,
-                attention_mask=attention_mask,
-                output_hidden_states=True,
-            )
-            hidden_states = outputs.hidden_states[-2]
-            probe_hidden_state = hidden_states[:, -1:, :].squeeze(1)
-            uncertainty_logits = self.uncertainty_probe(probe_hidden_state)
-            
-            approx_I_score = uncertainty_logits.item()
-            # if classification, then take sigmoid
-            if self.config.uncertainty_threshold:
-                approx_I_score = torch.sigmoid(uncertainty_logits).item()
+        # Get uncertainty score from the uncertainty model
+        uncertainty_score = self.uncertainty_model.get_uncertainty(self.question, reasoning_text)
 
-        u = min(self.uncertainty_to_branches(approx_I_score, self.config.uncertainty_threshold), self.config.beam_width)
-        return u, approx_I_score
+        u = min(self.uncertainty_to_branches(uncertainty_score, self.config.uncertainty_threshold), self.config.beam_width)
+        return u, uncertainty_score
 
-    def search(self, user_question: str, system_prompt: str = MMLU_SYSTEM_PROMPT) -> tuple[list[Branch], list[Branch]]:
+    def search(self, user_question: str, system_prompt: str = MATH_SYSTEM_PROMPT) -> tuple[list[Branch], list[Branch]]:
         """
         Perform guided tree search.
 
@@ -217,7 +207,7 @@ class GuidedTreeSearch:
         # Store the question for value model calls
         self.question = user_question
         
-        prompt = format_system_prompt(system_prompt, user_question)
+        prompt = format_prompt(user_question, system_prompt)
 
         # ------------------------------------------------------------------
         # Initial prompt tokenisation (performed **once**).
@@ -281,8 +271,8 @@ class GuidedTreeSearch:
 
             for branch_idx, branch in enumerate(beam):
                 # Get uncertainty score and number of branches
-                u, approx_I_score = self._get_num_branches(branch.ids.to(self.device))
-                logger.info(f"Branch {branch_idx} step {branch.step_count}: Uncertainty score={approx_I_score:.4f}, u={u}")
+                u, uncertainty_score = self._get_num_branches(branch.ids.to(self.device))
+                logger.info(f"Branch {branch_idx} step {branch.step_count}: Uncertainty score={uncertainty_score:.4f}, u={u}")
 
                 # Generate branches based on uncertainty
                 budget_exceeded = False
@@ -315,7 +305,7 @@ class GuidedTreeSearch:
                         ids=new_ids.cpu(),
                         step_count=branch.step_count + 1,
                         score=norm_score,
-                        uncertainty=approx_I_score,
+                        uncertainty=uncertainty_score,
                         value=value_score,
                         total_tokens=total_tokens,
                         id=branch_id_counter,

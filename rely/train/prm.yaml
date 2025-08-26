@@ -13,7 +13,7 @@ datasets:
   - path: jacopo-minniti/MATH-PUM-qwen2.5-1.5B # axolotl-ai-co/prm800k_phase_1
     name: pp-1
     type: stepwise_supervised
-    step_separator: "\n\n"
+    step_separator: "<extra_0>"
     train_on_last_step_only: false
     splt: train
 
@@ -21,10 +21,13 @@ test_datasets:
   - path: jacopo-minniti/MATH-PUM-qwen2.5-1.5B # axolotl-ai-co/prm800k_phase_1
     name: pp-1
     type: stepwise_supervised
-    step_separator: "\n\n"
+    step_separator: "<extra_0>"
     train_on_last_step_only: false
     splt: test
 
+special_tokens:
+  additional_special_tokens:
+    - "<extra_0>"
 
 output_dir: ./outputs/out
 remove_unused_columns: false
@@ -42,8 +45,8 @@ wandb_log_model:
 
 
 gradient_accumulation_steps: 2
-micro_batch_size: 8
-eval_batch_size: 64
+micro_batch_size: 32
+eval_batch_size: 32
 num_epochs: 8
 optimizer: adamw_torch_fused
 lr_scheduler: cosine
@@ -63,15 +66,14 @@ tf32: true
 early_stopping_patience:
 resume_from_checkpoint:
 local_rank:
-logging_steps: 10
+logging_steps: 5
 xformers_attention:
 # flash_attention: true
 
 warmup_ratio: 0.3
-eval_strategy: steps
+# eval_strategy: epoch
 save_strategy: "no"
-# save_steps: 100
-eval_steps: 100
+evals_per_epoch: 1
 
 debug:
 deepspeed: deepspeed_configs/zero1.json
