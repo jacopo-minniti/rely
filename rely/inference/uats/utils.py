@@ -12,7 +12,7 @@ from .config import UATSConfig, Branch
 from .guided_tree_search import GuidedTreeSearch
 from .uncertainty_model import UATSUncertaintyModel
 from .value_model import UATSValueModel
-from rely.utils.text_utils import MATH_SYSTEM_PROMPT
+from rely.utils.text_utils import MATH_SYSTEM_PROMPT, normalize_answer
 
 logger = logging.getLogger(__name__)
 
@@ -365,13 +365,13 @@ def _generate_tree_image(
         # Wrap the text for better display in the node
         wrapped_text = textwrap.fill(safe_text, width=30)
         
-        label = ""
-        if branch.uncertainty is not None and branch.value is not None:
-            label = f"u={branch.uncertainty:.2f}, v={branch.value:.2f}\n\n{wrapped_text}"
-        if branch.uncertainty is not None:
-            label = f"u={branch.uncertainty:.2f}\n\n{wrapped_text}"
+        # Always show both scores if available, on separate lines
+        score_lines = []
         if branch.value is not None:
-            label = f"v={branch.value:.2f}\n\n{wrapped_text}"
+            score_lines.append(f"v={branch.value:.2f}")
+        if branch.uncertainty is not None:
+            score_lines.append(f"u={branch.uncertainty:.2f}")
+        label = "\n".join(score_lines) + f"\n{wrapped_text}" if score_lines else wrapped_text
         
         G.add_node(node_id, label=label, is_final=branch.final_answer is not None)
         
@@ -388,7 +388,15 @@ def _generate_tree_image(
             final_answer = extract_final_answer(full_text)
             safe_answer = _safe_text_for_matplotlib(final_answer or "No answer")
             final_node_id = f"final_{branch.id}"
-            G.add_node(final_node_id, label=safe_answer, is_final_answer=True)
+            # Determine correctness
+            correct = False
+            # Use normalized comparison
+            if final_answer is not None and hasattr(branch, 'correct_answer') and branch.correct_answer is not None:
+                correct = normalize_answer(final_answer) == normalize_answer(branch.correct_answer)
+            elif final_answer is not None and hasattr(branch, 'expected_answer') and branch.expected_answer is not None:
+                correct = normalize_answer(final_answer) == normalize_answer(branch.expected_answer)
+            # Store correctness for coloring
+            G.add_node(final_node_id, label=safe_answer, is_final_answer=True, is_correct=correct)
             G.add_edge(branch.id, final_node_id)
     
     pos = nx.nx_agraph.graphviz_layout(G, prog="dot")
@@ -407,15 +415,35 @@ def _generate_tree_image(
         node_color="lightblue",
         node_size=3500
     )
-    
-    # Draw root and final answer nodes as green circles
+
+    # Draw root nodes as green circles
     nx.draw_networkx_nodes(
         G, pos,
-        nodelist=root_nodes + final_answer_nodes,
-        node_shape="o", # circle
+        nodelist=root_nodes,
+        node_shape="o",
         node_color="lightgreen",
         node_size=3500
     )
+
+    # Draw final answer nodes: green if correct, red if incorrect
+    correct_final_nodes = [node for node in final_answer_nodes if G.nodes[node].get('is_correct', False)]
+    incorrect_final_nodes = [node for node in final_answer_nodes if not G.nodes[node].get('is_correct', False)]
+    if correct_final_nodes:
+        nx.draw_networkx_nodes(
+            G, pos,
+            nodelist=correct_final_nodes,
+            node_shape="o",
+            node_color="green",
+            node_size=3500
+        )
+    if incorrect_final_nodes:
+        nx.draw_networkx_nodes(
+            G, pos,
+            nodelist=incorrect_final_nodes,
+            node_shape="o",
+            node_color="red",
+            node_size=3500
+        )
 
     # Draw edges
     nx.draw_networkx_edges(
