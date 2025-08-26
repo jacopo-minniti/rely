@@ -20,8 +20,9 @@ def parse_args():
     parser.add_argument('--max_step_tokens', type=int, default=512)
     parser.add_argument('--temperature', type=float, default=1.0)
     parser.add_argument('--top_p', type=float, default=0.95)
-    parser.add_argument('--dataset_name', type=str, default="nlile/hendrycks-MATH-benchmark")
-    parser.add_argument('--dataset_split', type=str, default="test")
+    # Dataset name and split are now constants below
+    parser.add_argument('--num_gpus', type=int, default=1, help='Total number of GPUs running in parallel')
+    parser.add_argument('--gpu_index', type=int, default=0, help='Index of this GPU (0-based)')
     parser.add_argument('--num_samples', type=int, default=100)
     parser.add_argument('--seed', type=int, default=42)
     return parser.parse_args()
@@ -46,10 +47,22 @@ if __name__ == "__main__":
         top_p=args.top_p,
     )
 
-    dataset = load_dataset(args.dataset_name, split=args.dataset_split)
+    DATASET_NAME = "nlile/hendrycks-MATH-benchmark"
+    DATASET_SPLIT = "test"
+    dataset = load_dataset(DATASET_NAME, split=DATASET_SPLIT)
     dataset = dataset.shuffle(seed=args.seed).select(range(args.num_samples))
 
-    for idx, item in enumerate(dataset):
+    # Split dataset among GPUs
+    num_gpus = args.num_gpus
+    gpu_index = args.gpu_index
+    samples_per_gpu = len(dataset) // num_gpus
+    start_idx = gpu_index * samples_per_gpu
+    # Last GPU takes the remainder
+    end_idx = (gpu_index + 1) * samples_per_gpu if gpu_index < num_gpus - 1 else len(dataset)
+    sub_dataset = dataset.select(range(start_idx, end_idx))
+
+    for local_idx, item in enumerate(sub_dataset):
+        global_idx = start_idx + local_idx
         question = item["problem"]
         answer = item["answer"]
         run_uats(
@@ -57,5 +70,5 @@ if __name__ == "__main__":
             correct_answer=answer,
             system_prompt=MATH_SYSTEM_PROMPT,
             config=config,
-            save_dir=f"uats_results/question_{idx}"
+            save_dir=f"uats_results/question_{global_idx}"
         )
