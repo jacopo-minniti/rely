@@ -1,6 +1,5 @@
 import re
 from typing import Tuple, Optional
-import torch
 from transformers import AutoTokenizer
 
 # Default system prompt for MMLU-Pro style questions
@@ -135,31 +134,60 @@ def extract_final_answer(text: str) -> Optional[str]:
 
 def normalize_answer(answer: str) -> str:
     """
-    Normalize an answer for comparison by:
-    - Converting to lowercase
-    - Removing all whitespace (spaces, tabs, newlines)
-    - Removing common punctuation that doesn't affect mathematical meaning
-    - Handling special cases like fractions, decimals, etc.
+    Normalizes a mathematical answer for robust comparison.
     """
     if not answer or answer == "?":
         return answer
+
+    # General pre-processing
+    normalized = str(answer).lower().strip()
+
+    # LaTeX-specific normalization
+    # Remove \left and \right, they don't change the mathematical meaning
+    normalized = re.sub(r'\\left|\\right', '', normalized)
     
-    # Convert to string and lowercase
-    normalized = str(answer).lower()
+    # Remove other LaTeX commands that don't affect the value
+    normalized = re.sub(r'\\(mathrm|mathbf|text|boldsymbol|label|tag|tiny|large|huge|small|normalsize)\s*\{[^}]*\}', '', normalized)
+
+    # Replace \frac{a}{b} with a/b
+    normalized = re.sub(r'\\frac\{([^}]+)\}\{([^}]+)\}', r'(\1)/(\2)', normalized)
+
+    # Handle percentages
+    normalized = re.sub(r'\\%', '%', normalized)
+    if '%' in normalized:
+        # Evaluate percentage expressions
+        normalized = re.sub(r'([\d\.]+)\s*%', lambda m: str(float(m.group(1)) / 100.0), normalized)
+
+    # Remove extra backslashes, but keep single ones for LaTeX commands
+    normalized = re.sub(r'\\\\+', r'\\', normalized)
+    
+    # Remove enclosing LaTeX delimiters like $, $$, \[, \], \(, \)
+    normalized = re.sub(r'^(\$|\\\[|\\\(|\\\$)|(\$|\\\]|\\\)|\$$)$', '', normalized).strip()
+
+    # General numeric and symbolic normalization
+    # Remove thousands separators
+    normalized = re.sub(r',(?=\d)', '', normalized)
     
     # Remove all whitespace
     normalized = re.sub(r'\s+', '', normalized)
     
-    # Remove common punctuation that doesn't affect meaning
-    # Keep mathematical operators and decimal points
-    normalized = re.sub(r'[,;:()[\]{}"]', '', normalized)
-    
-    # Handle common mathematical expressions
-    # Convert fractions like "1/2" to consistent format
-    normalized = re.sub(r'(\d+)/(\d+)', r'\1/\2', normalized)
-    
-    # Remove trailing zeros after decimal point
+    # Standardize exponents
+    normalized = normalized.replace('^', '**')
+
+    # Remove trailing zeros after a decimal point
     if '.' in normalized:
         normalized = normalized.rstrip('0').rstrip('.')
-    
+        if normalized == "":
+            normalized = "0"
+
+    # Evaluate simple fractions if possible (e.g., 1/2 -> 0.5) to handle cases like 2/4 vs 1/2
+    try:
+        # Use a safe eval for simple arithmetic
+        if re.match(r'^[0-9\.\/\*\-\+ \(\)]+$', normalized):
+             # Round to a reasonable number of decimal places to handle floating point inaccuracies
+            normalized = str(round(eval(normalized), 9))
+    except (SyntaxError, NameError, ZeroDivisionError):
+        # If it's not a simple evaluatable expression, leave it as is
+        pass
+        
     return normalized

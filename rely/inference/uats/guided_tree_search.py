@@ -346,17 +346,20 @@ class GuidedTreeSearch:
 
         logger.info("Search finished – all branches have terminated.")
 
-        # --- Select the top beam_width branches by value score, but only among terminated branches ---
-        # Sort only the finished branches by value score (highest first) and take the top beam_width
-        if finished:
-            finished.sort(key=lambda b: b.value, reverse=True)
-            final_branches = finished[:self.config.beam_width]
-            logger.info(f"Selected top {len(final_branches)} branches by value score from {len(finished)} terminated branches (out of {len(all_branches)} generated nodes).")
-        else:
-            final_branches = []
-            logger.info("No terminated branches found. Returning empty final_branches list.")
+        # --- Select the top beam_width branches by value score ---
+        # Combine finished branches and the final beam of active branches
+        all_potential_final_branches = finished + beam
+        
+        # Sort all potential final branches by their value score in descending order
+        all_potential_final_branches.sort(key=lambda b: b.value, reverse=True)
+        
+        # Select the top `beam_width` branches
+        final_branches = all_potential_final_branches[:self.config.beam_width]
 
-        # Generate final answers only for the branches that will be saved
+        logger.info(f"Selected top {len(final_branches)} branches from {len(all_potential_final_branches)} potential candidates ({len(finished)} terminated, {len(beam)} in final beam).")
+
+        # Generate final answers only for the selected top branches
         for branch in final_branches:
             branch.final_answer = self._generate_final_answer(branch)
+            
         return final_branches, all_branches
