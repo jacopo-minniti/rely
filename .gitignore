@@ -4,7 +4,6 @@ value-head-s1/
 data/
 other/
 unsloth_compiled_cache
-uats_results/
 self_consistency_results/
 sbs_results/
 tests/
@@ -13,7 +12,7 @@ prm-v2/
 last_run_prepared/
 wandb/
 outputs/
-uats_results_u=0.7
+uats_*/
 
 *.pdf
 *.jsonl

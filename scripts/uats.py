@@ -14,7 +14,7 @@ def parse_args():
     parser.add_argument('--value_device', type=str, default="cuda:0")
     parser.add_argument('--beam_width', type=int, default=4)
     parser.add_argument('--budget', type=int, default=4000)
-    parser.add_argument('--uncertainty_threshold', type=float, default=0.9)
+    parser.add_argument('--uncertainty_threshold', type=float, default=0.5)
     parser.add_argument('--uncertainty_scoring_method', type=str, default="last_step")
     parser.add_argument('--value_scoring_method', type=str, default="product")
     parser.add_argument('--max_step_tokens', type=int, default=512)
