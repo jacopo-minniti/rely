@@ -98,6 +98,7 @@ class StepBeamSearch:
         self._prompt_cache = {}
 
         # Token counter for all generations
+        self.tokenizer = AutoTokenizer.from_pretrained(self.inference_model_name, trust_remote_code=True)
         self.total_generated_tokens = 0
 
     def clear_cache(self):
@@ -149,9 +150,8 @@ class StepBeamSearch:
             generations = [choice.text for choice in completion.choices]
             # Count tokens for all generations
             try:
-                tokenizer = AutoTokenizer.from_pretrained(self.inference_model_name, trust_remote_code=True)
                 for gen in generations:
-                    self.total_generated_tokens += len(tokenizer.encode(gen, add_special_tokens=False))
+                    self.total_generated_tokens += len(self.tokenizer.encode(gen, add_special_tokens=False))
             except Exception as e:
                 logger.warning(f"[Rank {self.worker_rank}] Could not count tokens: {e}")
             return generations
@@ -568,7 +568,7 @@ CUDA_VISIBLE_DEVICES="1" vllm serve Qwen/Qwen2.5-1.5B-Instruct \
     --tensor-parallel-size 1 \
     --pipeline-parallel-size 1 \
     --gpu-memory-utilization 0.90 \
-    --max-model-len 4000 \
+    --max-model-len 5000 \
     --dtype bfloat16 \
     --enable-prefix-caching \
     --port 8000
