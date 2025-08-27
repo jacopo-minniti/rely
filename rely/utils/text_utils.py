@@ -136,8 +136,8 @@ def normalize_answer(answer: str) -> str:
     """
     Normalizes a mathematical answer for robust comparison.
     """
-    if not answer or answer == "?":
-        return answer
+    if not answer:
+        return ""
 
     # General pre-processing
     normalized = str(answer).lower().strip()
@@ -146,8 +146,11 @@ def normalize_answer(answer: str) -> str:
     # Remove \left and \right, they don't change the mathematical meaning
     normalized = re.sub(r'\\left|\\right', '', normalized)
     
+    # Replace \text{...} and similar with just the content inside
+    normalized = re.sub(r'\\text\s*\{([^}]*)\}', r'\1', normalized)
+
     # Remove other LaTeX commands that don't affect the value
-    normalized = re.sub(r'\\(mathrm|mathbf|text|boldsymbol|label|tag|tiny|large|huge|small|normalsize)\s*\{[^}]*\}', '', normalized)
+    normalized = re.sub(r'\\(mathrm|mathbf|boldsymbol|label|tag|tiny|large|huge|small|normalsize)\s*\{[^}]*\}', '', normalized)
 
     # Replace \frac{a}{b} with a/b
     normalized = re.sub(r'\\frac\{([^}]+)\}\{([^}]+)\}', r'(\1)/(\2)', normalized)

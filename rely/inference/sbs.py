@@ -97,8 +97,12 @@ class StepBeamSearch:
         self.current_beam_width: int = config.step_beam_width
         self._prompt_cache = {}
 
+        # Token counter for all generations
+        self.total_generated_tokens = 0
+
     def clear_cache(self):
         self._prompt_cache.clear()
+        self.total_generated_tokens = 0
 
     def create_prompt(self, question: str, partial_solution: str = "") -> str:
         # This function remains the same
@@ -142,7 +146,15 @@ class StepBeamSearch:
                 stop=["\n\n"],
                 n=self.config.n_generate_sample,
             )
-            return [choice.text for choice in completion.choices]
+            generations = [choice.text for choice in completion.choices]
+            # Count tokens for all generations
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(self.inference_model_name, trust_remote_code=True)
+                for gen in generations:
+                    self.total_generated_tokens += len(tokenizer.encode(gen, add_special_tokens=False))
+            except Exception as e:
+                logger.warning(f"[Rank {self.worker_rank}] Could not count tokens: {e}")
+            return generations
         except Exception as e:
             logger.error(f"[Rank {self.worker_rank}] Error during API call: {e}")
             return []
@@ -237,7 +249,14 @@ class StepBeamSearch:
         if ground_truth and answers:
             correct_answers = sum(1 for ans in answers if ans == ground_truth)
             accuracy = f"{correct_answers / len(answers):.2%}" if answers else "0.00%"
-        return {"question": question, "ground_truth": ground_truth, "majority_vote": majority_vote, "accuracy": accuracy, "solutions": solutions}
+        return {
+            "question": question,
+            "ground_truth": ground_truth,
+            "majority_vote": majority_vote,
+            "accuracy": accuracy,
+            "solutions": solutions,
+            "total_generated_tokens": self.total_generated_tokens
+        }
 
     def _save_results(self, final_beams: List[SBSNode], base_path: str, question: str, ground_truth: Optional[str]) -> Tuple[List[Dict[str, Any]], List[str]]:
         solutions, saved_files = [], []
