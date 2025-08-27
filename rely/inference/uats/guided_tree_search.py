@@ -177,11 +177,11 @@ class GuidedTreeSearch:
 
         # Get uncertainty score from the uncertainty model
         uncertainty_score = self.uncertainty_model.get_uncertainty(self.question, reasoning_text)
-
-        u = min(self.uncertainty_to_branches(uncertainty_score, self.config.uncertainty_threshold), self.config.beam_width)
+        u = self.uncertainty_to_branches(uncertainty_score, self.config.uncertainty_threshold)
+        
         return u, uncertainty_score
 
-    def search(self, user_question: str, system_prompt: str = MATH_SYSTEM_PROMPT) -> tuple[list[Branch], list[Branch]]:
+    def search(self, user_question: str, system_prompt: str = MATH_SYSTEM_PROMPT) -> tuple[list[Branch], list[Branch], int]:
         """
         Perform guided tree search.
 
@@ -362,4 +362,4 @@ class GuidedTreeSearch:
         for branch in final_branches:
             branch.final_answer = self._generate_final_answer(branch)
             
-        return final_branches, all_branches
+        return final_branches, all_branches, tokens_used
