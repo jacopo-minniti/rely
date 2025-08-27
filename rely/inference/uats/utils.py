@@ -109,8 +109,7 @@ def save_branches(
     max_branch_tokens: int,
     user_question: Optional[str] = None,
     system_prompt: Optional[str] = None,
-    correct_answer: Optional[str] = None,
-    tokens_used: int = 0,  
+    correct_answer: Optional[str] = None
 ) -> None:
     """Save the *active* branches at the end of the search to disk."""
 
@@ -135,7 +134,6 @@ def save_branches(
         "timestamp": datetime.now().isoformat(),
         "user_question": user_question,
         "system_prompt": system_prompt,
-        "total_tokens_used": tokens_used,
         "total_branches": len(final_branches),
         "branches": [],
     }
@@ -249,7 +247,6 @@ def run_uats(
             user_question=user_question,
             system_prompt=system_prompt,
             correct_answer=correct_answer,
-            tokens_used=tokens_used
         )
 
     return final_branches

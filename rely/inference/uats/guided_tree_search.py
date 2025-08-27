@@ -1,14 +1,13 @@
 import logging
 import math
+import uuid
 from typing import List, Optional, Union
 
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from transformers.generation.stopping_criteria import StopStringCriteria
+from openai import OpenAI
+from transformers import AutoTokenizer, StopStringCriteria
 
-from .config import UATSConfig, Branch
-from .uncertainty_model import UATSUncertaintyModel
-from .value_model import UATSValueModel
+from .config import Branch, UATSConfig
 from rely.utils.text_utils import (
     count_tokens_after_marker,
     format_prompt,
@@ -16,6 +15,9 @@ from rely.utils.text_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+OPENAI_API_KEY = "EMPTY"
+OPENAI_API_BASE = "http://localhost:8000/v1"
 
 
 class GuidedTreeSearch:
@@ -39,20 +41,43 @@ class GuidedTreeSearch:
 
     def __init__(
         self,
-        model: AutoModelForCausalLM,
         tokenizer: AutoTokenizer,
-        uncertainty_model: UATSUncertaintyModel,
-        value_model: UATSValueModel,
         config: UATSConfig,
-        question: str = "",  # Store question for value model calls
+        uncertainty_task_queue,
+        uncertainty_result_queue,
+        value_task_queue,
+        value_result_queue,
+        worker_rank: int,
+        question: str = "",
     ):
-        self.model = model
+        # REMOVED: model, uncertainty_model, value_model
+        # self.model = model
         self.tokenizer = tokenizer
-        self.uncertainty_model = uncertainty_model
-        self.value_model = value_model
+        # self.uncertainty_model = uncertainty_model
+        # self.value_model = value_model
         self.config = config
-        self.question = question  # Store question for value estimation
-        self.device = next(model.parameters()).device
+        self.question = question
+        self.device = "cuda:0"
+
+        # NEW: Add client for vLLM server
+        self.client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_API_BASE)
+        
+        # NEW: Queues for communication with model servers
+        self.uncertainty_task_queue = uncertainty_task_queue
+        self.uncertainty_result_queue = uncertainty_result_queue
+        self.value_task_queue = value_task_queue
+        self.value_result_queue = value_result_queue
+        self.worker_rank = worker_rank
+    
+    
+    def _get_from_server(self, queue_task, queue_result, payload):
+        """Generic function to send a task to a server and get the result."""
+        request_id = str(uuid.uuid4())
+        queue_task.put((request_id, self.worker_rank) + payload)
+        while True:
+            response_id, result = queue_result.get()
+            if response_id == request_id:
+                return result
 
     def _value_model_score(
         self,
@@ -80,16 +105,18 @@ class GuidedTreeSearch:
             # Extract the reasoning part after the prompt for value model evaluation
             reasoning_text = self._extract_reasoning_from_full_text(text)
         else:
-            # Decode the ids to get the full text, then extract reasoning
             ids_tensor = ids if ids.dim() == 2 else ids.unsqueeze(0)
-            ids_tensor = ids_tensor.to(self.device)
             full_text = self.tokenizer.decode(ids_tensor[0], skip_special_tokens=True)
             reasoning_text = self._extract_reasoning_from_full_text(full_text)
 
-        # Get value score from the value model
-        value_score = self.value_model.get_value(self.question, reasoning_text)
-
+        # Get value score from the value model server
+        value_score = self._get_from_server(
+            self.value_task_queue,
+            self.value_result_queue,
+            (self.question, reasoning_text)
+        )
         return value_score, ids_tensor.cpu()
+
     
     def _extract_reasoning_from_full_text(self, full_text: str) -> str:
         """Extract only the reasoning part from the full prompt text."""
@@ -103,83 +130,71 @@ class GuidedTreeSearch:
         # Fallback: return the whole text
         return full_text
 
+    
     def _generate_step(
         self, ids: torch.Tensor
     ) -> tuple[str, torch.Tensor]:
-        """Generate a single reasoning step given the *already tokenised* prompt.
+        # MODIFIED: to use the vLLM server
+        
+        # First, decode the input tensor to get the prompt text
+        prompt_text = self.tokenizer.decode(ids[0], skip_special_tokens=True)
 
-        Returns the generated step **text** as well as the **token IDs** for the
-        newly produced tokens.  This enables the caller to append the new IDs
-        to the running prompt without having to re-tokenise the whole string.
-        """
-
-        model_input = ids if ids.dim() == 2 else ids.unsqueeze(0)
-        model_input = model_input.to(self.device)
-
-        stop_criteria = StopStringCriteria(self.tokenizer, ["\n\n"])
-        with torch.no_grad():
-            generated = self.model.generate(  # type: ignore[attr-defined]
-                model_input,
-                max_new_tokens=self.config.max_step_tokens,
-                do_sample=True,
+        try:
+            completion = self.client.completions.create(
+                model=self.config.model_name,
+                prompt=prompt_text,
+                max_tokens=self.config.max_step_tokens,
                 temperature=self.config.temperature,
                 top_p=self.config.top_p,
-                pad_token_id=self.tokenizer.eos_token_id,  # type: ignore[attr-defined]
-                eos_token_id=self.tokenizer.eos_token_id,  # type: ignore[attr-defined]
-                stopping_criteria=[stop_criteria],
-                return_dict_in_generate=True,
+                stop=["\n\n"],
+                n=1, # In UATS, we generate one step at a time per branch expansion
             )
+            step_text = completion.choices[0].text
+            new_tokens = self.tokenizer.encode(step_text, add_special_tokens=False, return_tensors='pt')[0]
+            
+            return step_text, new_tokens.to(ids.device)
 
-        new_tokens = generated.sequences[0][model_input.shape[1]:]
-        step_text = self.tokenizer.decode(new_tokens, skip_special_tokens=False)  # type: ignore[attr-defined]
-        return step_text, new_tokens
+        except Exception as e:
+            logger.error(f"[Rank {self.worker_rank}] Error during API call: {e}")
+            return "", torch.tensor([], dtype=torch.long, device=ids.device)
 
     def _generate_final_answer(self, branch: Branch) -> str:
-        """Generate final answer for a completed branch."""
+        # MODIFIED: to use the vLLM server
         text = branch.text.strip()
-        # Determine which header should be added so that the output text explicitly
         header = "\n## Final Answer\n"
-
-        # Prompt fed to the language model consists of the reasoning trace plus the header.
-        # Ensure consistent single newline formatting
         final_text = text.rstrip() + header
 
-        gen_inputs = self.tokenizer(final_text, return_tensors="pt")
-        gen_ids = gen_inputs.input_ids.to(self.device)
-
-        with torch.no_grad():
-            generated = self.model.generate(
-                gen_ids,
-                max_new_tokens=self.config.max_step_tokens,
-                do_sample=True,
+        try:
+            completion = self.client.completions.create(
+                model=self.config.model_name,
+                prompt=final_text,
+                max_tokens=self.config.max_step_tokens,
                 temperature=self.config.temperature,
                 top_p=self.config.top_p,
-                pad_token_id=self.tokenizer.eos_token_id,
-                eos_token_id=self.tokenizer.eos_token_id,
-                return_dict_in_generate=True,
+                # No stop sequence here, let it finish.
+                n=1,
             )
+            generated_answer = completion.choices[0].text
+            return header + generated_answer
 
-        new_tokens = generated.sequences[0][gen_ids.shape[1]:]
-        generated_answer = self.tokenizer.decode(new_tokens, skip_special_tokens=False)  # type: ignore[attr-defined]
-        return header + generated_answer
+        except Exception as e:
+            logger.error(f"[Rank {self.worker_rank}] Error during final answer API call: {e}")
+            return ""
 
     def _get_num_branches(self, ids: torch.Tensor) -> tuple[int, float]:
-        """Compute the number of branches to sample based on the uncertainty model.
-
-        Accepts a pre-tokenised ``ids`` tensor to avoid repeated calls to the
-        tokenizer.
-        """
-
-        # Get the current text for uncertainty model evaluation
+        # MODIFIED: to use the uncertainty model server
         ids_tensor = ids if ids.dim() == 2 else ids.unsqueeze(0)
         full_text = self.tokenizer.decode(ids_tensor[0], skip_special_tokens=True)
         reasoning_text = self._extract_reasoning_from_full_text(full_text)
 
-        # Get uncertainty score from the uncertainty model
-        uncertainty_score = self.uncertainty_model.get_uncertainty(self.question, reasoning_text)
+        uncertainty_score = self._get_from_server(
+            self.uncertainty_task_queue,
+            self.uncertainty_result_queue,
+            (self.question, reasoning_text)
+        )
         u = self.uncertainty_to_branches(uncertainty_score, self.config.uncertainty_threshold)
-        
         return u, uncertainty_score
+
 
     def search(self, user_question: str, system_prompt: str = MATH_SYSTEM_PROMPT) -> tuple[list[Branch], list[Branch], int]:
         """
@@ -276,7 +291,7 @@ class GuidedTreeSearch:
                             new_tokens,
                         ]
                     )
-                    new_ids = new_ids_1d.unsqueeze(0)
+                    new_ids = new_ids_1d.unsqueeze(0).to(dtype=torch.int)
 
                     new_text = branch.text + step_text
                     total_tokens = count_tokens_after_marker(new_text, self.tokenizer)

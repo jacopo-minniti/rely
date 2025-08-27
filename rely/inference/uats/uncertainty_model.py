@@ -8,7 +8,6 @@ import math
 import os
 import torch
 import torch.nn.functional as F
-from typing import List, Optional, Tuple
 from transformers import AutoTokenizer, AutoModelForTokenClassification
 import logging
 
@@ -105,7 +104,7 @@ class UATSUncertaintyModel:
         
         # Create messages in the format expected by the model
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": MATH_SYSTEM_PROMPT},
             {"role": "user", "content": question},
             {"role": "assistant", "content": formatted_text}
         ]
