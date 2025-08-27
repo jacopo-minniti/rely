@@ -46,6 +46,7 @@ class SBSConfig:
     remove_duplicate: bool = True
     verbose: bool = True
     generation_batch_size: int = 4
+    value_method: str = "last_step"
 
 
 class SBSNode:
@@ -106,7 +107,6 @@ class StepBeamSearch:
         self.total_generated_tokens = 0
 
     def create_prompt(self, question: str, partial_solution: str = "") -> str:
-        # This function remains the same
         cache_key = (question, partial_solution)
         if cache_key in self._prompt_cache:
             return self._prompt_cache[cache_key]
@@ -115,7 +115,6 @@ class StepBeamSearch:
         return prompt
 
     def _get_values_from_server(self, prompts: List[str], generated_texts: List[str]) -> List[float]:
-        # This function's logic is mostly the same, just renamed queues for clarity
         if not prompts:
             return []
         request_id = str(uuid.uuid4())
@@ -148,7 +147,6 @@ class StepBeamSearch:
                 n=self.config.n_generate_sample,
             )
             generations = [choice.text for choice in completion.choices]
-            # Count tokens for all generations
             try:
                 for gen in generations:
                     self.total_generated_tokens += len(self.tokenizer.encode(gen, add_special_tokens=False))
@@ -160,17 +158,12 @@ class StepBeamSearch:
             return []
 
     def _generate_and_score_candidates(self, question: str) -> List[SBSNode]:
-        """
-        MODIFIED: This function now uses the OpenAI client to generate candidates
-        and sends requests to the Value Server for scoring.
-        """
         if not self.active_beams:
             return []
 
         all_candidates, seen_full_texts = [], set()
         prompts = [self.create_prompt(question, node.full_text) for node in self.active_beams]
         
-        # NEW: Use a thread pool to make API requests concurrently
         generated_outputs = [[] for _ in self.active_beams]
         with ThreadPoolExecutor(max_workers=len(self.active_beams)) as executor:
             future_to_index = {executor.submit(self._make_api_request, prompt): i for i, prompt in enumerate(prompts)}
@@ -181,7 +174,6 @@ class StepBeamSearch:
                 except Exception as exc:
                     logger.error(f"[Rank {self.worker_rank}] API request generated an exception: {exc}")
 
-        # Batch data for value scoring
         value_request_prompts = []
         value_request_texts = []
         parent_nodes = []
@@ -193,18 +185,20 @@ class StepBeamSearch:
                 value_request_texts.append(gen_text)
                 parent_nodes.append(parent_node)
 
-        # Get all values from the server in one batch
         values = self._get_values_from_server(value_request_prompts, value_request_texts)
 
-        # Process results
         candidate_idx = 0
         for i, gen_texts in enumerate(generated_outputs):
             for gen_text in gen_texts:
                 parent_node = self.active_beams[i]
-                value = values[candidate_idx]
+                new_step_value = values[candidate_idx]
                 snippet = gen_text.rstrip() + '\n\n'
                 child_node = parent_node.add_child(snippet)
-                child_node.value = value
+                
+                if self.config.value_method == 'product':
+                    child_node.value = parent_node.value * new_step_value
+                else: 
+                    child_node.value = new_step_value
                 
                 if ans := extract_final_answer(gen_text):
                     child_node.is_terminal, child_node.final_answer = True, ans
@@ -224,7 +218,6 @@ class StepBeamSearch:
         return all_candidates
 
     def _update_beams(self, candidates: List[SBSNode]) -> int:
-        # This function remains unchanged
         if not candidates:
             self.active_beams, self.current_beam_width = [], 0
             return 0
@@ -240,7 +233,7 @@ class StepBeamSearch:
         self.current_beam_width = len(self.active_beams)
         return newly_completed
 
-    # Helper functions _create_summary and _save_results remain unchanged
+    # MODIFIED: Removed 'total_generated_tokens' to match the validation script's format.
     def _create_summary(self, solutions: List[Dict[str, Any]], question: str, ground_truth: Optional[str]) -> Dict[str, Any]:
         ground_truth = normalize_answer(ground_truth)
         answers = [normalize_answer(s['final_answer']) for s in solutions if s['final_answer'] != "Not found"]
@@ -254,38 +247,42 @@ class StepBeamSearch:
             "ground_truth": ground_truth,
             "majority_vote": majority_vote,
             "accuracy": accuracy,
-            "solutions": solutions,
-            "total_generated_tokens": self.total_generated_tokens
+            "solutions": solutions
         }
 
+    # MODIFIED: No longer saves individual beam files, only the final summary.json.
     def _save_results(self, final_beams: List[SBSNode], base_path: str, question: str, ground_truth: Optional[str]) -> Tuple[List[Dict[str, Any]], List[str]]:
         solutions, saved_files = [], []
         os.makedirs(base_path, exist_ok=True)
 
         for idx, node in enumerate(final_beams):
-            if not node.final_answer: node.final_answer = extract_final_answer(node.full_text) or ""
+            if not node.final_answer:
+                node.final_answer = extract_final_answer(node.full_text) or ""
             termination_reason = "answer_found" if node.final_answer else "max_depth"
-            solution_data = {"beam_index": idx + 1, "value": node.value, "final_answer": node.final_answer or "Not found",
-                             "depth": node.depth, "termination_reason": termination_reason, "solution_path": node.full_text}
+            solution_data = {
+                "beam_index": idx + 1,
+                "value": node.value,
+                "final_answer": node.final_answer or "Not found",
+                "depth": node.depth,
+                "termination_reason": termination_reason,
+                "solution_path": node.full_text
+            }
             solutions.append(solution_data)
-            filename = f"beam_{idx+1:02d}.txt"
-            file_path = os.path.join(base_path, filename)
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump({k: v for k, v in solution_data.items() if k != 'solution_path'}, f, indent=4)
-                f.write("\n\n---\n\n" + node.full_text)
-            saved_files.append(file_path)
 
+        # Save only the consolidated summary.json file.
         summary_path = os.path.join(base_path, "summary.json")
         with open(summary_path, 'w', encoding='utf-8') as f:
             json.dump(self._create_summary(solutions, question, ground_truth), f, indent=4)
         saved_files.append(summary_path)
+        
         return solutions, saved_files
         
     def run(self, question: str, ground_truth: Optional[str] = None, base_path: Optional[str] = None) -> Dict[str, Any]:
-        # This function remains unchanged
         logger.info(f"[Rank {self.worker_rank}] Starting SBS for question: {question[:100]}...")
         self.clear_cache()
         self.root = SBSNode(text="", depth=0)
+        if self.config.value_method == "product":
+            self.root.value = 1.0
         self.active_beams = [self.root]
         self.completed_beams, self.current_beam_width = [], self.config.step_beam_width
         step = 0
@@ -310,6 +307,7 @@ class StepBeamSearch:
         return {"question": question, "ground_truth": ground_truth, "solutions": solutions}
 
 # --- Data Parallel Execution Harness ---
+# (No changes below this line)
 
 def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queues: List[Queue]):
     """
@@ -320,7 +318,6 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
     value_device = torch.device("cuda:0")
     logger.info(f"[ValueServer] Starting on device {value_device}")
 
-    # Load the value model and tokenizer with trust_remote_code=True
     tokenizer = AutoTokenizer.from_pretrained(args.value_model_path, trust_remote_code=True)
     model = AutoModel.from_pretrained(
         args.value_model_path,
@@ -332,7 +329,7 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.padding_side = "left" # Use left-padding for batch processing
+    tokenizer.padding_side = "left"
 
     model.eval()
     logger.info("[ValueServer] Value model loaded. Waiting for tasks.")
@@ -351,33 +348,25 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
             match = prompt_pattern.match(prompt)
             if not match:
                 logger.error(f"Prompt did not match expected format. Cannot score. Prompt: {prompt[:200]}")
-                # This sample will be skipped later by len check
                 continue
 
             system_msg, user_msg, partial_solution = match.groups()
             partial_solution = partial_solution or ""
             full_assistant_response = (partial_solution.strip() + '\n\n' + gen_text.strip()).strip()
 
-            # Split into steps and filter out any empty strings
             steps = [s.strip() for s in full_assistant_response.split('\n\n') if s.strip()]
-
-            # Insert the special token as per docs
             assistant_content = "<extra_0>".join(steps) + "<extra_0>"
-
             messages = [
                 {"role": "system", "content": system_msg.strip()},
                 {"role": "user", "content": user_msg.strip()},
                 {"role": "assistant", "content": assistant_content},
             ]
-
-            # Apply chat template
             conv_str = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
             conversation_strs.append(conv_str)
 
         if not conversation_strs:
             return [0.0] * len(prompts)
 
-        # Batch tokenize all conversations
         inputs = tokenizer(
             conversation_strs,
             return_tensors="pt",
@@ -386,32 +375,22 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
             max_length=7000,
         ).to(value_device)
 
-        # Manually get per-token logits by bypassing the standard sequence classification forward pass
         base_model_output = model.model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask, use_cache=False)
-        logits = model.score(base_model_output.last_hidden_state) # Shape: (batch_size, seq_len, num_labels)
-
+        logits = model.score(base_model_output.last_hidden_state)
         probabilities = torch.softmax(logits, dim=-1)
         step_sep_id = tokenizer.encode("<extra_0>", add_special_tokens=False)[0]
-
-        # Create a mask to find the locations of the <extra_0> tokens
         token_masks = (inputs.input_ids == step_sep_id)
-
         batch_rewards = []
-        for i in range(logits.size(0)): # Iterate over each item in the batch
+        for i in range(logits.size(0)):
             sample_probs = probabilities[i]
             sample_mask = token_masks[i]
-
-            # Get the positive class probability for all <extra_0> tokens
             step_scores = sample_probs[sample_mask][:, 1]
-
-            # The value of a new node is the reward for the *last* step
             if len(step_scores) > 0:
                 last_step_score = step_scores[-1].item()
                 batch_rewards.append(last_step_score)
             else:
                 logger.warning("No <extra_0> token found in a processed sample, returning reward of 0.0. This might be due to truncation.")
                 batch_rewards.append(0.0)
-
         return batch_rewards
 
     while True:
@@ -432,7 +411,6 @@ def _sbs_worker(args: argparse.Namespace,
                 rank: int,
                 task_queue: Queue,
                 result_queue: Queue):
-    """MODIFIED: Worker function for data-parallel Step-level Beam Search."""
     logger.info(f"[Rank {rank}] Worker started.")
     
     sbs_config = SBSConfig(
@@ -441,9 +419,9 @@ def _sbs_worker(args: argparse.Namespace,
         max_depth=args.max_depth,
         temperature=args.temperature,
         verbose=args.verbose,
+        value_method=args.value_method,
     )
     
-    # Initialize SBS Instance (now a client)
     sbs_instance = StepBeamSearch(
         inference_model_name=args.inference_model,
         config=sbs_config,
@@ -482,10 +460,10 @@ def _sbs_worker(args: argparse.Namespace,
 
 
 def run_sbs_on_dataset(args: argparse.Namespace):
-    """MODIFIED: Main function to orchestrate the server and client processes."""
     set_start_method('spawn', force=True)
     
-    ds = load_dataset(args.dataset, split='test') if 'test' in load_dataset(args.dataset).keys() else load_dataset(args.dataset, split='train')
+    ds = load_dataset(args.dataset, split='test')
+    ds = ds.shuffle(seed=42).select(range(100))
     dataset = [dict(item) for item in ds]
     for i, item in enumerate(dataset):
         item['original_index'] = i
@@ -498,7 +476,6 @@ def run_sbs_on_dataset(args: argparse.Namespace):
     value_result_queues = [Queue() for _ in range(num_workers)]
     procs = []
 
-    # Start the dedicated Value Server process
     logger.info("Starting Value Model Server process...")
     value_server_proc = Process(
         target=_value_model_server,
@@ -506,9 +483,8 @@ def run_sbs_on_dataset(args: argparse.Namespace):
     )
     value_server_proc.start()
     procs.append(value_server_proc)
-    time.sleep(15) # Give the server time to load models
+    time.sleep(15)
 
-    # Distribute data and launch client workers
     total_samples = len(dataset)
     samples_per_worker = (total_samples + num_workers - 1) // num_workers
 
@@ -527,11 +503,9 @@ def run_sbs_on_dataset(args: argparse.Namespace):
         proc.start()
         procs.append(proc)
         
-    # Wait for client workers to complete
     for proc in procs[1:]:
         proc.join()
 
-    # Signal the Value Server to stop and wait for it
     logger.info("All SBS workers finished. Shutting down Value Server...")
     value_task_queue.put("STOP")
     value_server_proc.join()
@@ -545,16 +519,22 @@ def main():
     parser.add_argument("--inference_model", type=str, default="Qwen/Qwen2.5-1.5B-Instruct", help="Model name served by vLLM.")
     parser.add_argument("--value_model_path", type=str, required=True, help="Path to pretrained value model (AutoModelForSequenceClassification).")
     
-    # NEW: Simplified parallelism arguments
     parser.add_argument("--num_workers", type=int, default=4, help="Number of parallel client worker processes.")
     parser.add_argument("--value_model_gpu", type=int, default=0, help="The single GPU ID for the value model server.")
     
-    # SBS Config arguments
     parser.add_argument("--beam_width", type=int, default=4, help="Step-level beam width.")
     parser.add_argument("--n_samples", type=int, default=5, help="Samples to generate at each step.")
     parser.add_argument("--max_depth", type=int, default=300, help="Maximum search depth.")
     parser.add_argument("--temperature", type=float, default=1, help="Generation temperature.")
     parser.add_argument("--verbose", action='store_true', help="Enable verbose logging.")
+    
+    parser.add_argument(
+        "--value_method", 
+        type=str, 
+        default="last_step", 
+        choices=["last_step", "product"], 
+        help="Method to calculate node value: 'last_step' (default) or 'product' of path."
+    )
     
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
@@ -578,5 +558,6 @@ python test.py \
     --output_dir sbs_results/ \
     --value_model_path Qwen/Qwen2.5-Math-PRM-7B \
     --num_workers 5 \
-    --value_model_gpu 0
+    --value_model_gpu 0 \
+    --value_method product
 '''

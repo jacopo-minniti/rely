@@ -1,193 +1,145 @@
 import os
 import json
-import glob
+from rely.utils import normalize_answer
+import argparse
 
-def parse_results_json(data: dict):
+def process_json_file(path):
     """
-    Parse a results.json file format and extract relevant statistics.
+    Processes a single JSON file to check for correctness based on two methods:
+    1. Majority Vote: Compares 'majority_vote' with 'ground_truth'.
+    2. Best of N: If available, finds the solution with the highest 'value'
+       and compares its 'answer' with 'ground_truth'.
     
-    Args:
-        data (dict): The loaded JSON data from results.json
-        
     Returns:
-        tuple: (is_majority_correct, accuracy_percentage)
+        A tuple containing:
+        - is_majority_correct (bool): True if the majority vote is correct.
+        - sample_accuracy (float): The accuracy value from the JSON.
+        - best_of_n_applicable (bool): True if 'best of n' logic could be applied.
+        - is_best_of_n_correct (bool): True if the 'best of n' answer is correct.
     """
-    correct_answer = data.get('correct_answer')
-    all_answers = data.get('all_answers', [])
-    
-    if not all_answers:
-        return False, 0.0
-    
-    # Calculate majority vote
-    answer_counts = {}
-    for answer in all_answers:
-        answer_counts[answer] = answer_counts.get(answer, 0) + 1
-    
-    if not answer_counts:
-        return False, 0.0
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        ground_truth = data.get('ground_truth')
+
+        # --- 1. Majority Vote Calculation (Original Logic) ---
+        majority_vote = data.get('majority_vote')
+        is_majority_correct = False
+        if ground_truth is not None and majority_vote is not None:
+            normalized_gt = normalize_answer(str(ground_truth))
+            normalized_mv = normalize_answer(str(majority_vote))
+            if (normalized_gt == normalized_mv) and normalized_gt != "":
+                is_majority_correct = True
         
-    majority_answer = max(answer_counts, key=lambda x: answer_counts[x])
-    is_majority_correct = majority_answer == correct_answer
-    
-    # Calculate accuracy as percentage of correct answers
-    correct_count = data.get('correct_count', 0)
-    total_answers = data.get('total_answers', len(all_answers))
-    accuracy_percentage = (correct_count / total_answers * 100) if total_answers > 0 else 0.0
-    
-    return is_majority_correct, accuracy_percentage
+        try:
+            sample_accuracy = float(str(data.get('accuracy', '0.00%')).strip('%'))
+        except (ValueError, TypeError):
+            sample_accuracy = 0.0
 
-def calculate_sbs_statistics(base_path: str):
-    """
-    Analyzes self-consistency results from a directory of JSON summaries.
+        # --- 2. Best of N Calculation (New Logic) ---
+        best_of_n_applicable = False
+        is_best_of_n_correct = False
+        
+        solutions = data.get('solutions')
+        # Check if 'solutions' is a non-empty list
+        if isinstance(solutions, list) and solutions and ground_truth is not None:
+            best_solution = None
+            max_value = float('-inf')
+            
+            # Find the solution with the highest 'value'
+            for sol in solutions:
+                # Accept either 'answer' or 'final_answer' as the answer key
+                answer_key = None
+                if isinstance(sol, dict) and 'value' in sol:
+                    if 'answer' in sol:
+                        answer_key = 'answer'
+                    elif 'final_answer' in sol:
+                        answer_key = 'final_answer'
+                if answer_key is not None:
+                    try:
+                        current_value = float(sol['value'])
+                        if current_value > max_value:
+                            max_value = current_value
+                            best_solution = sol
+                            best_solution_answer_key = answer_key
+                    except (ValueError, TypeError):
+                        # Ignore solutions with non-numeric 'value'
+                        continue
+            # If a best solution was found, compare its answer to the ground truth
+            if best_solution is not None:
+                best_of_n_applicable = True
+                normalized_gt = normalize_answer(str(ground_truth))
+                normalized_best_answer = normalize_answer(str(best_solution[best_solution_answer_key]))
+                if (normalized_gt == normalized_best_answer) and normalized_gt != "":
+                    is_best_of_n_correct = True
 
-    This function supports two formats:
-    1. Folders matching 'q_*' with 'summary.json' files
-    2. Folders matching 'question_*' with 'run_*' subdirectories containing 'results.json' files
-    
-    Computes aggregate statistics about the correctness of the generated answers.
+        return is_majority_correct, sample_accuracy, best_of_n_applicable, is_best_of_n_correct
 
-    Args:
-        base_path (str): The path to the run directory containing question folders.
-    """
-    # Check for both patterns: q_* and question_*
-    q_folders = sorted(glob.glob(os.path.join(base_path, 'q_*')))
-    question_folders = sorted(glob.glob(os.path.join(base_path, 'question_*')))
-    
-    total_processed = 0
-    majority_vote_correct_count = 0
-    total_accuracy_sum = 0.0
-    total_tokens_sum = 0
-    total_tokens_count = 0
+    except Exception:
+        # For any file reading/parsing error, count as incorrect
+        return False, 0.0, False, False
 
-    if q_folders:
-        print(f"🔍 Found {len(q_folders)} 'q_*' folders, processing with summary.json format...")
-        for folder in q_folders:
-            result = process_summary_json(folder)
-            if result is not None:
-                is_correct, accuracy, tokens = result
-                if is_correct:
-                    majority_vote_correct_count += 1
-                total_accuracy_sum += accuracy
-                total_processed += 1
-                if tokens is not None:
-                    total_tokens_sum += tokens
-                    total_tokens_count += 1
-    
-    if question_folders:
-        print(f"🔍 Found {len(question_folders)} 'question_*' folders, processing with results.json format...")
-        for folder in question_folders:
-            # Look for run_* subdirectories
-            run_folders = sorted(glob.glob(os.path.join(folder, 'run_*')))
-            if not run_folders:
-                print(f"⚠️ Warning: No 'run_*' subdirectories found in '{folder}'. Skipping.")
-                continue
-            # Process the first run folder (or you could aggregate across all runs)
-            for run_folder in run_folders:
-                result = process_results_json(run_folder)
-                if result is not None:
-                    is_correct, accuracy, tokens = result
-                    if is_correct:
-                        majority_vote_correct_count += 1
-                    total_accuracy_sum += accuracy
-                    total_processed += 1
-                    if tokens is not None:
-                        total_tokens_sum += tokens
-                        total_tokens_count += 1
-                break  # Only process the first run folder for each question
-    
-    if total_processed == 0:
-        print(f"❌ Error: No valid question folders found in the path: '{base_path}'")
-        print("Looking for either 'q_*' folders with 'summary.json' or 'question_*' folders with 'run_*/results.json'")
+def main():
+    parser = argparse.ArgumentParser(description='Process JSON files and compute evaluation statistics.')
+    parser.add_argument('input_dir', help='Directory containing JSON files to process')
+    args = parser.parse_args()
+
+    input_dir = args.input_dir
+    if not os.path.isdir(input_dir):
+        print(f"❌ Error: The directory does not exist: '{input_dir}'")
         return
 
-    print(f"🔍 Processed {total_processed} questions from '{base_path}'...")
+    # Recursively find all .json files
+    json_files = [os.path.join(root, f) for root, _, files in os.walk(input_dir) for f in files if f.endswith('.json')]
 
-    # --- Calculate Final Percentages ---
-    majority_vote_correct_percent = (majority_vote_correct_count / total_processed) * 100
-    mean_accuracy_percent = total_accuracy_sum / total_processed
-    mean_tokens = (total_tokens_sum / total_tokens_count) if total_tokens_count > 0 else 0.0
+    if not json_files:
+        print(f"❌ No JSON files found in '{input_dir}' or its subfolders.")
+        return
 
-    # --- Display Results ---
-    print("\n" + "="*50)
-    print(f"📊 Overall Statistics for: {os.path.basename(base_path)}")
-    print("="*50)
-    print(
-        f"Majority vote is correct: {majority_vote_correct_count} out of {total_processed} "
-        f"({majority_vote_correct_percent:.2f}%)"
-    )
-    print(
-        f"Mean accuracy per dataset: {mean_accuracy_percent:.2f}%"
-    )
-    print(
-        f"Mean total_generated_tokens: {mean_tokens:.2f}"
-    )
-    print("="*50)
+    # --- Initialize counters ---
+    total_files = 0
+    # Counters for majority vote
+    majority_correct_count = 0
+    acc_sum = 0.0
+    # Counters for best of n
+    best_of_n_applicable_count = 0
+    best_of_n_correct_count = 0
 
-def process_summary_json(folder: str):
-    """Process a folder with summary.json format."""
-    summary_file = os.path.join(folder, 'summary.json')
+    for path in sorted(json_files):
+        total_files += 1
+        is_majority_correct, accuracy, best_of_n_applicable, is_best_of_n_correct = process_json_file(path)
+        
+        # Accumulate majority vote stats
+        acc_sum += accuracy
+        if is_majority_correct:
+            majority_correct_count += 1
+        
+        # Accumulate best of n stats
+        if best_of_n_applicable:
+            best_of_n_applicable_count += 1
+            if is_best_of_n_correct:
+                best_of_n_correct_count += 1
 
-    if not os.path.exists(summary_file):
-        print(f"⚠️ Warning: 'summary.json' not found in '{folder}'. Skipping.")
-        return None
+    print(f"\n✅ Processed {total_files} JSON files in '{input_dir}'")
+    print("-" * 40)
+    
+    # --- Print Majority Vote Statistics ---
+    percent_correct = (majority_correct_count / total_files) * 100 if total_files > 0 else 0.0
+    mean_accuracy = (acc_sum / total_files) if total_files > 0 else 0.0
 
-    try:
-        with open(summary_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+    print("📊 Majority Vote Statistics")
+    print(f"   Correct: {majority_correct_count} / {total_files} ({percent_correct:.2f}%)")
+    print(f"   Mean sample accuracy: {mean_accuracy:.2f}%")
+    print("-" * 40)
 
-        # Check if the majority vote answer was correct
-        is_correct = data.get('majority_vote') == data.get('ground_truth')
-
-        # Get accuracy
-        accuracy_str = data.get('accuracy', '0.00%')
-        accuracy = float(accuracy_str.strip('%'))
-
-        # Get total_generated_tokens if present
-        tokens = data.get('total_generated_tokens')
-        if tokens is not None:
-            try:
-                tokens = int(tokens)
-            except Exception:
-                tokens = None
-
-        return is_correct, accuracy, tokens
-
-    except (json.JSONDecodeError, KeyError, ValueError) as e:
-        print(f"❌ Error processing '{summary_file}': {e}. Skipping.")
-        return None
-
-def process_results_json(folder: str):
-    """Process a folder with results.json format."""
-    results_file = os.path.join(folder, 'results.json')
-
-    if not os.path.exists(results_file):
-        print(f"⚠️ Warning: 'results.json' not found in '{folder}'. Skipping.")
-        return None
-
-    try:
-        with open(results_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-
-        # parse_results_json returns (is_majority_correct, accuracy_percentage)
-        is_correct, accuracy = parse_results_json(data)
-        tokens = data.get('total_generated_tokens')
-        if tokens is not None:
-            try:
-                tokens = int(tokens)
-            except Exception:
-                tokens = None
-        return is_correct, accuracy, tokens
-
-    except (json.JSONDecodeError, KeyError, ValueError) as e:
-        print(f"❌ Error processing '{results_file}': {e}. Skipping.")
-        return None
-
+    # --- Print Best of N Statistics (if applicable) ---
+    if best_of_n_applicable_count > 0:
+        best_of_n_percent_correct = (best_of_n_correct_count / best_of_n_applicable_count) * 100
+        print("🏆 Best of N (by value) Statistics")
+        print(f"   Applicable in: {best_of_n_applicable_count} / {total_files} files")
+        print(f"   Correct: {best_of_n_correct_count} / {best_of_n_applicable_count} ({best_of_n_percent_correct:.2f}%)")
+        print("-" * 40)
 
 if __name__ == '__main__':
-    run_path = 'sbs_results'
-
-    if os.path.isdir(run_path):
-        calculate_sbs_statistics(run_path)
-    else:
-        print(f"❌ Error: The base path does not exist: '{run_path}'")
-        print("Please ensure the path is correct and you are running the script from the correct location.")
+    main()
