@@ -8,18 +8,19 @@ from collections import Counter
 from multiprocessing import Process, Queue, set_start_method
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import uuid
+import random
 
 import torch
 import torch.nn as nn
 from openai import OpenAI
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoModel, AutoTokenizer
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from tqdm import tqdm
 import argparse
 from datasets import load_dataset
 
-from rely.utils import MATH_SYSTEM_PROMPT
+from rely.utils import MATH_SYSTEM_PROMPT, extract_final_answer, normalize_answer
 
 # --- Configuration ---
 os.environ["TORCH_COMPILE_DISABLE"] = "1"
@@ -108,16 +109,6 @@ class StepBeamSearch:
         self._prompt_cache[cache_key] = prompt
         return prompt
 
-    def _extract_final_answer(self, text: str) -> Optional[str]:
-            
-        patterns = [
-            r'The correct answer is \(([A-J])\)'
-        ]
-        for p in patterns:
-            m = re.search(p, text, re.IGNORECASE)
-            if m: return m.group(1).upper()
-        return None
-
     def _get_values_from_server(self, prompts: List[str], generated_texts: List[str]) -> List[float]:
         # This function's logic is mostly the same, just renamed queues for clarity
         if not prompts:
@@ -203,7 +194,7 @@ class StepBeamSearch:
                 child_node = parent_node.add_child(snippet)
                 child_node.value = value
                 
-                if ans := self._extract_final_answer(gen_text):
+                if ans := extract_final_answer(gen_text):
                     child_node.is_terminal, child_node.final_answer = True, ans
                     
                 if self.config.remove_duplicate:
@@ -239,11 +230,12 @@ class StepBeamSearch:
 
     # Helper functions _create_summary and _save_results remain unchanged
     def _create_summary(self, solutions: List[Dict[str, Any]], question: str, ground_truth: Optional[str]) -> Dict[str, Any]:
-        answers = [s['final_answer'] for s in solutions if s['final_answer'] != "Not found"]
+        ground_truth = normalize_answer(ground_truth)
+        answers = [normalize_answer(s['final_answer']) for s in solutions if s['final_answer'] != "Not found"]
         majority_vote = Counter(answers).most_common(1)[0][0] if answers else "N/A"
         accuracy = "N/A"
         if ground_truth and answers:
-            correct_answers = sum(1 for ans in answers if ans.strip().upper() == ground_truth.strip().upper())
+            correct_answers = sum(1 for ans in answers if ans == ground_truth)
             accuracy = f"{correct_answers / len(answers):.2%}" if answers else "0.00%"
         return {"question": question, "ground_truth": ground_truth, "majority_vote": majority_vote, "accuracy": accuracy, "solutions": solutions}
 
@@ -252,7 +244,7 @@ class StepBeamSearch:
         os.makedirs(base_path, exist_ok=True)
 
         for idx, node in enumerate(final_beams):
-            if not node.final_answer: node.final_answer = self._extract_final_answer(node.full_text) or ""
+            if not node.final_answer: node.final_answer = extract_final_answer(node.full_text) or ""
             termination_reason = "answer_found" if node.final_answer else "max_depth"
             solution_data = {"beam_index": idx + 1, "value": node.value, "final_answer": node.final_answer or "Not found",
                              "depth": node.depth, "termination_reason": termination_reason, "solution_path": node.full_text}
@@ -302,46 +294,106 @@ class StepBeamSearch:
 
 def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queues: List[Queue]):
     """
-    This process loads the value model on a dedicated GPU and serves scoring requests from the client workers.
+    This process loads the value model on a dedicated GPU and serves scoring requests
+    from the client workers according to the official PRM documentation.
     """
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.value_model_gpu)
     value_device = torch.device("cuda:0")
     logger.info(f"[ValueServer] Starting on device {value_device}")
 
-    # Load the value model and tokenizer
-    model = AutoModelForSequenceClassification.from_pretrained(
+    # Load the value model and tokenizer with trust_remote_code=True
+    tokenizer = AutoTokenizer.from_pretrained(args.value_model_path, trust_remote_code=True)
+    model = AutoModel.from_pretrained(
         args.value_model_path,
         num_labels=2,
         torch_dtype=torch.bfloat16,
-        device_map="auto"
+        device_map="auto",
+        trust_remote_code=True,
     )
-    tokenizer = AutoTokenizer.from_pretrained(args.value_model_path)
-    
+
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-        
+    tokenizer.padding_side = "left" # Use left-padding for batch processing
+
     model.eval()
     logger.info("[ValueServer] Value model loaded. Waiting for tasks.")
 
+    prompt_pattern = re.compile(
+        r"<\|im_start\|>system\n(.*?)"
+        r"<\|im_end\|>\n<\|im_start\|>user\n(.*?)"
+        r"<\|im_end\|>\n<|im_start|>assistant\n(.*)",
+        re.DOTALL
+    )
+
     @torch.no_grad()
     def get_values(prompts: List[str], generated_texts: List[str]) -> List[float]:
-        values = []
+        conversation_strs = []
         for prompt, gen_text in zip(prompts, generated_texts):
-            full_text = prompt + gen_text # + "\n\n"
-            inputs = tokenizer(
-                full_text, 
-                return_tensors="pt", 
-                truncation=True, 
-                max_length=7000,
-                padding=True
-            ).to(value_device)
-            outputs = model(**inputs)
-            # Apply softmax to convert logits to probabilities
-            probabilities = torch.softmax(outputs.logits, dim=-1)
-            # Get the probability for the positive class (index 1) as the value
-            value = probabilities[0, 1].item()
-            values.append(value)
-        return values
+            match = prompt_pattern.match(prompt)
+            if not match:
+                logger.error(f"Prompt did not match expected format. Cannot score. Prompt: {prompt[:200]}")
+                # This sample will be skipped later by len check
+                continue
+
+            system_msg, user_msg, partial_solution = match.groups()
+            partial_solution = partial_solution or ""
+            full_assistant_response = (partial_solution.strip() + '\n\n' + gen_text.strip()).strip()
+
+            # Split into steps and filter out any empty strings
+            steps = [s.strip() for s in full_assistant_response.split('\n\n') if s.strip()]
+
+            # Insert the special token as per docs
+            assistant_content = "<extra_0>".join(steps) + "<extra_0>"
+
+            messages = [
+                {"role": "system", "content": system_msg.strip()},
+                {"role": "user", "content": user_msg.strip()},
+                {"role": "assistant", "content": assistant_content},
+            ]
+
+            # Apply chat template
+            conv_str = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+            conversation_strs.append(conv_str)
+
+        if not conversation_strs:
+            return [0.0] * len(prompts)
+
+        # Batch tokenize all conversations
+        inputs = tokenizer(
+            conversation_strs,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=7000,
+        ).to(value_device)
+
+        # Manually get per-token logits by bypassing the standard sequence classification forward pass
+        base_model_output = model.model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask, use_cache=False)
+        logits = model.score(base_model_output.last_hidden_state) # Shape: (batch_size, seq_len, num_labels)
+
+        probabilities = torch.softmax(logits, dim=-1)
+        step_sep_id = tokenizer.encode("<extra_0>", add_special_tokens=False)[0]
+
+        # Create a mask to find the locations of the <extra_0> tokens
+        token_masks = (inputs.input_ids == step_sep_id)
+
+        batch_rewards = []
+        for i in range(logits.size(0)): # Iterate over each item in the batch
+            sample_probs = probabilities[i]
+            sample_mask = token_masks[i]
+
+            # Get the positive class probability for all <extra_0> tokens
+            step_scores = sample_probs[sample_mask][:, 1]
+
+            # The value of a new node is the reward for the *last* step
+            if len(step_scores) > 0:
+                last_step_score = step_scores[-1].item()
+                batch_rewards.append(last_step_score)
+            else:
+                logger.warning("No <extra_0> token found in a processed sample, returning reward of 0.0. This might be due to truncation.")
+                batch_rewards.append(0.0)
+
+        return batch_rewards
 
     while True:
         try:
@@ -385,7 +437,7 @@ def _sbs_worker(args: argparse.Namespace,
         original_index = None
         output_path = None
         try:
-            question = item['question']
+            question = item['problem']
             ground_truth = item.get('answer')
             original_index = item['original_index']
             output_path = os.path.join(args.output_dir, f"q_{original_index:04d}")
@@ -414,12 +466,13 @@ def run_sbs_on_dataset(args: argparse.Namespace):
     """MODIFIED: Main function to orchestrate the server and client processes."""
     set_start_method('spawn', force=True)
     
-
-
     ds = load_dataset(args.dataset, split='test') if 'test' in load_dataset(args.dataset).keys() else load_dataset(args.dataset, split='train')
     dataset = [dict(item) for item in ds]
     for i, item in enumerate(dataset):
         item['original_index'] = i
+
+    random.shuffle(dataset) 
+    dataset = dataset[:100]
 
     num_workers = args.num_workers
     value_task_queue = Queue()
@@ -470,7 +523,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run SBS using a vLLM server.")
     parser.add_argument("--dataset", type=str, required=True, help="Path to input JSONL dataset.")
     parser.add_argument("--output_dir", type=str, required=True, help="Directory to save results.")
-    parser.add_argument("--inference_model", type=str, default="Qwen/Qwen2.5-1.5B", help="Model name served by vLLM.")
+    parser.add_argument("--inference_model", type=str, default="Qwen/Qwen2.5-1.5B-Instruct", help="Model name served by vLLM.")
     parser.add_argument("--value_model_path", type=str, required=True, help="Path to pretrained value model (AutoModelForSequenceClassification).")
     
     # NEW: Simplified parallelism arguments
@@ -492,7 +545,7 @@ if __name__ == "__main__":
     main()
 
 '''
-CUDA_VISIBLE_DEVICES="1" vllm serve Qwen/Qwen2.5-1.5B \
+CUDA_VISIBLE_DEVICES="1" vllm serve Qwen/Qwen2.5-1.5B-Instruct \
     --tensor-parallel-size 1 \
     --pipeline-parallel-size 1 \
     --gpu-memory-utilization 0.90 \
@@ -501,8 +554,7 @@ CUDA_VISIBLE_DEVICES="1" vllm serve Qwen/Qwen2.5-1.5B \
     --enable-prefix-caching \
     --port 8000
 
-Example usage:
-python sbs_parallel_value_model.py \
+python test.py \
     --dataset nlile/hendrycks-MATH-benchmark \
     --output_dir sbs_results/ \
     --value_model_path Qwen/Qwen2.5-Math-PRM-7B \
