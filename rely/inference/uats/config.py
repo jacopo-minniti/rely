@@ -26,8 +26,6 @@ class UATSConfig:
 
 @dataclass
 class Branch:
-    """Represents a single branch in the search tree."""
-
     text: str
     ids: torch.Tensor
     step_count: int
@@ -35,16 +33,24 @@ class Branch:
     uncertainty: Optional[float]
     value: float
     total_tokens: int
+    id: int
+    parent_id: Optional[int]
     final_answer: Optional[str] = None
-    id: int = -1
-    parent_id: Optional[int] = None
-    
-    def __eq__(self, other):
-        """Compare branches by their unique id to avoid tensor comparison issues."""
-        if not isinstance(other, Branch):
-            return False
-        return self.id == other.id
-    
-    def __hash__(self):
-        """Hash based on id for consistent behavior with __eq__."""
-        return hash(self.id) 
+
+    def to_dict(self):
+        """Converts the Branch object to a JSON-serializable dictionary."""
+        # Convert tensor to a list for JSON serialization
+        ids_list = self.ids.tolist() if isinstance(self.ids, torch.Tensor) else self.ids
+
+        return {
+            "text": self.text,
+            "ids": ids_list,
+            "step_count": self.step_count,
+            "score": self.score,
+            "uncertainty": self.uncertainty,
+            "value": self.value,
+            "total_tokens": self.total_tokens,
+            "id": self.id,
+            "parent_id": self.parent_id,
+            "final_answer": self.final_answer,
+        }
