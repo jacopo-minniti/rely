@@ -12,6 +12,7 @@ from rely.utils.text_utils import (
     count_tokens_after_marker,
     format_prompt,
     MATH_SYSTEM_PROMPT,
+    extract_final_answer,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,7 +89,7 @@ class GuidedTreeSearch:
 
     def _generate_final_answer(self, branch: Branch) -> str:
         """Generate a final answer for a completed branch."""
-        text = branch.text.strip() + "\n## Final Answer\n"
+        text = branch.text.strip() + "\n\nSomething like final answer..."
         try:
             completion = self.client.completions.create(
                 model=self.config.model_name,
@@ -98,7 +99,7 @@ class GuidedTreeSearch:
                 top_p=self.config.top_p,
                 n=1,
             )
-            return "\n## Final Answer\n" + completion.choices[0].text
+            return "\n\nSomething like final answer..." + completion.choices[0].text
         except Exception as e:
             logger.error(f"Error during final answer API call: {e}")
             return ""
@@ -161,7 +162,10 @@ class GuidedTreeSearch:
                     all_branches.append(candidate)
                     branch_id_counter += 1
 
-                    if self.tokenizer.eos_token_id in new_tokens or tokens_used >= self.config.budget:
+                    if final_answer := extract_final_answer(new_text):
+                        candidate.final_answer = final_answer
+                        finished.append(candidate)
+                    elif self.tokenizer.eos_token_id in new_tokens or tokens_used >= self.config.budget:
                         finished.append(candidate)
                         if tokens_used >= self.config.budget: budget_exceeded = True
                     else:
@@ -176,6 +180,9 @@ class GuidedTreeSearch:
 
         final_branches = sorted(finished + beam, key=lambda b: b.value, reverse=True)[:self.config.beam_width]
         for branch in final_branches:
-            branch.final_answer = self._generate_final_answer(branch)
+            if not branch.final_answer:
+                generated_text = self._generate_final_answer(branch)
+                branch.text += generated_text
+                branch.final_answer = extract_final_answer(branch.text)
             
         return final_branches, all_branches, tokens_used

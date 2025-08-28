@@ -16,7 +16,7 @@ from transformers import AutoTokenizer, AutoModel, AutoModelForTokenClassificati
 from .config import UATSConfig, Branch
 from .guided_tree_search import GuidedTreeSearch
 from .scorer import Scorer
-from rely.utils.text_utils import MMLU_SYSTEM_PROMPT, extract_final_answer as util_extract_final_answer
+from rely.utils.text_utils import MMLU_SYSTEM_PROMPT, extract_final_answer as util_extract_final_answer, normalize_answer
 
 logger = logging.getLogger(__name__)
 
@@ -142,11 +142,8 @@ def save_branches(
 ) -> None:
     """Save the *active* branches at the end of the search to disk."""
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    random_suffix = f"_{random.randint(0, 100):03d}"
     output_path = Path(output_dir)
-    run_dir = output_path / f"run_{timestamp}{random_suffix}"
-    run_dir.mkdir(parents=True, exist_ok=True)
+    output_path.mkdir(parents=True, exist_ok=True)
 
     if not branches:
         return
@@ -160,7 +157,7 @@ def save_branches(
         logger.info(f"Selected branches: max_step={max(step_counts)}, min_step={min(step_counts)}")
 
     summary_data = {
-        "timestamp": timestamp,
+        "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S"),
         "user_question": user_question,
         "system_prompt": system_prompt,
         "total_branches": len(final_branches),
@@ -171,7 +168,7 @@ def save_branches(
     correct_count = 0
 
     for i, branch in enumerate(final_branches):
-        filepath = run_dir / f"branch_{i}.txt"
+        filepath = output_path / f"branch_{i}.txt"
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(f"Step count: {branch.step_count}\n")
             f.write(f"Score: {branch.score:.4f}\n")
@@ -179,21 +176,17 @@ def save_branches(
             f.write(f"Value: {branch.value:.4f}\n")
             f.write(f"Total tokens: {branch.total_tokens}\n")
             f.write("\n--- Branch Text ---\n")
-            branch_text = branch.text
-            if branch.final_answer:
-                final_answer_text = branch.final_answer.strip()
-                f.write(branch_text)
-                f.write(final_answer_text)
-            else:
-                f.write(branch_text)
+            f.write(branch.text)
 
-        extracted_answer = ""
-        if branch.final_answer:
-            full_text = branch.text + branch.final_answer
-            extracted_answer = util_extract_final_answer(full_text)
-            all_answers.append(extracted_answer)
-            if correct_answer and extracted_answer.strip().upper() == correct_answer.strip().upper():
-                correct_count += 1
+        if not branch.final_answer:
+            branch.final_answer = util_extract_final_answer(branch.text)
+
+        extracted_answer = branch.final_answer or "Not found"
+        normalized_answer = normalize_answer(extracted_answer)
+        all_answers.append(normalized_answer)
+
+        if correct_answer and normalized_answer != "Not found" and normalize_answer(correct_answer) == normalized_answer:
+            correct_count += 1
 
         summary_data["branches"].append(
             {
@@ -218,13 +211,13 @@ def save_branches(
         summary_data["correct_count"] = correct_count
         summary_data["total_answers"] = len(all_answers)
 
-    summary_filepath = run_dir / "results.json"
+    summary_filepath = output_path / "results.json"
     with open(summary_filepath, "w", encoding="utf-8") as f:
         json.dump(summary_data, f, indent=2, ensure_ascii=False)
 
-    logger.info(f"Saved {len(final_branches)} branches and summary to {run_dir}")
+    logger.info(f"Saved {len(final_branches)} branches and summary to {output_path}")
 
-    _generate_tree_image(all_branches, run_dir)
+    _generate_tree_image(all_branches, output_path)
 
 
 def _generate_tree_image(
@@ -240,7 +233,7 @@ def _generate_tree_image(
     G = nx.DiGraph()
     root_id = None
     
-    for branch in branches.
+    for branch in branches:
         node_id = branch.id
         
         branch_text = branch.text
@@ -273,11 +266,11 @@ def _generate_tree_image(
 
     for branch in branches:
         if branch.final_answer:
-            full_text = branch.text + branch.final_answer
-            final_answer = util_extract_final_answer(full_text)
-            final_node_id = f"final_{branch.id}"
-            G.add_node(final_node_id, label=final_answer, is_final_answer=True)
-            G.add_edge(branch.id, final_node_id)
+            final_answer = util_extract_final_answer(branch.text)
+            if final_answer:
+                final_node_id = f"final_{branch.id}"
+                G.add_node(final_node_id, label=final_answer, is_final_answer=True)
+                G.add_edge(branch.id, final_node_id)
     
     pos = nx.nx_agraph.graphviz_layout(G, prog="dot")
     plt.figure(figsize=(20, 15))
@@ -293,7 +286,7 @@ def _generate_tree_image(
         G, pos, nodelist=root_nodes + final_answer_nodes, node_shape="o", node_color="lightgreen", node_size=3500
     )
     nx.draw_networkx_edges(
-        G, pos, arrows=True, arrowstyle="-|>", arrowsize=15, edge_color='gray', width=1.5
+        G, pos, arrows=True, arrowstyle="-||", arrowsize=15, edge_color='gray', width=1.5
     )
     
     node_labels = nx.get_node_attributes(G, 'label')

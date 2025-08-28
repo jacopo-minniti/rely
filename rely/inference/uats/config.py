@@ -54,11 +54,9 @@ class Branch:
     @classmethod
     def from_dict(cls, data):
         """Creates a Branch object from a dictionary."""
-        ids_tensor = torch.tensor([])
-
         return cls(
             text=data["text"],
-            ids=ids_tensor,
+            ids=torch.tensor([]),
             step_count=data["step_count"],
             score=data["score"],
             uncertainty=data["uncertainty"],

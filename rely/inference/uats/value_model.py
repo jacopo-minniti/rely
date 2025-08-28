@@ -3,23 +3,20 @@ Value model for UATS using autoregressive LLM with classification head.
 Similar to the PRM approach used in SBS but integrated into UATS.
 """
 
-import re
 import math
 import os
 import torch
 import torch.nn.functional as F
-from typing import List, Optional, Tuple
 from transformers import AutoTokenizer, AutoModel
 import logging
 
+from rely.utils import MATH_SYSTEM_PROMPT as SYSTEM_PROMPT
+
 # Disable torch compilation to prevent recompilation issues
-os.environ["TORCH_COMPILE_DISABLE"] = "1"
-torch._dynamo.config.suppress_errors = True
+# os.environ["TORCH_COMPILE_DISABLE"] = "1"
+# torch._dynamo.config.suppress_errors = True
 
 logger = logging.getLogger(__name__)
-
-# Same system prompt as SBS for consistency
-SYSTEM_PROMPT = """The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer."""
 
 
 def make_step_rewards(logits, token_masks):

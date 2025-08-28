@@ -33,20 +33,19 @@ class Scorer:
         )
         
         inputs = self.tokenizer(conversation_str, return_tensors="pt").to(self.device)
-        input_ids = inputs.input_ids
 
         with torch.no_grad():
-            outputs = self.model(input_ids=input_ids)
-            # CRITICAL CHANGE: Get logits based on model type
             if self.model_type == "value":
-                logits = outputs[0]  # AutoModel returns logits in a tuple
+                base_model_output = self.model.model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask, use_cache=False)
+                logits = self.model.score(base_model_output.last_hidden_state)
             else:
-                logits = outputs.logits # TokenClassification returns an object with a logits attribute
+                outputs = self.model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask)
+                logits = outputs.logits
 
         probabilities = F.softmax(logits, dim=-1)
 
         separator_id = self.tokenizer.encode(separator_token, add_special_tokens=False)[0]
-        separator_indices = (input_ids[0] == separator_id).nonzero(as_tuple=True)[0]
+        separator_indices = (inputs.input_ids[0] == separator_id).nonzero(as_tuple=True)[0]
 
         if separator_indices.nelement() == 0:
             return []
