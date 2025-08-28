@@ -11,7 +11,7 @@ import torch
 import textwrap
 import matplotlib.pyplot as plt
 import networkx as nx
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, AutoModelForTokenClassification
+from transformers import AutoTokenizer, AutoModel, AutoModelForTokenClassification
 
 from .config import UATSConfig, Branch
 from .guided_tree_search import GuidedTreeSearch
@@ -24,24 +24,22 @@ logger = logging.getLogger(__name__)
 def _model_server(model_path, device, task_queue, result_queue, model_type, config):
     """
     Generic server for running inference on a model.
-    Loads the correct model class based on model_type ('value' or 'uncertainty')
-    and uses the Scorer to calculate scores.
+    Loads the correct model class based on model_type and uses the Scorer.
     """
     if model_type == "value":
-        # The value model (PRM) is a sequence classification model
-        model_class = AutoModelForSequenceClassification
+        # The value model (PRM) is a custom model loaded with AutoModel.
+        model_class = AutoModel
         scoring_method = config.value_scoring_method
     elif model_type == "uncertainty":
-        # The uncertainty model (PUM) is a token classification model
+        # The uncertainty model (PUM) is a token classification model.
         model_class = AutoModelForTokenClassification
         scoring_method = config.uncertainty_scoring_method
     else:
         raise ValueError(f"Unknown model_type: {model_type}")
 
-    model = model_class.from_pretrained(model_path, torch_dtype=torch.bfloat16).to(device)
+    model = model_class.from_pretrained(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True).to(device).eval()
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     
-    # Add pad token if it's missing, which is common for some models
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         
@@ -242,7 +240,7 @@ def _generate_tree_image(
     G = nx.DiGraph()
     root_id = None
     
-    for branch in branches:
+    for branch in branches.
         node_id = branch.id
         
         branch_text = branch.text
