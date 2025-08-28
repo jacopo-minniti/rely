@@ -247,7 +247,8 @@ class StepBeamSearch:
             "ground_truth": ground_truth,
             "majority_vote": majority_vote,
             "accuracy": accuracy,
-            "solutions": solutions
+            "solutions": solutions,
+            "total_generated_tokens": self.total_generated_tokens
         }
 
     # MODIFIED: No longer saves individual beam files, only the final summary.json.
@@ -463,13 +464,13 @@ def run_sbs_on_dataset(args: argparse.Namespace):
     set_start_method('spawn', force=True)
     
     ds = load_dataset(args.dataset, split='test')
-    ds = ds.shuffle(seed=42).select(range(100))
+    ds = ds.shuffle(seed=42).select(range(500))
     dataset = [dict(item) for item in ds]
     for i, item in enumerate(dataset):
         item['original_index'] = i
 
     random.shuffle(dataset) 
-    dataset = dataset[:100]
+    dataset = dataset[:500]
 
     num_workers = args.num_workers
     value_task_queue = Queue()
