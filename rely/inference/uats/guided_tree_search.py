@@ -50,14 +50,10 @@ class GuidedTreeSearch:
         worker_rank: int,
         question: str = "",
     ):
-        # REMOVED: model, uncertainty_model, value_model
-        # self.model = model
         self.tokenizer = tokenizer
-        # self.uncertainty_model = uncertainty_model
-        # self.value_model = value_model
         self.config = config
         self.question = question
-        self.device = "cuda:0"
+        self.device = config.device # FIX: Use device from config
 
         # NEW: Add client for vLLM server
         self.client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_API_BASE)
@@ -89,31 +85,28 @@ class GuidedTreeSearch:
         Passing ``ids`` avoids the costly re-tokenisation of the full prompt at
         every step.  Exactly one of ``text`` or ``ids`` must be provided.
         """
+        if text is None and ids is None:
+            raise ValueError("Either `text` or `ids` must be provided to _value_model_score")
 
         if ids is None:
-            if text is None:
-                raise ValueError("Either `text` or `ids` must be provided to _value_model_score")
-
             # Ensure the text ends with the step delimiter so that we have clean step boundaries
             if not text.endswith("\n\n"):
                 text = text + "\n\n"
             
             # Tokenize for returning ids
-            inputs = self.tokenizer(text, return_tensors="pt")  # type: ignore[call-arg]
+            inputs = self.tokenizer(text, return_tensors="pt")
             ids_tensor = inputs.input_ids.to(self.device)
-            
-            # Extract the reasoning part after the prompt for value model evaluation
-            reasoning_text = self._extract_reasoning_from_full_text(text)
+            full_text = text
         else:
             ids_tensor = ids if ids.dim() == 2 else ids.unsqueeze(0)
             full_text = self.tokenizer.decode(ids_tensor[0], skip_special_tokens=True)
-            reasoning_text = self._extract_reasoning_from_full_text(full_text)
 
         # Get value score from the value model server
+        # FIX: Send the full text directly
         value_score = self._get_from_server(
             self.value_task_queue,
             self.value_result_queue,
-            (self.question, reasoning_text)
+            (full_text,)
         )
         return value_score, ids_tensor.cpu()
 
@@ -185,12 +178,12 @@ class GuidedTreeSearch:
         # MODIFIED: to use the uncertainty model server
         ids_tensor = ids if ids.dim() == 2 else ids.unsqueeze(0)
         full_text = self.tokenizer.decode(ids_tensor[0], skip_special_tokens=True)
-        reasoning_text = self._extract_reasoning_from_full_text(full_text)
 
+        # FIX: Send the full text directly
         uncertainty_score = self._get_from_server(
             self.uncertainty_task_queue,
             self.uncertainty_result_queue,
-            (self.question, reasoning_text)
+            (full_text,)
         )
         u = self.uncertainty_to_branches(uncertainty_score, self.config.uncertainty_threshold)
         return u, uncertainty_score
@@ -215,8 +208,8 @@ class GuidedTreeSearch:
         # ------------------------------------------------------------------
         # Initial prompt tokenisation (performed **once**).
         # ------------------------------------------------------------------
-        prompt_inputs = self.tokenizer(prompt, return_tensors="pt")  # type: ignore[call-arg]
-        prompt_ids = prompt_inputs.input_ids  # (1, L)
+        prompt_inputs = self.tokenizer(prompt, return_tensors="pt")
+        prompt_ids = prompt_inputs.input_ids
 
         # ------------------------------------------------------------------
         # Generate the very first reasoning step.
