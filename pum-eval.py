@@ -177,7 +177,13 @@ if __name__ == "__main__":
 
     # 2. Load Dataset
     dataset = load_dataset("jacopo-minniti/MATH-PUM-qwen2.5-1.5B", "pp-1", split="test")
-    dataset = dataset.shuffle(seed=42).select(range(1000))
+    def count_false_labels(example):
+        """Counts the number of False values in the 'labels' list."""
+        num_false = example['labels'].count(False)
+        return {'num_false': num_false}
+    data_with_counts = dataset.map(count_false_labels)
+    sorted_data = data_with_counts.sort('num_false', reverse=True)
+    dataset = sorted_data.select(range(3000, 4000))
 
     # 3. Evaluate the dataset with the new robust function
     results = evaluate_dataset(dataset, tokenizer, model, batch_size=24) # Adjust batch size based on VRAM
