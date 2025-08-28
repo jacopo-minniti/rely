@@ -17,9 +17,9 @@ class UATSConfig:
     uncertainty_threshold: Union[float, None] = 0.8
     max_step_tokens: int = 256
     # Device configuration - supports hosting each model on different devices
-    device: str = "cuda:0"  # Policy/generation model device
-    uncertainty_device: str = "cuda:1"  # Uncertainty model device  
-    value_device: str = "cuda:2"  # Value model device
+    device: str = "cuda:1"  # Policy/generation model device
+    uncertainty_device: str = "cuda:0"  # Uncertainty model device  
+    value_device: str = "cuda:0"  # Value model device
     temperature: float = 1.0
     top_p: float = 0.95 
 

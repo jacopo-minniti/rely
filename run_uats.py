@@ -5,14 +5,8 @@ import os
 from multiprocessing import Process, Queue
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSequenceClassification
-from rely.inference.uats.config import UATSConfig, Branch
-from rely.inference.uats.guided_tree_search import GuidedTreeSearch
-
-try:
-    import pygraphviz as pgv
-    PYGRAPHVIZ_AVAILABLE = True
-except ImportError:
-    PYGRAPHVIZ_AVAILABLE = False
+from rely.inference import UATSConfig, Branch, GuidedTreeSearch
+import pygraphviz as pgv
 
 
 # Configure logging
@@ -86,22 +80,19 @@ def worker(rank, config, question, uncertainty_task_queue, uncertainty_result_qu
         json.dump(output_data, f, indent=4)
 
     # Create and save a graph of the branches
-    if PYGRAPHVIZ_AVAILABLE:
-        graph = pgv.Agraph(directed=True)
-        for branch in all_branches:
-            graph.add_node(branch.id, label=f"ID: {branch.id}\\nScore: {branch.score:.4f}\\nValue: {branch.value:.4f}")
-            if branch.parent_id is not None:
-                graph.add_edge(branch.parent_id, branch.id)
-        graph.write(os.path.join(question_dir, "branches.dot"))
-        graph.draw(os.path.join(question_dir, "branches.png"), prog="dot")
-    else:
-        logger.warning("pygraphviz not installed. Skipping graph visualization.")
+    graph = pgv.Agraph(directed=True)
+    for branch in all_branches:
+        graph.add_node(branch.id, label=f"ID: {branch.id}\\nScore: {branch.score:.4f}\\nValue: {branch.value:.4f}")
+        if branch.parent_id is not None:
+            graph.add_edge(branch.parent_id, branch.id)
+    graph.write(os.path.join(question_dir, "branches.dot"))
+    graph.draw(os.path.join(question_dir, "branches.png"), prog="dot")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Run UATS inference")
     parser.add_argument("--question", type=str, required=True, help="The question to be answered.")
-    parser.add_argument("--output_dir", type=str, default="uats_output", help="Directory to save the output.")
+    parser.add_argument("--output_dir", type=str, default="uats_results", help="Directory to save the output.")
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-1.5B-Instruct", help="Name of the base model.")
     parser.add_argument("--uncertainty_model_path", type=str, required=True, help="Path to the uncertainty model.")
     parser.add_argument("--value_model_path", type=str, required=True, help="Path to the value model.")
@@ -131,7 +122,7 @@ def main():
     
     # Start worker
     worker_process = Process(target=worker, args=(0, config, args.question, uncertainty_task_queue, uncertainty_result_queue, value_task_queue, value_result_queue, args.output_dir))
-.
+    
     worker_process.start()
     worker_process.join()
 
