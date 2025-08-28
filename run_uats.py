@@ -28,6 +28,8 @@ def main():
     parser.add_argument("--uncertainty_threshold", type=float, default=0.5, help="Threshold to trigger branching.")
     parser.add_argument("--temperature", type=float, default=1, help="Generation temperature.")
     parser.add_argument("--top_p", type=float, default=0.95, help="Generation top_p.")
+    parser.add_argument("--uncertainty_scoring_method", type=str, default="last_step", choices=["product", "average", "minimum", "last_step"], help="Scoring method for uncertainty.")
+    parser.add_argument("--value_scoring_method", type=str, default="product", choices=["product", "average", "minimum", "last_step"], help="Scoring method for value.")
     
     # Device arguments
     parser.add_argument("--device", type=str, default="cuda:1", help="Main device for generation.")
@@ -44,6 +46,8 @@ def main():
         model_name=args.model_name,
         uncertainty_model_path=args.uncertainty_model_path,
         value_model_path=args.value_model_path,
+        uncertainty_scoring_method=args.uncertainty_scoring_method,
+        value_scoring_method=args.value_scoring_method,
         beam_width=args.beam_width,
         max_branches=args.max_branches,
         budget=args.budget,

@@ -119,27 +119,26 @@ class GuidedTreeSearch:
         total_tokens = count_tokens_after_marker(first_node_text, self.tokenizer)
 
         value_score = self._get_score_from_server(self.value_task_queue, self.value_result_queue, first_node_text)
-        norm_score = value_score / max(total_tokens, 1)
 
         branch_id_counter = 0
         all_branches = []
         root_branch = Branch(
-            text=first_node_text, ids=first_ids.cpu(), step_count=1, score=norm_score,
+            text=first_node_text, ids=first_ids.cpu(), step_count=1, score=value_score,
             uncertainty=None, value=value_score, total_tokens=total_tokens,
             id=branch_id_counter, parent_id=None
         )
         beam = [root_branch]
         all_branches.append(root_branch)
         branch_id_counter += 1
-        step = 0
         finished: List[Branch] = []
+        current_beam_width = self.config.beam_width
 
         while beam:
             if tokens_used >= self.config.budget:
                 logger.info("Token budget reached. Stopping search.")
                 break
 
-            all_candidates = []
+            all_new_candidates = []
             budget_exceeded = False
             for branch in beam:
                 uncertainty_score = self._get_score_from_server(self.uncertainty_task_queue, self.uncertainty_result_queue, branch.text)
@@ -149,34 +148,39 @@ class GuidedTreeSearch:
 
                 for step_text, new_tokens in generated_steps:
                     tokens_used += len(new_tokens)
+                    if tokens_used >= self.config.budget:
+                        budget_exceeded = True
+
                     new_text = branch.text + step_text
                     value_score = self._get_score_from_server(self.value_task_queue, self.value_result_queue, new_text)
                     total_tokens = count_tokens_after_marker(new_text, self.tokenizer)
-                    norm_score = value_score / max(total_tokens, 1)
 
                     candidate = Branch(
                         text=new_text, ids=torch.cat([branch.ids[0].cpu(), new_tokens.cpu()]).unsqueeze(0),
-                        step_count=branch.step_count + 1, score=norm_score, uncertainty=uncertainty_score,
+                        step_count=branch.step_count + 1, score=value_score, uncertainty=uncertainty_score,
                         value=value_score, total_tokens=total_tokens, id=branch_id_counter, parent_id=branch.id
                     )
                     all_branches.append(candidate)
+                    all_new_candidates.append(candidate)
                     branch_id_counter += 1
-
-                    if final_answer := extract_final_answer(new_text):
-                        candidate.final_answer = final_answer
-                        finished.append(candidate)
-                    elif self.tokenizer.eos_token_id in new_tokens or tokens_used >= self.config.budget:
-                        finished.append(candidate)
-                        if tokens_used >= self.config.budget: budget_exceeded = True
-                    else:
-                        all_candidates.append(candidate)
                     
                     if budget_exceeded: break
                 if budget_exceeded: break
 
-            if not all_candidates or budget_exceeded: break
-            beam = sorted(all_candidates, key=lambda x: x.score, reverse=True)[:self.config.beam_width]
-            step += 1
+            if not all_new_candidates or budget_exceeded: break
+            
+            all_new_candidates.sort(key=lambda x: x.score, reverse=True)
+            top_candidates = all_new_candidates[:current_beam_width]
+            
+            beam = []
+            for cand in top_candidates:
+                if final_answer := extract_final_answer(cand.text):
+                    cand.final_answer = final_answer
+                    finished.append(cand)
+                else:
+                    beam.append(cand)
+            
+            current_beam_width = len(beam)
 
         final_branches = sorted(finished + beam, key=lambda b: b.value, reverse=True)[:self.config.beam_width]
         for branch in final_branches:

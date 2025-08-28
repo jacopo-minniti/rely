@@ -70,10 +70,7 @@ class Scorer:
         if self.scoring_method == "last_step":
             return step_scores[-1]
         elif self.scoring_method == "product":
-            safe_scores = [s for s in step_scores if s > 0]
-            if not safe_scores:
-                return -float('inf')
-            return np.sum(np.log(safe_scores))
+            return np.prod(step_scores)
         elif self.scoring_method == "average":
             return np.mean(step_scores)
         elif self.scoring_method == "minimum":

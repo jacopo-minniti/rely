@@ -116,7 +116,7 @@ class UATSValueModel:
         )
         
         # Tokenize and move to the value model device
-        input_ids = self.tokenizer.encode(
+        inputs = self.tokenizer.encode(
             conversation_str, 
             return_tensors="pt", 
             truncation=True,
@@ -124,16 +124,12 @@ class UATSValueModel:
         ).to(self.device)
         
         # Get model outputs
-        try:
-            outputs = self.model(
-                input_ids=input_ids,
-                use_cache=False,
-                return_dict=True
-            )
-        except (AttributeError, TypeError) as e:
-            # Fallback for compatibility issues
-            logger.warning(f"Cache issue encountered: {e}. Trying without cache.")
-            outputs = self.model(input_ids=input_ids)
+        base_model_output = self.model.model(
+            input_ids=inputs.input_ids,
+            attention_mask=inputs.attention_mask,
+            use_cache=False,
+        )
+        logits = self.model.score(base_model_output.last_hidden_state)
         
         # Extract step rewards
         step_sep_tokens = self.tokenizer.encode("<extra_0>", add_special_tokens=False)
@@ -143,8 +139,8 @@ class UATSValueModel:
             # Fallback if token not found
             step_sep_id = self.tokenizer.encode("<extra_0>")[0]
         
-        token_masks = (input_ids == step_sep_id)
-        step_rewards = make_step_rewards(outputs[0], token_masks)
+        token_masks = (inputs.input_ids == step_sep_id)
+        step_rewards = make_step_rewards(logits, token_masks)
         
         # Calculate value based on the configured scoring method
         if step_rewards and step_rewards[0]:
