@@ -286,7 +286,7 @@ def _generate_tree_image(
         G, pos, nodelist=root_nodes + final_answer_nodes, node_shape="o", node_color="lightgreen", node_size=3500
     )
     nx.draw_networkx_edges(
-        G, pos, arrows=True, arrowstyle="-||", arrowsize=15, edge_color='gray', width=1.5
+        G, pos, arrows=True, arrowstyle="-|>", arrowsize=15, edge_color='gray', width=1.5
     )
     
     node_labels = nx.get_node_attributes(G, 'label')

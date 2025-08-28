@@ -18,15 +18,15 @@ def main():
 
     # Model arguments
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-1.5B-Instruct", help="Name of the base generation model (served by vLLM).")
-    parser.add_argument("--uncertainty_model_path", type=str, required=True, help="Path to the uncertainty model.")
-    parser.add_argument("--value_model_path", type=str, required=True, help="Path to the value model.")
+    parser.add_argument("--uncertainty_model_path", type=str, default="jacopo-minniti/Qwen2.5-Math-7B-PUM", help="Path to the uncertainty model.")
+    parser.add_argument("--value_model_path", type=str, default="Qwen/Qwen2.5-Math-PRM-7B", help="Path to the value model.")
 
     # UATSConfig arguments
-    parser.add_argument("--beam_width", type=int, default=3, help="Beam width for the search.")
+    parser.add_argument("--beam_width", type=int, default=4, help="Beam width for the search.")
     parser.add_argument("--max_branches", type=int, default=2, help="Maximum branches to explore based on uncertainty.")
     parser.add_argument("--budget", type=int, default=1024, help="Total token budget for generation.")
     parser.add_argument("--uncertainty_threshold", type=float, default=0.5, help="Threshold to trigger branching.")
-    parser.add_argument("--temperature", type=float, default=0.9, help="Generation temperature.")
+    parser.add_argument("--temperature", type=float, default=1, help="Generation temperature.")
     parser.add_argument("--top_p", type=float, default=0.95, help="Generation top_p.")
     
     # Device arguments
