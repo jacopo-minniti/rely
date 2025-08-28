@@ -13,6 +13,7 @@ last_run_prepared/
 wandb/
 outputs/
 uats_*/
+rely.egg-info
 
 *.pdf
 *.jsonl
