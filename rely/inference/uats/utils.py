@@ -1,217 +1,66 @@
 import json
 import logging
-import re
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Union
+from multiprocessing import Process, Queue
 
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+import pygraphviz as pgv
+from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSequenceClassification
 
 from .config import UATSConfig, Branch
 from .guided_tree_search import GuidedTreeSearch
-from .uncertainty_model import UATSUncertaintyModel
-from .value_model import UATSValueModel
 from rely.utils import MATH_SYSTEM_PROMPT, normalize_answer, extract_final_answer
 
 logger = logging.getLogger(__name__)
 
 
-# -----------------------------------------------------------------------------
-# Model loading helpers
-# -----------------------------------------------------------------------------
-
-def load_model_and_tokenizer(
-    model_name: str,
-    device: str = "auto",
-    max_seq_length: int = 16384,
-    dtype: str = "bfloat16",
-    load_in_4bit: bool = True,
-):
-    """Load a standard transformers model and its tokenizer ready for inference."""
+def _model_server(model_path, device, task_queue, result_queue, model_type):
+    """Generic server for running inference on a model."""
+    if model_type == "value":
+        model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16).to(device)
+    else: # uncertainty
+        model = AutoModelForSequenceClassification.from_pretrained(model_path, torch_dtype=torch.bfloat16).to(device)
     
-    # Load model
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=torch.bfloat16 if dtype == "bfloat16" else torch.float16,
-        device_map="auto" if device == "auto" else {"": device},
-        trust_remote_code=True,
-        max_position_embeddings=max_seq_length if hasattr(AutoModelForCausalLM, 'config') else None,
-    )
-    
-    # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_name,
-        trust_remote_code=True,
-        max_length=max_seq_length,
-    )
-    
-    # Set pad token if not available
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    
-    # Set model to eval mode
-    model.eval()
-    
-    return model, tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    logger.info(f"{model_type.capitalize()} model server started on {device}")
 
+    while True:
+        request_id, rank, text = task_queue.get()
+        if text is None:  # Sentinel for stopping
+            break
+        
+        inputs = tokenizer(text, return_tensors="pt").to(device)
+        
+        with torch.no_grad():
+            if model_type == "value":
+                outputs = model(**inputs)
+                # Take the logits of the last token
+                score = outputs.logits[0, -1, 0].item()
+            else: # uncertainty
+                outputs = model(**inputs)
+                # Apply softmax to get probabilities and take the score for the first class
+                score = torch.softmax(outputs.logits, dim=-1)[0, 0].item()
+        
+        result_queue.put((request_id, score))
 
-def create_uats_searcher(config: UATSConfig) -> GuidedTreeSearch:
-    """Instantiate a fully-configured :class:`GuidedTreeSearch` ready to run."""
-
-    logger.info(f"Loading model: {config.model_name}")
-    model, tokenizer = load_model_and_tokenizer(config.model_name, device=config.device)
-    logger.info("Model and tokenizer loaded successfully")
-
-    # Load uncertainty model
-    logger.info(f"Loading uncertainty model: {config.uncertainty_model_path}")
-    try:
-        uncertainty_model = UATSUncertaintyModel(
-            model_path=config.uncertainty_model_path,
-            device=config.uncertainty_device,
-            scoring_method=config.uncertainty_scoring_method
-        )
-        logger.info("Uncertainty model loaded successfully")
-    except Exception as e:
-        logger.error(f"Failed to load uncertainty model: {e}")
-        raise
-
-    # Load value model
-    logger.info(f"Loading value model: {config.value_model_path}")
-    try:
-        value_model = UATSValueModel(
-            model_path=config.value_model_path,
-            device=config.value_device,
-            scoring_method=config.value_scoring_method
-        )
-        logger.info("Value model loaded successfully")
-    except Exception as e:
-        logger.error(f"Failed to load value model: {e}")
-        raise
-
-    return GuidedTreeSearch(
-        model=model,
+def _worker(rank, config, question, system_prompt, uncertainty_task_queue, uncertainty_result_queue, value_task_queue, value_result_queue, worker_result_queue):
+    """Worker process to run the Guided Tree Search."""
+    tokenizer = AutoTokenizer.from_pretrained(config.model_name)
+    gts = GuidedTreeSearch(
         tokenizer=tokenizer,
-        uncertainty_model=uncertainty_model,
-        value_model=value_model,
         config=config,
+        uncertainty_task_queue=uncertainty_task_queue,
+        uncertainty_result_queue=uncertainty_result_queue,
+        value_task_queue=value_task_queue,
+        value_result_queue=value_result_queue,
+        worker_rank=rank,
     )
 
-
-# -----------------------------------------------------------------------------
-# Search orchestration & persistence helpers
-# -----------------------------------------------------------------------------
-
-def save_branches(
-    branches: List[Branch],
-    all_branches: List[Branch],
-    output_dir: Union[str, Path],
-    max_branch_tokens: int,
-    user_question: Optional[str] = None,
-    system_prompt: Optional[str] = None,
-    correct_answer: Optional[str] = None
-) -> None:
-    """Save the *active* branches at the end of the search to disk."""
-
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    if not branches:
-        return
-
-    # The branches passed here have already been filtered to beam_width in the search function
-    # and have final answers generated, so we just save them as-is
-    final_branches = branches
-    
-    logger.debug(f"Saving {len(final_branches)} final branches")
-    
-    # Log summary of selected branches
-    if final_branches:
-        step_counts = [b.step_count for b in final_branches]
-        logger.info(f"Selected branches: max_step={max(step_counts)}, min_step={min(step_counts)}")
-
-    summary_data = {
-        "timestamp": datetime.now().isoformat(),
-        "user_question": user_question,
-        "system_prompt": system_prompt,
-        "total_branches": len(final_branches),
-        "branches": [],
-    }
-    
-    # Collect all answers for evaluation
-    all_answers = []
-    correct_count = 0
-    # Track best_of_n (answer from branch with highest value)
-    best_of_n_answer = None
-    best_of_n_value = float('-inf')
-    best_of_n_branch = None
-
-    for i, branch in enumerate(final_branches):
-        filepath = output_path / f"branch_{i}.txt"
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(f"Step count: {branch.step_count}\n")
-            f.write(f"Score: {branch.score:.4f}\n")
-            f.write(f"Uncertainty: {branch.uncertainty}\n")
-            f.write(f"Value: {branch.value:.4f}\n")
-            f.write(f"Total tokens: {branch.total_tokens}\n")
-            f.write("\n--- Branch Text ---\n")
-            branch_text = branch.text
-            if branch.final_answer:
-                final_answer_text = branch.final_answer.strip()
-                f.write(branch_text)
-                f.write(final_answer_text)
-            else:
-                f.write(branch_text)
-
-        extracted_answer = ""
-        if branch.final_answer:
-            full_text = branch.text + branch.final_answer
-            extracted_answer = extract_final_answer(full_text)
-            if extracted_answer:
-                all_answers.append(extracted_answer)
-                # Check if this answer is correct
-                if correct_answer and normalize_answer(extracted_answer) == normalize_answer(correct_answer):
-                    correct_count += 1
-            # Track best_of_n (highest value)
-            if branch.value is not None and branch.value > best_of_n_value:
-                best_of_n_value = branch.value
-                best_of_n_answer = extracted_answer
-                best_of_n_branch = i
-
-        summary_data["branches"].append(
-            {
-                "branch_id": i,
-                "step_count": branch.step_count,
-                "score": branch.score,
-                "uncertainty": branch.uncertainty,
-                "value": branch.value,
-                "total_tokens": branch.total_tokens,
-                "extracted_answer": extracted_answer,
-            }
-        )
-
-
-    # Add evaluation metrics if correct_answer is provided
-    if correct_answer is not None:
-        hard_label = 1 if correct_count > 0 else 0
-        soft_label = correct_count / len(all_answers) if all_answers else 0.0
-        summary_data["correct_answer"] = correct_answer
-        summary_data["all_answers"] = all_answers
-        summary_data["hard_label"] = hard_label
-        summary_data["soft_label"] = soft_label
-        summary_data["correct_count"] = correct_count
-        summary_data["total_answers"] = len(all_answers)
-
-    # Add best_of_n (answer from branch with highest value)
-    summary_data["best_of_n"] = best_of_n_answer
-
-    summary_filepath = output_path / "results.json"
-    with open(summary_filepath, "w", encoding="utf-8") as f:
-        json.dump(summary_data, f, indent=2, ensure_ascii=False)
-
-    logger.info(f"Saved {len(final_branches)} branches and summary to {output_path}")
-
-    _generate_tree_image(all_branches, output_path, correct_answer=correct_answer)
+    final_branches, all_branches, tokens_used = gts.search(question, system_prompt)
+    worker_result_queue.put((final_branches, all_branches, tokens_used))
 
 
 def run_uats(
@@ -227,15 +76,33 @@ def run_uats(
     if config is None:
         config = UATSConfig()
     
-    # Override uncertainty threshold if provided
     if uncertainty_threshold is not None:
         config.uncertainty_threshold = uncertainty_threshold
 
-    logger.info("Creating UATS searcher…")
-    searcher = create_uats_searcher(config)
-    logger.info("Starting UATS search…")
-    final_branches, all_branches = searcher.search(user_question, system_prompt)
-    logger.info(f"UATS search completed with {len(final_branches)} branches explored")
+    os.makedirs(save_dir, exist_ok=True)
+    
+    uncertainty_task_queue = Queue()
+    uncertainty_result_queue = Queue()
+    value_task_queue = Queue()
+    value_result_queue = Queue()
+    worker_result_queue = Queue()
+
+    uncertainty_server = Process(target=_model_server, args=(config.uncertainty_model_path, config.uncertainty_device, uncertainty_task_queue, uncertainty_result_queue, "uncertainty"))
+    value_server = Process(target=_model_server, args=(config.value_model_path, config.value_device, value_task_queue, value_result_queue, "value"))
+    
+    uncertainty_server.start()
+    value_server.start()
+    
+    worker_process = Process(target=_worker, args=(0, config, user_question, system_prompt, uncertainty_task_queue, uncertainty_result_queue, value_task_queue, value_result_queue, worker_result_queue))
+    
+    worker_process.start()
+    final_branches, all_branches, tokens_used = worker_result_queue.get()
+    worker_process.join()
+
+    uncertainty_task_queue.put((None, None, None))
+    value_task_queue.put((None, None, None))
+    uncertainty_server.join()
+    value_server.join()
 
     if save_dir is not None:
         logger.info(f"Saving branches to {save_dir}")
@@ -243,7 +110,7 @@ def run_uats(
             final_branches,
             all_branches,
             save_dir,
-            max_branch_tokens=config.budget,
+            tokens_used,
             user_question=user_question,
             system_prompt=system_prompt,
             correct_answer=correct_answer,
@@ -252,163 +119,33 @@ def run_uats(
     return final_branches
 
 
-# -----------------------------------------------------------------------------
-# Tree visualisation helpers
-# -----------------------------------------------------------------------------
-
-def _safe_text_for_matplotlib(text: str) -> str:
-    """Escape or remove problematic characters for matplotlib text rendering."""
-    # Replace dollar signs with escaped versions to prevent LaTeX parsing
-    text = text.replace('$', r'\$')
-    # Remove other problematic LaTeX characters
-    text = text.replace('\\', '\\\\')
-    text = text.replace('{', '\\{')
-    text = text.replace('}', '\\}')
-    text = text.replace('_', '\\_')
-    text = text.replace('^', '\\^')
-    return text
-
-def _generate_tree_image(
+def save_branches(
     branches: List[Branch],
-    output_dir: Path,
-    filename: str = "search_tree.png",
-    correct_answer: Optional[str] = None,
+    all_branches: List[Branch],
+    output_dir: Union[str, Path],
+    tokens_used: int,
+    user_question: Optional[str] = None,
+    system_prompt: Optional[str] = None,
+    correct_answer: Optional[str] = None
 ) -> None:
-    """Render a simple tree visualisation of the explored search space using matplotlib and networkx."""
-    import matplotlib.pyplot as plt
-    import networkx as nx
-    import textwrap
-    from rely.inference.uats.utils import extract_final_answer
-    
-    if not branches:
-        return
-    
-    G = nx.DiGraph()
-    root_id = None
-    
-    # Add all nodes
-    for branch in branches:
-        node_id = branch.id
-        
-        # Extract only the latest step
-        branch_text = branch.text
-        if branch_text.endswith('<|im_end|>'):
-            branch_text = branch_text[:-len('<|im_end|>')]
-        if branch_text.endswith('\n\n'):
-            branch_text = branch_text[:-2]
-        
-        steps = branch_text.split('\n\n')
-        latest_step = steps[-1].strip() if steps else branch_text.strip()
-        # get only first 25 chars and then ellipsis
-        latest_step = latest_step[:25] + '...'
-        
-        # Safely escape the text for matplotlib
-        safe_text = _safe_text_for_matplotlib(latest_step)
-        
-        # Wrap the text for better display in the node
-        wrapped_text = textwrap.fill(safe_text, width=30)
-        
-        # Always show both scores if available, on separate lines
-        score_lines = []
-        if branch.value is not None:
-            score_lines.append(f"v={branch.value:.2f}")
-        if branch.uncertainty is not None:
-            score_lines.append(f"u={branch.uncertainty:.2f}")
-        label = "\n".join(score_lines) + f"\n{wrapped_text}" if score_lines else wrapped_text
-        
-        G.add_node(node_id, label=label, is_final=branch.final_answer is not None)
-        
+    """Save the *active* branches at the end of the search to disk."""
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    summary_data = {
+        "question": user_question,
+        "tokens_used": tokens_used,
+        "final_branches": [b.to_dict() for b in branches],
+        "all_branches": [b.to_dict() for b in all_branches],
+    }
+    with open(os.path.join(output_path, "output.json"), "w") as f:
+        json.dump(summary_data, f, indent=4)
+
+    graph = pgv.Agraph(directed=True)
+    for branch in all_branches:
+        graph.add_node(branch.id, label=f"ID: {branch.id}\\nScore: {branch.score:.4f}\\nValue: {branch.value:.4f}")
         if branch.parent_id is not None:
-            G.add_edge(branch.parent_id, node_id)
-        else:
-            root_id = node_id
-            G.nodes[node_id]['is_root'] = True
-
-    # Add final answer nodes for branches that have them
-    for branch in branches:
-        if branch.final_answer:
-            full_text = branch.text + branch.final_answer
-            final_answer = extract_final_answer(full_text)
-            safe_answer = _safe_text_for_matplotlib(final_answer or "No answer")
-            final_node_id = f"final_{branch.id}"
-            # Determine correctness
-            correct = False
-            # Use normalized comparison
-            if final_answer is not None and correct_answer is not None:
-                correct = normalize_answer(final_answer) == normalize_answer(correct_answer)
-            # Store correctness for coloring
-            G.add_node(final_node_id, label=safe_answer, is_final_answer=True, is_correct=correct)
-            G.add_edge(branch.id, final_node_id)
-    
-    pos = nx.nx_agraph.graphviz_layout(G, prog="dot")
-    plt.figure(figsize=(20, 15))
-    
-    # Separate nodes by type for custom styling
-    root_nodes = [node for node, data in G.nodes(data=True) if data.get('is_root')]
-    final_answer_nodes = [node for node, data in G.nodes(data=True) if data.get('is_final_answer')]
-    intermediate_nodes = [node for node in G.nodes() if node not in root_nodes and node not in final_answer_nodes]
-
-    # Draw intermediate nodes as rectangles
-    nx.draw_networkx_nodes(
-        G, pos,
-        nodelist=intermediate_nodes,
-        node_shape="s", # square/rectangle
-        node_color="lightblue",
-        node_size=3500
-    )
-
-    # Draw root nodes as green circles
-    nx.draw_networkx_nodes(
-        G, pos,
-        nodelist=root_nodes,
-        node_shape="o",
-        node_color="lightgreen",
-        node_size=3500
-    )
-
-    # Draw final answer nodes: green if correct, red if incorrect
-    correct_final_nodes = [node for node in final_answer_nodes if G.nodes[node].get('is_correct', False)]
-    incorrect_final_nodes = [node for node in final_answer_nodes if not G.nodes[node].get('is_correct', False)]
-    if correct_final_nodes:
-        nx.draw_networkx_nodes(
-            G, pos,
-            nodelist=correct_final_nodes,
-            node_shape="o",
-            node_color="lightgreen",
-            node_size=3500
-        )
-    if incorrect_final_nodes:
-        nx.draw_networkx_nodes(
-            G, pos,
-            nodelist=incorrect_final_nodes,
-            node_shape="o",
-            node_color="lightcoral",
-            node_size=3500
-        )
-
-    # Draw edges
-    nx.draw_networkx_edges(
-        G, pos,
-        arrows=True,
-        arrowstyle="-|>",
-        arrowsize=15,
-        edge_color='gray',
-        width=1.5
-    )
-    
-    # Draw labels
-    node_labels = nx.get_node_attributes(G, 'label')
-    nx.draw_networkx_labels(
-        G, pos,
-        labels=node_labels,
-        font_size=8,
-        font_weight="bold",
-        horizontalalignment="center"
-    )
-    
-    plt.margins(0.05) # Reduced margins
-    plt.tight_layout()
-    png_path = output_dir / filename
-    plt.savefig(png_path, bbox_inches='tight', dpi=200)
-    plt.close()
-    logger.info(f"Tree image saved to {png_path}")
+            graph.add_edge(branch.parent_id, branch.id)
+    graph.write(os.path.join(output_path, "branches.dot"))
+    graph.draw(os.path.join(output_path, "branches.png"), prog="dot")
