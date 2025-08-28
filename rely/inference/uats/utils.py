@@ -12,7 +12,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSequen
 
 from .config import UATSConfig, Branch
 from .guided_tree_search import GuidedTreeSearch
-from rely.utils import MATH_SYSTEM_PROMPT, normalize_answer, extract_final_answer
+from rely.utils.text_utils import extract_final_answer
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +37,9 @@ def _model_server(model_path, device, task_queue, result_queue, model_type):
         with torch.no_grad():
             if model_type == "value":
                 outputs = model(**inputs)
-                # Take the logits of the last token
                 score = outputs.logits[0, -1, 0].item()
             else: # uncertainty
                 outputs = model(**inputs)
-                # Apply softmax to get probabilities and take the score for the first class
                 score = torch.softmax(outputs.logits, dim=-1)[0, 0].item()
         
         result_queue.put((request_id, score))
@@ -60,24 +58,23 @@ def _worker(rank, config, question, system_prompt, uncertainty_task_queue, uncer
     )
 
     final_branches, all_branches, tokens_used = gts.search(question, system_prompt)
-    worker_result_queue.put((final_branches, all_branches, tokens_used))
+    
+    final_branches_dicts = [b.to_dict() for b in final_branches]
+    all_branches_dicts = [b.to_dict() for b in all_branches]
+    
+    worker_result_queue.put((final_branches_dicts, all_branches_dicts, tokens_used))
 
 
 def run_uats(
     user_question: str,
-    system_prompt: str = MATH_SYSTEM_PROMPT,
+    system_prompt: str,
     config: Optional[UATSConfig] = None,
     save_dir: Optional[Union[str, Path]] = "uats_results",
-    correct_answer: Optional[str] = None,
-    uncertainty_threshold: Optional[float] = None,
 ) -> List[Branch]:
     """High-level one-shot helper wrapping search & persistence."""
 
     if config is None:
         config = UATSConfig()
-    
-    if uncertainty_threshold is not None:
-        config.uncertainty_threshold = uncertainty_threshold
 
     os.makedirs(save_dir, exist_ok=True)
     
@@ -96,13 +93,16 @@ def run_uats(
     worker_process = Process(target=_worker, args=(0, config, user_question, system_prompt, uncertainty_task_queue, uncertainty_result_queue, value_task_queue, value_result_queue, worker_result_queue))
     
     worker_process.start()
-    final_branches, all_branches, tokens_used = worker_result_queue.get()
+    final_branches_dicts, all_branches_dicts, tokens_used = worker_result_queue.get()
     worker_process.join()
 
     uncertainty_task_queue.put((None, None, None))
     value_task_queue.put((None, None, None))
     uncertainty_server.join()
     value_server.join()
+    
+    final_branches = [Branch.from_dict(b) for b in final_branches_dicts]
+    all_branches = [Branch.from_dict(b) for b in all_branches_dicts]
 
     if save_dir is not None:
         logger.info(f"Saving branches to {save_dir}")
@@ -112,8 +112,6 @@ def run_uats(
             save_dir,
             tokens_used,
             user_question=user_question,
-            system_prompt=system_prompt,
-            correct_answer=correct_answer,
         )
 
     return final_branches
@@ -125,19 +123,27 @@ def save_branches(
     output_dir: Union[str, Path],
     tokens_used: int,
     user_question: Optional[str] = None,
-    system_prompt: Optional[str] = None,
-    correct_answer: Optional[str] = None
 ) -> None:
     """Save the *active* branches at the end of the search to disk."""
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
+    final_branches_data = []
+    for branch in branches:
+        branch_dict = branch.to_dict()
+        full_text = branch.text
+        if branch.final_answer:
+            full_text += branch.final_answer
+        
+        extracted_answer = extract_final_answer(full_text)
+        branch_dict['extracted_answer'] = extracted_answer
+        final_branches_data.append(branch_dict)
+
     summary_data = {
         "question": user_question,
         "tokens_used": tokens_used,
-        "final_branches": [b.to_dict() for b in branches],
-        "all_branches": [b.to_dict() for b in all_branches],
+        "final_branches": final_branches_data,
     }
     with open(os.path.join(output_path, "output.json"), "w") as f:
         json.dump(summary_data, f, indent=4)

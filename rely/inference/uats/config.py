@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Union
 import torch
 
@@ -39,12 +39,8 @@ class Branch:
 
     def to_dict(self):
         """Converts the Branch object to a JSON-serializable dictionary."""
-        # Convert tensor to a list for JSON serialization
-        ids_list = self.ids.tolist() if isinstance(self.ids, torch.Tensor) else self.ids
-
         return {
             "text": self.text,
-            "ids": ids_list,
             "step_count": self.step_count,
             "score": self.score,
             "uncertainty": self.uncertainty,
@@ -54,3 +50,24 @@ class Branch:
             "parent_id": self.parent_id,
             "final_answer": self.final_answer,
         }
+    
+    @classmethod
+    def from_dict(cls, data):
+        """Creates a Branch object from a dictionary."""
+        # 'ids' are not stored, so we create a placeholder tensor.
+        # This is okay because the primary use of from_dict is in the main process
+        # after the search is complete, where 'ids' are not needed for further generation.
+        ids_tensor = torch.tensor([])
+
+        return cls(
+            text=data["text"],
+            ids=ids_tensor,
+            step_count=data["step_count"],
+            score=data["score"],
+            uncertainty=data["uncertainty"],
+            value=data["value"],
+            total_tokens=data["total_tokens"],
+            id=data["id"],
+            parent_id=data["parent_id"],
+            final_answer=data.get("final_answer"),
+        )
