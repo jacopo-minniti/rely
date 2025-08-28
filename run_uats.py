@@ -8,6 +8,7 @@ def main():
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-1.5B-Instruct", help="Name of the base model.")
     parser.add_argument("--uncertainty_model_path", type=str, required=True, help="Path to the uncertainty model.")
     parser.add_argument("--value_model_path", type=str, required=True, help="Path to the value model.")
+    parser.add_argument("--correct_answer", type=str, default=None, help="The correct answer to the question for evaluation.")
     args = parser.parse_args()
 
     config = UATSConfig(
@@ -16,7 +17,7 @@ def main():
         value_model_path=args.value_model_path,
     )
     
-    run_uats(user_question=args.question, config=config, save_dir=args.output_dir)
+    run_uats(user_question=args.question, config=config, save_dir=args.output_dir, correct_answer=args.correct_answer)
 
 if __name__ == "__main__":
     main()
