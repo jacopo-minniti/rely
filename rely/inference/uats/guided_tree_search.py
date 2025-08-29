@@ -131,7 +131,6 @@ class GuidedTreeSearch:
         all_branches.append(root_branch)
         branch_id_counter += 1
         finished: List[Branch] = []
-        current_beam_width = self.config.beam_width
 
         while beam:
             if tokens_used >= self.config.budget:
@@ -170,7 +169,7 @@ class GuidedTreeSearch:
             if not all_new_candidates or budget_exceeded: break
             
             all_new_candidates.sort(key=lambda x: x.score, reverse=True)
-            top_candidates = all_new_candidates[:current_beam_width]
+            top_candidates = all_new_candidates[:self.config.beam_width]
             
             beam = []
             for cand in top_candidates:
@@ -179,8 +178,6 @@ class GuidedTreeSearch:
                     finished.append(cand)
                 else:
                     beam.append(cand)
-            
-            current_beam_width = len(beam)
 
         final_branches = sorted(finished + beam, key=lambda b: b.value, reverse=True)[:self.config.beam_width]
         for branch in final_branches:
