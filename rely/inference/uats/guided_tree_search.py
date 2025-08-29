@@ -151,7 +151,7 @@ class GuidedTreeSearch:
                     if tokens_used >= self.config.budget:
                         budget_exceeded = True
 
-                    new_text = branch.text + step_text
+                    new_text = branch.text + "\n\n" + step_text
                     value_score = self._get_score_from_server(self.value_task_queue, self.value_result_queue, new_text)
                     total_tokens = count_tokens_after_marker(new_text, self.tokenizer)
 
@@ -170,15 +170,16 @@ class GuidedTreeSearch:
             if not all_new_candidates or budget_exceeded: break
             
             all_new_candidates.sort(key=lambda x: x.score, reverse=True)
-            top_candidates = all_new_candidates[:self.config.beam_width]
             
-            beam = []
-            for cand in top_candidates:
+            non_finished_candidates = []
+            for cand in all_new_candidates:
                 if final_answer := extract_final_answer(cand.text):
                     cand.final_answer = final_answer
                     finished.append(cand)
                 else:
-                    beam.append(cand)
+                    non_finished_candidates.append(cand)
+            
+            beam = non_finished_candidates[:self.config.beam_width]
 
         final_branches = sorted(finished + beam, key=lambda b: b.value, reverse=True)[:self.config.beam_width]
         for branch in final_branches:
@@ -188,3 +189,4 @@ class GuidedTreeSearch:
                 branch.final_answer = extract_final_answer(branch.text)
             
         return final_branches, all_branches, tokens_used
+

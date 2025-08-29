@@ -232,19 +232,28 @@ def _generate_tree_image(
     
     G = nx.DiGraph()
     root_id = None
+    branch_map = {b.id: b for b in branches}
     
     for branch in branches:
         node_id = branch.id
         
-        branch_text = branch.text
-        if branch_text.endswith('<|im_end|>'):
-            branch_text = branch_text[:-len('<|im_end|>')]
-        if branch_text.endswith('\n\n'):
-            branch_text = branch_text[:-2]
+        latest_step = ""
+        if branch.parent_id is not None and branch.parent_id in branch_map:
+            parent = branch_map[branch.parent_id]
+            if branch.text.startswith(parent.text):
+                latest_step = branch.text[len(parent.text):].strip()
+
+        if not latest_step:  # For root or if parent logic failed
+            assistant_marker = "assistant\n"
+            marker_pos = branch.text.rfind(assistant_marker)
+            if marker_pos != -1:
+                latest_step = branch.text[marker_pos + len(assistant_marker):].strip()
+            else:
+                # Fallback to original logic for root or error cases
+                steps = branch.text.split('\n\n')
+                latest_step = steps[-1].strip() if steps else branch.text.strip()
         
-        steps = branch_text.split('\n\n')
-        latest_step = steps[-1].strip() if steps else branch_text.strip()
-        latest_step = latest_step[:25] + '...'
+        latest_step = (latest_step[:25] + '...') if len(latest_step) > 25 else latest_step
         
         wrapped_text = textwrap.fill(latest_step, width=30)
         
@@ -286,7 +295,7 @@ def _generate_tree_image(
         G, pos, nodelist=root_nodes + final_answer_nodes, node_shape="o", node_color="lightgreen", node_size=3500
     )
     nx.draw_networkx_edges(
-        G, pos, arrows=True, arrowstyle="-|>", arrowsize=15, edge_color='gray', width=1.5
+        G, pos, arrows=True, arrowstyle="-||", arrowsize=15, edge_color='gray', width=1.5
     )
     
     node_labels = nx.get_node_attributes(G, 'label')
