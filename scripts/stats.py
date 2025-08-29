@@ -80,7 +80,7 @@ def process_json_file(path):
         # For any file reading/parsing error, count as incorrect
         return False, 0.0, False, False
 
-def main():
+if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process JSON files and compute evaluation statistics.')
     parser.add_argument('input_dir', help='Directory containing JSON files to process')
     args = parser.parse_args()
@@ -105,32 +105,41 @@ def main():
     # Counters for best of n
     best_of_n_applicable_count = 0
     best_of_n_correct_count = 0
+    # Counter for total tokens
+    total_tokens_sum = 0
 
     for path in sorted(json_files):
         total_files += 1
         is_majority_correct, accuracy, best_of_n_applicable, is_best_of_n_correct = process_json_file(path)
-        
         # Accumulate majority vote stats
         acc_sum += accuracy
         if is_majority_correct:
             majority_correct_count += 1
-        
         # Accumulate best of n stats
         if best_of_n_applicable:
             best_of_n_applicable_count += 1
             if is_best_of_n_correct:
                 best_of_n_correct_count += 1
+        # Accumulate total tokens
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            total_tokens_sum += int(data.get('total_tokens', 0))
+        except Exception:
+            pass
 
     print(f"\n✅ Processed {total_files} JSON files in '{input_dir}'")
     print("-" * 40)
-    
+
     # --- Print Majority Vote Statistics ---
     percent_correct = (majority_correct_count / total_files) * 100 if total_files > 0 else 0.0
     mean_accuracy = (acc_sum / total_files) if total_files > 0 else 0.0
+    mean_total_tokens = (total_tokens_sum / total_files) if total_files > 0 else 0.0
 
     print("📊 Majority Vote Statistics")
     print(f"   Correct: {majority_correct_count} / {total_files} ({percent_correct:.2f}%)")
     print(f"   Mean sample accuracy: {mean_accuracy:.2f}%")
+    print(f"   Mean total tokens: {mean_total_tokens:.2f}")
     print("-" * 40)
 
     # --- Print Best of N Statistics (if applicable) ---
@@ -140,6 +149,3 @@ def main():
         print(f"   Applicable in: {best_of_n_applicable_count} / {total_files} files")
         print(f"   Correct: {best_of_n_correct_count} / {best_of_n_applicable_count} ({best_of_n_percent_correct:.2f}%)")
         print("-" * 40)
-
-if __name__ == '__main__':
-    main()

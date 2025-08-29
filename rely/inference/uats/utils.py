@@ -122,7 +122,7 @@ def run_uats(
         all_results.append(final_branches)
 
         if save_dir is not None:
-            question_save_dir = Path(save_dir) / str(i)
+            question_save_dir = Path(save_dir) / f"question_{i}"
             logger.info(f"Saving branches to {question_save_dir}")
             save_branches(
                 final_branches,
