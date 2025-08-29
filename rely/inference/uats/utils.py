@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import random
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Union
@@ -253,6 +254,7 @@ def _generate_tree_image(
                 steps = branch.text.split('\n\n')
                 latest_step = steps[-1].strip() if steps else branch.text.strip()
         
+        latest_step = re.sub(r'\\boxed(.*?)}', r'\1', latest_step)
         latest_step = (latest_step[:25] + '...') if len(latest_step) > 25 else latest_step
         
         wrapped_text = textwrap.fill(latest_step, width=30)
@@ -277,6 +279,7 @@ def _generate_tree_image(
         if branch.final_answer:
             final_answer = extract_final_answer(branch.text)
             if final_answer:
+                final_answer = re.sub(r'\\boxed(.*?)}', r'\1', final_answer)
                 final_node_id = f"final_{branch.id}"
                 G.add_node(final_node_id, label=final_answer, is_final_answer=True)
                 G.add_edge(branch.id, final_node_id)
@@ -295,7 +298,7 @@ def _generate_tree_image(
         G, pos, nodelist=root_nodes + final_answer_nodes, node_shape="o", node_color="lightgreen", node_size=3500
     )
     nx.draw_networkx_edges(
-        G, pos, arrows=True, arrowstyle="-||", arrowsize=15, edge_color='gray', width=1.5
+        G, pos, arrows=True, arrowstyle="-|>", arrowsize=15, edge_color='gray', width=1.5
     )
     
     node_labels = nx.get_node_attributes(G, 'label')
