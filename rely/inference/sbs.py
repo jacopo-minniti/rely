@@ -482,7 +482,7 @@ def run_sbs_on_dataset(args: argparse.Namespace):
         item['original_index'] = i
 
     random.shuffle(dataset) 
-    dataset = dataset[:500]
+    dataset = dataset[:100]
 
     num_workers = args.num_workers
     value_task_queue = Queue()
@@ -569,9 +569,10 @@ CUDA_VISIBLE_DEVICES="1" vllm serve Qwen/Qwen2.5-1.5B-Instruct \
 
 python test.py \
     --dataset nlile/hendrycks-MATH-benchmark \
-    --output_dir sbs_results/ \
+    --output_dir sbs_results_b1_4_b2_5_product// \
     --value_model_path Qwen/Qwen2.5-Math-PRM-7B \
     --num_workers 5 \
     --value_model_gpu 0 \
-    --value_method product
+    --value_method product \
+    --budget 4000
 '''
