@@ -16,7 +16,7 @@ from transformers import AutoTokenizer, AutoModel, AutoModelForTokenClassificati
 from .config import UATSConfig, Branch
 from .guided_tree_search import GuidedTreeSearch
 from .scorer import Scorer
-from rely.utils.text_utils import MMLU_SYSTEM_PROMPT, extract_final_answer as util_extract_final_answer, normalize_answer
+from rely.utils.text_utils import MATH_SYSTEM_PROMPT, extract_final_answer, normalize_answer
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ def _worker(rank, config, question, system_prompt, uncertainty_task_queue, uncer
 
 def run_uats(
     user_question: str,
-    system_prompt: str = MMLU_SYSTEM_PROMPT,
+    system_prompt: str = MATH_SYSTEM_PROMPT,
     config: Optional[UATSConfig] = None,
     save_dir: Optional[Union[str, Path]] = "uats_results",
     correct_answer: Optional[str] = None,
@@ -179,7 +179,7 @@ def save_branches(
             f.write(branch.text)
 
         if not branch.final_answer:
-            branch.final_answer = util_extract_final_answer(branch.text)
+            branch.final_answer = extract_final_answer(branch.text)
 
         extracted_answer = branch.final_answer or "Not found"
         normalized_answer = normalize_answer(extracted_answer)
@@ -266,7 +266,7 @@ def _generate_tree_image(
 
     for branch in branches:
         if branch.final_answer:
-            final_answer = util_extract_final_answer(branch.text)
+            final_answer = extract_final_answer(branch.text)
             if final_answer:
                 final_node_id = f"final_{branch.id}"
                 G.add_node(final_node_id, label=final_answer, is_final_answer=True)

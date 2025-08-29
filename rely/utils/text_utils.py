@@ -74,7 +74,7 @@ def ensure_think_ending(text: str) -> str:
     return text
 
 
-def format_prompt(question: str, system_prompt: str = MMLU_SYSTEM_PROMPT, add_think: bool = False, cot="") -> str:
+def format_prompt(question: str, system_prompt: str = MATH_SYSTEM_PROMPT, add_think: bool = False, cot="") -> str:
     """
     Format the question into a prompt for the model.
 
