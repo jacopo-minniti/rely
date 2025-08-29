@@ -123,28 +123,26 @@ class GuidedTreeSearch:
         value_score = self._get_score_from_server(self.value_task_queue, self.value_result_queue, first_node_text)
 
         branch_id_counter = 0
-        all_branches = []
         root_branch = Branch(
             text=first_node_text, ids=first_ids.cpu(), step_count=1, score=value_score,
             uncertainty=None, value=value_score, total_tokens=total_tokens,
             id=branch_id_counter, parent_id=None
         )
-        all_branches.append(root_branch)
+        all_branches = [root_branch]
         branch_id_counter += 1
 
-        # Beam contains non-finished branches to expand
-        beam = [root_branch]
+        # Contains non-finished leaf nodes for the current expansion step
+        leaf_nodes_to_expand = [root_branch]
 
         while tokens_used < self.config.budget:
-            if not beam:
+            if not leaf_nodes_to_expand:
                 logger.info("No more branches to expand. Stopping search.")
                 break
 
-            all_new_candidates = []
+            newly_generated_candidates = []
             budget_exceeded = False
             
-            # Expand branches in the current beam
-            for branch in beam:
+            for branch in leaf_nodes_to_expand:
                 uncertainty_score = self._get_score_from_server(self.uncertainty_task_queue, self.uncertainty_result_queue, branch.text)
                 num_branches_to_gen = self.uncertainty_to_branches(uncertainty_score, self.config.uncertainty_threshold, self.config.max_branches)
                 
@@ -168,42 +166,44 @@ class GuidedTreeSearch:
                     if final_answer := extract_final_answer(candidate.text):
                         candidate.final_answer = final_answer
 
-                    all_new_candidates.append(candidate)
+                    newly_generated_candidates.append(candidate)
                     branch_id_counter += 1
                     
-                    if budget_exceeded:
-                        break
-                if budget_exceeded:
-                    break
+                    if budget_exceeded: break
+                if budget_exceeded: break
             
-            all_branches.extend(all_new_candidates)
+            all_branches.extend(newly_generated_candidates)
 
             if budget_exceeded:
                 logger.info("Token budget reached. Stopping search.")
                 break
             
-            if not all_new_candidates:
+            if not newly_generated_candidates:
                 logger.info("No new candidates generated. Stopping search.")
                 break
 
-            # Sort all branches by value to determine the top branches
-            all_branches.sort(key=lambda b: b.value, reverse=True)
+            # Identify all current leaf nodes in the entire tree
+            parent_ids = {b.parent_id for b in all_branches if b.parent_id is not None}
+            all_leaf_nodes = [b for b in all_branches if b.id not in parent_ids]
+
+            # Sort the leaf nodes by value to find the top active branches
+            all_leaf_nodes.sort(key=lambda b: b.value, reverse=True)
             
-            # These are the overall top branches
-            top_branches = all_branches[:self.config.beam_width]
+            top_active_branches = all_leaf_nodes[:self.config.beam_width]
             
-            # Check if all top branches are finished
-            if len(top_branches) == self.config.beam_width and all(b.final_answer is not None for b in top_branches):
+            # Check if all top branches have final answers
+            if len(top_active_branches) == self.config.beam_width and all(b.final_answer is not None for b in top_active_branches):
                 logger.info("All top branches have final answers. Stopping search.")
                 break
 
-            # The new beam is the top non-finished branches from the entire pool
-            non_finished_branches = [b for b in all_branches if b.final_answer is None]
-            beam = non_finished_branches[:self.config.beam_width]
+            # The nodes to expand are the non-finished ones from the top active branches
+            leaf_nodes_to_expand = [b for b in top_active_branches if b.final_answer is None]
 
-        # Final selection of branches
-        all_branches.sort(key=lambda b: b.value, reverse=True)
-        final_branches = all_branches[:self.config.beam_width]
+        # Final selection of branches from the leaves of the tree
+        parent_ids = {b.parent_id for b in all_branches if b.parent_id is not None}
+        all_leaf_nodes = [b for b in all_branches if b.id not in parent_ids]
+        all_leaf_nodes.sort(key=lambda b: b.value, reverse=True)
+        final_branches = all_leaf_nodes[:self.config.beam_width]
 
         # Ensure final branches have a final answer
         for branch in final_branches:
