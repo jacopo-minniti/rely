@@ -87,7 +87,7 @@ class GuidedTreeSearch:
             logger.error(f"Error during API call: {e}")
             return [("", torch.tensor([], dtype=torch.long, device=ids.device))]
 
-    def _generate_final_answer(self, branch: Branch) -> str:
+    def _generate_final_answer(self, branch: Branch) -> tuple[str, int]:
         """Generate a final answer for a completed branch."""
         prompt_addition = "\n\n# Final Answer\n\boxed{"
         text = branch.text.strip() + prompt_addition
@@ -101,11 +101,15 @@ class GuidedTreeSearch:
                 n=1,
             )
             generated_content = completion.choices[0].text
-            # Return the full text that was added to the branch
-            return prompt_addition + generated_content + "}"
+            full_generated_text = prompt_addition + generated_content + "}"
+            
+            new_tokens = self.tokenizer.encode(full_generated_text, add_special_tokens=False)
+            num_new_tokens = len(new_tokens)
+
+            return full_generated_text, num_new_tokens
         except Exception as e:
             logger.error(f"Error during final answer API call: {e}")
-            return ""
+            return "", 0
 
     def search(self, user_question: str, system_prompt: str = MATH_SYSTEM_PROMPT) -> tuple[list[Branch], list[Branch], int]:
         """Perform guided tree search."""
@@ -219,7 +223,8 @@ class GuidedTreeSearch:
 
             # If the branch doesn't have a final answer, try to generate one
             if not leaf_branch.final_answer:
-                generated_text = self._generate_final_answer(leaf_branch)
+                generated_text, new_tokens_count = self._generate_final_answer(leaf_branch)
+                tokens_used += new_tokens_count
                 if generated_text:
                     leaf_branch.text += generated_text
                     leaf_branch.final_answer = extract_final_answer(leaf_branch.text)

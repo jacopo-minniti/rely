@@ -132,6 +132,7 @@ def run_uats(
                 user_question=question,
                 system_prompt=system_prompt,
                 correct_answer=correct_answer,
+                total_tokens_generated=tokens_used,
             )
 
     uncertainty_task_queue.put((None, None, None))
@@ -150,6 +151,7 @@ def save_branches(
     user_question: Optional[str] = None,
     system_prompt: Optional[str] = None,
     correct_answer: Optional[str] = None,
+    total_tokens_generated: Optional[int] = None,
 ) -> None:
     """Save the *active* branches at the end of the search to disk."""
 
@@ -171,6 +173,7 @@ def save_branches(
         "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S"),
         "user_question": user_question,
         "system_prompt": system_prompt,
+        "total_tokens_generated": total_tokens_generated,
         "total_branches": len(final_branches),
         "branches": [],
     }
