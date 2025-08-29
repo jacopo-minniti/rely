@@ -150,7 +150,13 @@ class GuidedTreeSearch:
                 
                 generated_steps = self._generate_step(branch.ids.to(self.device), num_completions=num_branches_to_gen)
 
+                # Deduplicate generated steps to avoid creating identical branches from the same parent
+                unique_steps = {}
                 for step_text, new_tokens in generated_steps:
+                    if step_text not in unique_steps:
+                        unique_steps[step_text] = new_tokens
+
+                for step_text, new_tokens in unique_steps.items():
                     tokens_used += len(new_tokens)
                     if tokens_used >= self.config.budget:
                         budget_exceeded = True
