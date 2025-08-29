@@ -89,7 +89,8 @@ class GuidedTreeSearch:
 
     def _generate_final_answer(self, branch: Branch) -> str:
         """Generate a final answer for a completed branch."""
-        text = branch.text.strip() + "\n\nSomething like final answer..."
+        prompt_addition = "\n\n## Final Answer\n"
+        text = branch.text.strip() + prompt_addition
         try:
             completion = self.client.completions.create(
                 model=self.config.model_name,
@@ -99,7 +100,7 @@ class GuidedTreeSearch:
                 top_p=self.config.top_p,
                 n=1,
             )
-            return "\n\nSomething like final answer..." + completion.choices[0].text
+            return prompt_addition + completion.choices[0].text
         except Exception as e:
             logger.error(f"Error during final answer API call: {e}")
             return ""
