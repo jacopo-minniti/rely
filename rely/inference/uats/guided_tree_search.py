@@ -114,7 +114,7 @@ class GuidedTreeSearch:
         first_step_text, new_tokens = initial_steps[0]
         tokens_used = len(new_tokens)
 
-        first_ids = torch.cat([prompt_ids[0], new_tokens]).unsqueeze(0)
+        first_ids = torch.cat([prompt_ids[0], new_tokens]).long().unsqueeze(0)
         first_node_text = prompt + first_step_text
         total_tokens = count_tokens_after_marker(first_node_text, self.tokenizer)
 
@@ -155,7 +155,7 @@ class GuidedTreeSearch:
                     total_tokens = count_tokens_after_marker(new_text, self.tokenizer)
 
                     candidate = Branch(
-                        text=new_text, ids=torch.cat([branch.ids[0].cpu(), new_tokens.cpu()]).unsqueeze(0),
+                        text=new_text, ids=torch.cat([branch.ids[0].cpu(), new_tokens.cpu()]).long().unsqueeze(0),
                         step_count=branch.step_count + 1, score=value_score, uncertainty=uncertainty_score,
                         value=value_score, total_tokens=total_tokens, id=branch_id_counter, parent_id=branch.id
                     )
