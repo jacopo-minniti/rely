@@ -111,7 +111,8 @@ class GuidedTreeSearch:
         prompt_ids = self.tokenizer(prompt, return_tensors="pt").input_ids.to(self.device)
 
         initial_steps = self._generate_step(prompt_ids)
-        if not initial_steps: return [], [], 0
+        if not initial_steps:
+            return [], [], 0
         first_step_text, new_tokens = initial_steps[0]
         tokens_used = len(new_tokens)
 
@@ -128,23 +129,26 @@ class GuidedTreeSearch:
             uncertainty=None, value=value_score, total_tokens=total_tokens,
             id=branch_id_counter, parent_id=None
         )
-        beam = [root_branch]
         all_branches.append(root_branch)
         branch_id_counter += 1
-        finished: List[Branch] = []
 
-        while beam:
-            if tokens_used >= self.config.budget:
-                logger.info("Token budget reached. Stopping search.")
+        # Beam contains non-finished branches to expand
+        beam = [root_branch]
+
+        while tokens_used < self.config.budget:
+            if not beam:
+                logger.info("No more branches to expand. Stopping search.")
                 break
 
             all_new_candidates = []
             budget_exceeded = False
+            
+            # Expand branches in the current beam
             for branch in beam:
                 uncertainty_score = self._get_score_from_server(self.uncertainty_task_queue, self.uncertainty_result_queue, branch.text)
-                u = self.uncertainty_to_branches(uncertainty_score, self.config.uncertainty_threshold, self.config.max_branches)
+                num_branches_to_gen = self.uncertainty_to_branches(uncertainty_score, self.config.uncertainty_threshold, self.config.max_branches)
                 
-                generated_steps = self._generate_step(branch.ids.to(self.device), num_completions=u)
+                generated_steps = self._generate_step(branch.ids.to(self.device), num_completions=num_branches_to_gen)
 
                 for step_text, new_tokens in generated_steps:
                     tokens_used += len(new_tokens)
@@ -160,28 +164,48 @@ class GuidedTreeSearch:
                         step_count=branch.step_count + 1, score=value_score, uncertainty=uncertainty_score,
                         value=value_score, total_tokens=total_tokens, id=branch_id_counter, parent_id=branch.id
                     )
-                    all_branches.append(candidate)
+                    
+                    if final_answer := extract_final_answer(candidate.text):
+                        candidate.final_answer = final_answer
+
                     all_new_candidates.append(candidate)
                     branch_id_counter += 1
                     
-                    if budget_exceeded: break
-                if budget_exceeded: break
+                    if budget_exceeded:
+                        break
+                if budget_exceeded:
+                    break
+            
+            all_branches.extend(all_new_candidates)
 
-            if not all_new_candidates or budget_exceeded: break
+            if budget_exceeded:
+                logger.info("Token budget reached. Stopping search.")
+                break
             
-            all_new_candidates.sort(key=lambda x: x.score, reverse=True)
-            
-            non_finished_candidates = []
-            for cand in all_new_candidates:
-                if final_answer := extract_final_answer(cand.text):
-                    cand.final_answer = final_answer
-                    finished.append(cand)
-                else:
-                    non_finished_candidates.append(cand)
-            
-            beam = non_finished_candidates[:self.config.beam_width]
+            if not all_new_candidates:
+                logger.info("No new candidates generated. Stopping search.")
+                break
 
-        final_branches = sorted(finished + beam, key=lambda b: b.value, reverse=True)[:self.config.beam_width]
+            # Sort all branches by value to determine the top branches
+            all_branches.sort(key=lambda b: b.value, reverse=True)
+            
+            # These are the overall top branches
+            top_branches = all_branches[:self.config.beam_width]
+            
+            # Check if all top branches are finished
+            if len(top_branches) == self.config.beam_width and all(b.final_answer is not None for b in top_branches):
+                logger.info("All top branches have final answers. Stopping search.")
+                break
+
+            # The new beam is the top non-finished branches from the entire pool
+            non_finished_branches = [b for b in all_branches if b.final_answer is None]
+            beam = non_finished_branches[:self.config.beam_width]
+
+        # Final selection of branches
+        all_branches.sort(key=lambda b: b.value, reverse=True)
+        final_branches = all_branches[:self.config.beam_width]
+
+        # Ensure final branches have a final answer
         for branch in final_branches:
             if not branch.final_answer:
                 generated_text = self._generate_final_answer(branch)

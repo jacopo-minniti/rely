@@ -218,13 +218,14 @@ def save_branches(
 
     logger.info(f"Saved {len(final_branches)} branches and summary to {output_path}")
 
-    _generate_tree_image(all_branches, output_path)
+    _generate_tree_image(all_branches, output_path, correct_answer=correct_answer)
 
 
 def _generate_tree_image(
     branches: List[Branch],
     output_dir: Path,
     filename: str = "search_tree.png",
+    correct_answer: Optional[str] = None,
 ) -> None:
     """Render a simple tree visualisation of the explored search space using matplotlib and networkx."""
     
@@ -232,7 +233,6 @@ def _generate_tree_image(
         return
     
     G = nx.DiGraph()
-    root_id = None
     branch_map = {b.id: b for b in branches}
     
     for branch in branches:
@@ -244,22 +244,20 @@ def _generate_tree_image(
             if branch.text.startswith(parent.text):
                 latest_step = branch.text[len(parent.text):].strip()
 
-        if not latest_step:  # For root or if parent logic failed
+        if not latest_step:
             assistant_marker = "assistant\n"
             marker_pos = branch.text.rfind(assistant_marker)
             if marker_pos != -1:
                 latest_step = branch.text[marker_pos + len(assistant_marker):].strip()
             else:
-                # Fallback to original logic for root or error cases
                 steps = branch.text.split('\n\n')
                 latest_step = steps[-1].strip() if steps else branch.text.strip()
         
-        latest_step = re.sub(r'\\boxed(.*?)}', r'\1', latest_step)
+        latest_step = re.sub(r'\\boxed{(.*?)}', r'\1', latest_step)
         latest_step = (latest_step[:25] + '...') if len(latest_step) > 25 else latest_step
         
         wrapped_text = textwrap.fill(latest_step, width=30)
         
-        label = ""
         score_lines = []
         if branch.value is not None:
             score_lines.append(f"v={branch.value:.2f}")
@@ -272,34 +270,38 @@ def _generate_tree_image(
         if branch.parent_id is not None:
             G.add_edge(branch.parent_id, node_id)
         else:
-            root_id = node_id
             G.nodes[node_id]['is_root'] = True
 
     for branch in branches:
         if branch.final_answer:
-            final_answer = extract_final_answer(branch.text)
-            if final_answer:
-                final_answer = re.sub(r'\\boxed(.*?)}', r'\1', final_answer)
-                final_node_id = f"final_{branch.id}"
-                G.add_node(final_node_id, label=final_answer, is_final_answer=True)
-                G.add_edge(branch.id, final_node_id)
+            final_answer_text = re.sub(r'\\boxed{(.*?)}', r'\1', branch.final_answer)
+            final_node_id = f"final_{branch.id}"
+            
+            is_correct = False
+            if correct_answer:
+                normalized_answer = normalize_answer(final_answer_text)
+                if normalized_answer != "Not found" and normalized_answer == normalize_answer(correct_answer):
+                    is_correct = True
+            
+            G.add_node(final_node_id, label=final_answer_text, is_final_answer=True, is_correct=is_correct)
+            G.add_edge(branch.id, final_node_id)
     
     pos = nx.nx_agraph.graphviz_layout(G, prog="dot")
     plt.figure(figsize=(20, 15))
     
     root_nodes = [node for node, data in G.nodes(data=True) if data.get('is_root')]
-    final_answer_nodes = [node for node, data in G.nodes(data=True) if data.get('is_final_answer')]
-    intermediate_nodes = [node for node in G.nodes() if node not in root_nodes and node not in final_answer_nodes]
+    correct_final_nodes = [node for node, data in G.nodes(data=True) if data.get('is_final_answer') and data.get('is_correct')]
+    incorrect_final_nodes = [node for node, data in G.nodes(data=True) if data.get('is_final_answer') and not data.get('is_correct')]
+    
+    all_special_nodes = root_nodes + correct_final_nodes + incorrect_final_nodes
+    intermediate_nodes = [node for node in G.nodes() if node not in all_special_nodes]
 
-    nx.draw_networkx_nodes(
-        G, pos, nodelist=intermediate_nodes, node_shape="s", node_color="lightblue", node_size=3500
-    )
-    nx.draw_networkx_nodes(
-        G, pos, nodelist=root_nodes + final_answer_nodes, node_shape="o", node_color="lightgreen", node_size=3500
-    )
-    nx.draw_networkx_edges(
-        G, pos, arrows=True, arrowstyle="-|>", arrowsize=15, edge_color='gray', width=1.5
-    )
+    nx.draw_networkx_nodes(G, pos, nodelist=intermediate_nodes, node_shape="s", node_color="lightblue", node_size=3500)
+    nx.draw_networkx_nodes(G, pos, nodelist=root_nodes, node_shape="o", node_color="lightgreen", node_size=3500)
+    nx.draw_networkx_nodes(G, pos, nodelist=correct_final_nodes, node_shape="o", node_color="lightgreen", node_size=3500)
+    nx.draw_networkx_nodes(G, pos, nodelist=incorrect_final_nodes, node_shape="o", node_color="lightcoral", node_size=3500)
+    
+    nx.draw_networkx_edges(G, pos, arrows=True, arrowstyle="-|>"), arrowsize=15, edge_color='gray', width=1.5)
     
     node_labels = nx.get_node_attributes(G, 'label')
     nx.draw_networkx_labels(
