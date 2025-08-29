@@ -39,7 +39,8 @@ class SBSConfig:
     """Configuration for Step-level Beam Search"""
     step_beam_width: int = 3
     n_generate_sample: int = 5
-    max_depth: int = 10
+    max_depth: Optional[int] = None
+    budget: Optional[int] = None
     temperature: float = 0.6
     max_tokens: int = 512
     need_value_func: bool = True
@@ -81,6 +82,8 @@ class StepBeamSearch:
                  value_result_queue: Queue,
                  worker_rank: int):
         self.config = config
+        if self.config.max_depth is None and self.config.budget is None:
+            raise ValueError("Either max_depth or budget must be specified for the search.")
         self.inference_model_name = inference_model_name
         self.worker_rank = worker_rank
         
@@ -224,7 +227,8 @@ class StepBeamSearch:
         candidates.sort(key=lambda x: x.value, reverse=True)
         new_active_beams, newly_completed = [], 0
         for cand in candidates[:self.current_beam_width]:
-            if cand.is_terminal or cand.depth >= self.config.max_depth:
+            max_depth_reached = self.config.max_depth is not None and cand.depth >= self.config.max_depth
+            if cand.is_terminal or max_depth_reached:
                 self.completed_beams.append(cand)
                 newly_completed += 1
             else:
@@ -287,7 +291,15 @@ class StepBeamSearch:
         self.active_beams = [self.root]
         self.completed_beams, self.current_beam_width = [], self.config.step_beam_width
         step = 0
-        while self.active_beams and step < self.config.max_depth:
+        while self.active_beams:
+            if self.config.max_depth is not None and step >= self.config.max_depth:
+                logger.info(f"[Rank {self.worker_rank}] Max depth of {self.config.max_depth} reached, stopping search.")
+                break
+            
+            if self.config.budget is not None and self.total_generated_tokens >= self.config.budget:
+                logger.info(f"[Rank {self.worker_rank}] Token budget of {self.config.budget} reached, stopping search.")
+                break
+
             step += 1
             if self.config.verbose: logger.info(f"\n--- [Rank {self.worker_rank}] SBS Step {step} | Active Beams: {len(self.active_beams)} ---")
             candidates = self._generate_and_score_candidates(question)
@@ -418,6 +430,7 @@ def _sbs_worker(args: argparse.Namespace,
         step_beam_width=args.beam_width,
         n_generate_sample=args.n_samples,
         max_depth=args.max_depth,
+        budget=args.budget,
         temperature=args.temperature,
         verbose=args.verbose,
         value_method=args.value_method,
@@ -525,7 +538,8 @@ def main():
     
     parser.add_argument("--beam_width", type=int, default=4, help="Step-level beam width.")
     parser.add_argument("--n_samples", type=int, default=5, help="Samples to generate at each step.")
-    parser.add_argument("--max_depth", type=int, default=300, help="Maximum search depth.")
+    parser.add_argument("--max_depth", type=int, default=None, help="Maximum search depth.")
+    parser.add_argument("--budget", type=int, default=None, help="Maximum number of tokens to generate across all steps.")
     parser.add_argument("--temperature", type=float, default=1, help="Generation temperature.")
     parser.add_argument("--verbose", action='store_true', help="Enable verbose logging.")
     
