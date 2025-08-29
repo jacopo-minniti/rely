@@ -12,9 +12,7 @@ def main():
     )
     
     # Core arguments
-    parser.add_argument("--question", type=str, required=True, help="The question to be answered.")
     parser.add_argument("--output_dir", type=str, default="uats_results", help="Directory to save the output.")
-    parser.add_argument("--correct_answer", type=str, default=None, help="The correct answer to the question for evaluation.")
 
     # Model arguments
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-1.5B-Instruct", help="Name of the base generation model (served by vLLM).")
@@ -59,11 +57,14 @@ def main():
         value_device=args.value_device,
     )
     
+    questions = []
+    correct_answers = []
+    
     run_uats(
-        user_question=args.question, 
+        user_questions=questions, 
+        correct_answers=correct_answers,
         config=config, 
-        save_dir=args.output_dir, 
-        correct_answer=args.correct_answer
+        save_dir=args.output_dir
     )
 
 if __name__ == "__main__":

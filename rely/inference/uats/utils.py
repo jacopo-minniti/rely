@@ -78,13 +78,13 @@ def _worker(rank, config, question, system_prompt, uncertainty_task_queue, uncer
 
 
 def run_uats(
-    user_question: str,
+    user_questions: List[str],
     system_prompt: str = MATH_SYSTEM_PROMPT,
     config: Optional[UATSConfig] = None,
     save_dir: Optional[Union[str, Path]] = "uats_results",
-    correct_answer: Optional[str] = None,
-) -> List[Branch]:
-    """High-level one-shot helper wrapping search & persistence."""
+    correct_answers: Optional[List[str]] = None,
+) -> List[List[Branch]]:
+    """High-level helper to run UATS for a list of questions."""
 
     if config is None:
         config = UATSConfig()
@@ -95,41 +95,51 @@ def run_uats(
     uncertainty_result_queue = Queue()
     value_task_queue = Queue()
     value_result_queue = Queue()
-    worker_result_queue = Queue()
-
+    
     uncertainty_server = Process(target=_model_server, args=(config.uncertainty_model_path, config.uncertainty_device, uncertainty_task_queue, uncertainty_result_queue, "uncertainty", config))
     value_server = Process(target=_model_server, args=(config.value_model_path, config.value_device, value_task_queue, value_result_queue, "value", config))
     
     uncertainty_server.start()
     value_server.start()
+
+    all_results = []
     
-    worker_process = Process(target=_worker, args=(0, config, user_question, system_prompt, uncertainty_task_queue, uncertainty_result_queue, value_task_queue, value_result_queue, worker_result_queue))
-    
-    worker_process.start()
-    final_branches_dicts, all_branches_dicts, tokens_used = worker_result_queue.get()
-    worker_process.join()
+    if correct_answers is None:
+        correct_answers = [None] * len(user_questions)
+
+    for i, (question, correct_answer) in enumerate(zip(user_questions, correct_answers)):
+        logger.info(f"Processing question {i+1}/{len(user_questions)}: {question}")
+        worker_result_queue = Queue()
+        
+        worker_process = Process(target=_worker, args=(0, config, question, system_prompt, uncertainty_task_queue, uncertainty_result_queue, value_task_queue, value_result_queue, worker_result_queue))
+        
+        worker_process.start()
+        final_branches_dicts, all_branches_dicts, tokens_used = worker_result_queue.get()
+        worker_process.join()
+
+        final_branches = [Branch.from_dict(b) for b in final_branches_dicts]
+        all_branches = [Branch.from_dict(b) for b in all_branches_dicts]
+        all_results.append(final_branches)
+
+        if save_dir is not None:
+            question_save_dir = Path(save_dir) / str(i)
+            logger.info(f"Saving branches to {question_save_dir}")
+            save_branches(
+                final_branches,
+                all_branches,
+                question_save_dir,
+                max_branch_tokens=config.budget,
+                user_question=question,
+                system_prompt=system_prompt,
+                correct_answer=correct_answer,
+            )
 
     uncertainty_task_queue.put((None, None, None))
     value_task_queue.put((None, None, None))
     uncertainty_server.join()
     value_server.join()
-    
-    final_branches = [Branch.from_dict(b) for b in final_branches_dicts]
-    all_branches = [Branch.from_dict(b) for b in all_branches_dicts]
 
-    if save_dir is not None:
-        logger.info(f"Saving branches to {save_dir}")
-        save_branches(
-            final_branches,
-            all_branches,
-            save_dir,
-            max_branch_tokens=config.budget,
-            user_question=user_question,
-            system_prompt=system_prompt,
-            correct_answer=correct_answer,
-        )
-
-    return final_branches
+    return all_results
 
 
 def save_branches(
