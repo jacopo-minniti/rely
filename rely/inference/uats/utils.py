@@ -268,7 +268,7 @@ def _generate_tree_image(
             score_lines.append(f"u={branch.uncertainty:.2f}")
         label = "\n".join(score_lines) + f"\n{wrapped_text}" if score_lines else wrapped_text
         
-        G.add_node(node_id, label=label, is_final=branch.final_answer is not None)
+        G.add_node(node_id, label=label, is_final=branch.is_final)
         
         if branch.parent_id is not None:
             G.add_edge(branch.parent_id, node_id)
@@ -276,7 +276,7 @@ def _generate_tree_image(
             G.nodes[node_id]['is_root'] = True
 
     for branch in branches:
-        if branch.final_answer:
+        if branch.is_final and branch.final_answer:
             final_answer_text = re.sub(r'\boxed{(.*?)}', r'', branch.final_answer)
             # Sanitize final answer text as well
             final_answer_text = final_answer_text.replace('$', '\$')

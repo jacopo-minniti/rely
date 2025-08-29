@@ -36,6 +36,7 @@ class Branch:
     id: int
     parent_id: Optional[int]
     final_answer: Optional[str] = None
+    is_final: bool = False
 
     def to_dict(self):
         """Converts the Branch object to a JSON-serializable dictionary."""
@@ -49,6 +50,7 @@ class Branch:
             "id": self.id,
             "parent_id": self.parent_id,
             "final_answer": self.final_answer,
+            "is_final": self.is_final,
         }
     
     @classmethod
@@ -65,4 +67,5 @@ class Branch:
             id=data["id"],
             parent_id=data["parent_id"],
             final_answer=data.get("final_answer"),
+            is_final=data.get("is_final", False),
         )

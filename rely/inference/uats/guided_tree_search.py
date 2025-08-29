@@ -222,5 +222,8 @@ class GuidedTreeSearch:
             if leaf_branch.final_answer:
                 final_branches.append(leaf_branch)
 
+        for branch in final_branches:
+            branch.is_final = True
+
         return final_branches, all_branches, tokens_used
 
