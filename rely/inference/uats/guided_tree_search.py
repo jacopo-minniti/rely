@@ -89,7 +89,7 @@ class GuidedTreeSearch:
 
     def _generate_final_answer(self, branch: Branch) -> str:
         """Generate a final answer for a completed branch."""
-        prompt_addition = "\n\n## Final Answer\n"
+        prompt_addition = "\n\n# Final Answer\n\boxed{"
         text = branch.text.strip() + prompt_addition
         try:
             completion = self.client.completions.create(
@@ -100,7 +100,9 @@ class GuidedTreeSearch:
                 top_p=self.config.top_p,
                 n=1,
             )
-            return prompt_addition + completion.choices[0].text
+            generated_content = completion.choices[0].text
+            # Return the full text that was added to the branch
+            return prompt_addition + generated_content + "}"
         except Exception as e:
             logger.error(f"Error during final answer API call: {e}")
             return ""
@@ -199,18 +201,26 @@ class GuidedTreeSearch:
             # The nodes to expand are the non-finished ones from the top active branches
             leaf_nodes_to_expand = [b for b in top_active_branches if b.final_answer is None]
 
-        # Final selection of branches from the leaves of the tree
+        # Final, more robust selection of branches
         parent_ids = {b.parent_id for b in all_branches if b.parent_id is not None}
         all_leaf_nodes = [b for b in all_branches if b.id not in parent_ids]
         all_leaf_nodes.sort(key=lambda b: b.value, reverse=True)
-        final_branches = all_leaf_nodes[:self.config.beam_width]
+        
+        final_branches = []
+        # Iterate through all leaf nodes to find enough branches with valid final answers
+        for leaf_branch in all_leaf_nodes:
+            if len(final_branches) >= self.config.beam_width:
+                break # We have enough branches
 
-        # Ensure final branches have a final answer
-        for branch in final_branches:
-            if not branch.final_answer:
-                generated_text = self._generate_final_answer(branch)
-                branch.text += generated_text
-                branch.final_answer = extract_final_answer(branch.text)
+            if not leaf_branch.final_answer:
+                generated_text = self._generate_final_answer(leaf_branch)
+                if generated_text:
+                    leaf_branch.text += generated_text
+                    leaf_branch.final_answer = extract_final_answer(leaf_branch.text)
             
+            # If the branch has a final answer (either pre-existing or just generated), add it.
+            if leaf_branch.final_answer:
+                final_branches.append(leaf_branch)
+
         return final_branches, all_branches, tokens_used
 
