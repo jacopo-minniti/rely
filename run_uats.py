@@ -1,8 +1,11 @@
 import argparse
 import logging
+
+from datasets import load_dataset
+
 from rely.inference.uats.utils import run_uats, UATSConfig
 
-def main():
+if __name__ == "__main__":
     # Setup logging
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     
@@ -56,16 +59,22 @@ def main():
         uncertainty_device=args.uncertainty_device,
         value_device=args.value_device,
     )
+
+    NUM_SAMPLES = 1
     
+    dataset = load_dataset("nlile/hendrycks-MATH-benchmark", split='test')
+    dataset = dataset.shuffle(seed=42).select(range(NUM_SAMPLES))
+
     questions = []
     correct_answers = []
-    
+
+    for example in dataset:
+        questions.append(example["problem"])
+        correct_answers.append(example["answer"])
+
     run_uats(
         user_questions=questions, 
         correct_answers=correct_answers,
         config=config, 
         save_dir=args.output_dir
     )
-
-if __name__ == "__main__":
-    main()
