@@ -256,7 +256,7 @@ def _generate_tree_image(
         # Sanitize for matplotlib mathtext: replace $ with $
         latest_step = latest_step.replace('$', '\$')
 
-        latest_step = re.sub(r'\boxed{(.*?)}', r'', latest_step)
+        latest_step = re.sub(r'\boxed{(.*?)}', r'\1', latest_step)
         latest_step = (latest_step[:25] + '...') if len(latest_step) > 25 else latest_step
         
         wrapped_text = textwrap.fill(latest_step, width=30)
@@ -277,7 +277,7 @@ def _generate_tree_image(
 
     for branch in branches:
         if branch.is_final and branch.final_answer:
-            final_answer_text = re.sub(r'\boxed{(.*?)}', r'', branch.final_answer)
+            final_answer_text = re.sub(r'boxed{(.*?)}', r'\1', branch.final_answer)
             # Sanitize final answer text as well
             final_answer_text = final_answer_text.replace('$', '\$')
             final_node_id = f"final_{branch.id}"
