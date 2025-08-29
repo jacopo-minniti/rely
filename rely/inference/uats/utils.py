@@ -254,9 +254,9 @@ def _generate_tree_image(
                 latest_step = steps[-1].strip() if steps else branch.text.strip()
         
         # Sanitize for matplotlib mathtext: replace $ with $
-        latest_step = latest_step.replace('$', ')
+        latest_step = latest_step.replace('$', '\$')
 
-        latest_step = re.sub(r'\\boxed{(.*?)}', r'\1', latest_step)
+        latest_step = re.sub(r'\boxed{(.*?)}', r'', latest_step)
         latest_step = (latest_step[:25] + '...') if len(latest_step) > 25 else latest_step
         
         wrapped_text = textwrap.fill(latest_step, width=30)
@@ -277,9 +277,9 @@ def _generate_tree_image(
 
     for branch in branches:
         if branch.final_answer:
-            final_answer_text = re.sub(r'\\boxed{(.*?)}', r'\1', branch.final_answer)
+            final_answer_text = re.sub(r'\boxed{(.*?)}', r'', branch.final_answer)
             # Sanitize final answer text as well
-            final_answer_text = final_answer_text.replace('$', ')
+            final_answer_text = final_answer_text.replace('$', '\$')
             final_node_id = f"final_{branch.id}"
             
             is_correct = False
@@ -306,7 +306,7 @@ def _generate_tree_image(
     nx.draw_networkx_nodes(G, pos, nodelist=correct_final_nodes, node_shape="o", node_color="lightgreen", node_size=3500)
     nx.draw_networkx_nodes(G, pos, nodelist=incorrect_final_nodes, node_shape="o", node_color="lightcoral", node_size=3500)
     
-    nx.draw_networkx_edges(G, pos, arrows=True, arrowstyle="-||", arrowsize=15, edge_color='gray', width=1.5)
+    nx.draw_networkx_edges(G, pos, arrows=True, arrowstyle="-|>", arrowsize=15, edge_color='gray', width=1.5)
     
     node_labels = nx.get_node_attributes(G, 'label')
     nx.draw_networkx_labels(
