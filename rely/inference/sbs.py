@@ -237,7 +237,6 @@ class StepBeamSearch:
         self.current_beam_width = len(self.active_beams)
         return newly_completed
 
-    # MODIFIED: Removed 'total_generated_tokens' to match the validation script's format.
     def _create_summary(self, solutions: List[Dict[str, Any]], question: str, ground_truth: Optional[str]) -> Dict[str, Any]:
         ground_truth = normalize_answer(ground_truth)
         answers = [normalize_answer(s['final_answer']) for s in solutions if s['final_answer'] != "Not found"]
@@ -252,7 +251,7 @@ class StepBeamSearch:
             "majority_vote": majority_vote,
             "accuracy": accuracy,
             "solutions": solutions,
-            "total_generated_tokens": self.total_generated_tokens
+            "total_tokens": self.total_generated_tokens
         }
 
     # MODIFIED: No longer saves individual beam files, only the final summary.json.
