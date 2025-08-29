@@ -13,10 +13,6 @@ import logging
 
 from rely.utils import MATH_SYSTEM_PROMPT
 
-# Disable torch compilation to prevent recompilation issues
-os.environ["TORCH_COMPILE_DISABLE"] = "1"
-torch._dynamo.config.suppress_errors = True
-
 logger = logging.getLogger(__name__)
 
 
