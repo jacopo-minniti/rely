@@ -334,7 +334,7 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
     model = AutoModel.from_pretrained(
         args.value_model_path,
         num_labels=2,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,
     )

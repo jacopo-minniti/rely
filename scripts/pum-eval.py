@@ -169,7 +169,7 @@ if __name__ == "__main__":
     model = AutoModelForTokenClassification.from_pretrained(
         model_name, 
         device_map=device, 
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         trust_remote_code=True,
     )
 
