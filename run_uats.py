@@ -61,7 +61,7 @@ if __name__ == "__main__":
         value_device=args.value_device,
     )
 
-    NUM_SAMPLES = 1
+    NUM_SAMPLES = 100
     
     dataset = load_dataset("nlile/hendrycks-MATH-benchmark", split='test')
     dataset = dataset.shuffle(seed=42).select(range(NUM_SAMPLES))
