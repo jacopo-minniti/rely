@@ -82,3 +82,14 @@ if __name__ == "__main__":
         config=config, 
         save_dir=args.output_dir
     )
+
+'''
+CUDA_VISIBLE_DEVICES="1" vllm serve Qwen/Qwen2.5-1.5B-Instruct \
+    --tensor-parallel-size 1 \
+    --pipeline-parallel-size 1 \
+    --gpu-memory-utilization 0.90 \
+    --max-model-len 5000 \
+    --dtype bfloat16 \
+    --enable-prefix-caching \
+    --port 8000
+'''

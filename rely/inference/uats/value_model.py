@@ -123,7 +123,7 @@ class UATSValueModel:
         base_model_output = self.model.model(
             input_ids=inputs.input_ids,
             attention_mask=inputs.attention_mask,
-            use_cache=False,
+            # use_cache=False,
         )
         logits = self.model.score(base_model_output.last_hidden_state)
         
