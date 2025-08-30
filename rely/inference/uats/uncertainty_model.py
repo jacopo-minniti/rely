@@ -65,7 +65,7 @@ class UATSUncertaintyModel:
         logger.info(f"Loading UATS uncertainty model from: {model_path} on {device}")
         self.model = AutoModelForTokenClassification.from_pretrained(
             model_path,
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             device_map={"": device},
             trust_remote_code=True,
         )

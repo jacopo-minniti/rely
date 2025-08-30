@@ -1,5 +1,6 @@
 import argparse
 import logging
+import re
 
 from datasets import load_dataset
 
@@ -69,7 +70,10 @@ if __name__ == "__main__":
     correct_answers = []
 
     for example in dataset:
-        questions.append(example["problem"])
+        question_text = example["problem"]
+        # Remove asy blocks, which are not useful for the model
+        cleaned_question = re.sub(r'\[asy\].*?\[/asy\]', '', question_text, flags=re.DOTALL).strip()
+        questions.append(cleaned_question)
         correct_answers.append(example["answer"])
 
     run_uats(

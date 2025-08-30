@@ -64,7 +64,7 @@ class UATSValueModel:
         logger.info(f"Loading UATS value model from: {model_path} on {device}")
         self.model = AutoModel.from_pretrained(
             model_path,
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             device_map={"": device},
             trust_remote_code=True,
         )
