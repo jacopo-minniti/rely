@@ -89,7 +89,7 @@ class GuidedTreeSearch:
 
     def _generate_final_answer(self, branch: Branch) -> tuple[str, int]:
         """Generate a final answer for a completed branch."""
-        prompt_addition = "\n\n# Final Answer\n\boxed{"
+        prompt_addition = r"\n\n# Final Answer\n\boxed{"
         text = branch.text.strip() + prompt_addition
         try:
             completion = self.client.completions.create(
@@ -98,6 +98,7 @@ class GuidedTreeSearch:
                 max_tokens=self.config.max_step_tokens,
                 temperature=self.config.temperature,
                 top_p=self.config.top_p,
+                stop=["}"],
                 n=1,
             )
             generated_content = completion.choices[0].text
