@@ -216,11 +216,11 @@ class GuidedTreeSearch:
         all_leaf_nodes = [b for b in all_branches if b.id not in parent_ids]
         all_leaf_nodes.sort(key=lambda b: b.value, reverse=True)
         
-        final_branches = []
-        for leaf_branch in all_leaf_nodes:
-            if len(final_branches) >= self.config.beam_width:
-                break
+        # Select the top `beam_width` leaf nodes as the final branches
+        final_branches = all_leaf_nodes[:self.config.beam_width]
 
+        # Now, generate final answers for those that don't have one
+        for leaf_branch in final_branches:
             # If the branch doesn't have a final answer, try to generate one
             if not leaf_branch.final_answer:
                 generated_text, new_tokens_count = self._generate_final_answer(leaf_branch)
@@ -229,12 +229,7 @@ class GuidedTreeSearch:
                     leaf_branch.text += generated_text
                     leaf_branch.final_answer = extract_final_answer(leaf_branch.text)
             
-            # If the branch has a final answer (either pre-existing or newly generated), add it
-            if leaf_branch.final_answer:
-                final_branches.append(leaf_branch)
-
-        for branch in final_branches:
-            branch.is_final = True
+            leaf_branch.is_final = True
 
         return final_branches, all_branches, tokens_used
 
