@@ -38,7 +38,7 @@ def _model_server(model_path, device, task_queue, result_queue, model_type, conf
     else:
         raise ValueError(f"Unknown model_type: {model_type}")
 
-    model = model_class.from_pretrained(model_path, dtype=torch.bfloat16, trust_remote_code=True).to(device).eval()
+    model = model_class.from_pretrained(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True).to(device).eval()
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     
     if tokenizer.pad_token is None:

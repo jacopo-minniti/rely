@@ -20,7 +20,7 @@ if __name__ == "__main__":
 
     # Model arguments
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-1.5B-Instruct", help="Name of the base generation model (served by vLLM).")
-    parser.add_argument("--uncertainty_model_path", type=str, default="jacopo-minniti/Qwen2.5-Math-7B-PUM", help="Path to the uncertainty model.")
+    parser.add_argument("--uncertainty_model_path", type=str, default="jacopo-minniti/Qwen2.5-Math-7B-PUM-half_entropy", help="Path to the uncertainty model.")
     parser.add_argument("--value_model_path", type=str, default="Qwen/Qwen2.5-Math-PRM-7B", help="Path to the value model.")
 
     # UATSConfig arguments

@@ -6,7 +6,8 @@ from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 import numpy as np
 from tqdm import tqdm
 from datasets import load_dataset
-from rely.utils import MATH_SYSTEM_PROMPT
+
+MATH_SYSTEM_PROMPT = """The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer. The final answers should either be a number (in digits) or a latex expression."""
 
 def create_collate_fn(tokenizer, separator_token="<extra_0>"):
     """
@@ -158,7 +159,7 @@ def evaluate_dataset(dataset, tokenizer, model, batch_size=8):
 # --- Main Execution ---
 if __name__ == "__main__":
     # 1. Load Model and Tokenizer
-    model_name = "jacopo-minniti/Qwen2.5-Math-7B-PUM-nn"
+    model_name = "outputs/out"
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
@@ -169,21 +170,22 @@ if __name__ == "__main__":
     model = AutoModelForTokenClassification.from_pretrained(
         model_name, 
         device_map=device, 
-        dtype=torch.bfloat16,
+        torch_dtype=torch.bfloat16,
         trust_remote_code=True,
     )
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     # 2. Load Dataset
-    dataset = load_dataset("jacopo-minniti/MATH-PUM-qwen2.5-1.5B", "pp-1", split="test")
-    def count_false_labels(example):
-        """Counts the number of False values in the 'labels' list."""
-        num_false = example['labels'].count(False)
-        return {'num_false': num_false}
-    data_with_counts = dataset.map(count_false_labels)
-    sorted_data = data_with_counts.sort('num_false', reverse=True)
-    dataset = sorted_data.select(range(3000, 4000))
+    dataset = load_dataset("jacopo-minniti/MATH-PUM-qwen2.5-1.5B", "half_entropy", split="test")
+    dataset = dataset.shuffle(seed=42).select(range(3000))
+    # def count_false_labels(example):
+    #     """Counts the number of False values in the 'labels' list."""
+    #     num_false = example['labels'].count(False)
+    #     return {'num_false': num_false}
+    # data_with_counts = dataset.map(count_false_labels)
+    # sorted_data = data_with_counts.sort('num_false', reverse=True)
+    # dataset = sorted_data.select(range(3000, 4000))
 
     # 3. Evaluate the dataset with the new robust function
     results = evaluate_dataset(dataset, tokenizer, model, batch_size=24) # Adjust batch size based on VRAM

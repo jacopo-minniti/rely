@@ -11,23 +11,25 @@ process_reward_model: true
 
 datasets:
   - path: jacopo-minniti/MATH-PUM-qwen2.5-1.5B # axolotl-ai-co/prm800k_phase_1
-    name: pp-1
+    name: half_entropy
     type: stepwise_supervised
     step_separator: "<extra_0>"
     train_on_last_step_only: false
-    splt: train
+    split: train
 
 test_datasets:
   - path: jacopo-minniti/MATH-PUM-qwen2.5-1.5B # axolotl-ai-co/prm800k_phase_1
-    name: pp-1
+    name: half_entropy
     type: stepwise_supervised
     step_separator: "<extra_0>"
     train_on_last_step_only: false
-    splt: test
+    split: test
 
 special_tokens:
   additional_special_tokens:
     - "<extra_0>"
+    # - "<|im_start|>"
+    # - "<|im_end|>"
 
 output_dir: ./outputs/out
 remove_unused_columns: false
@@ -40,14 +42,14 @@ pad_to_sequence_len: true
 wandb_project: pum
 wandb_entity:
 wandb_watch:
-wandb_name: Math-Qwen2.5-1.5B-PP-1
+wandb_name: Math-Qwen2.5-1.5B-half_entropy
 wandb_log_model:
 
 
 gradient_accumulation_steps: 2
 micro_batch_size: 32
 eval_batch_size: 32
-num_epochs: 8
+num_epochs: 7
 optimizer: adamw_torch_fused
 lr_scheduler: cosine
 learning_rate: 1e-4
@@ -71,7 +73,6 @@ xformers_attention:
 # flash_attention: true
 
 warmup_ratio: 0.3
-# eval_strategy: epoch
 save_strategy: "no"
 evals_per_epoch: 1
 
@@ -81,5 +82,5 @@ weight_decay: 0.00
 fsdp:
 fsdp_config:
 
-hub_model_id: jacopo-minniti/PUM-Qwen2.5-Math-7B-PP-1
+hub_model_id: jacopo-minniti/Qwen2.5-Math-7B-PUM-half_entropy
 hub_strategy: "end"
