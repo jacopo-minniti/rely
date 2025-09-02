@@ -32,6 +32,7 @@ if __name__ == "__main__":
     parser.add_argument("--top_p", type=float, default=0.95, help="Generation top_p.")
     parser.add_argument("--uncertainty_scoring_method", type=str, default="last_step", choices=["product", "average", "minimum", "last_step"], help="Scoring method for uncertainty.")
     parser.add_argument("--value_scoring_method", type=str, default="product", choices=["product", "average", "minimum", "last_step"], help="Scoring method for value.")
+    parser.add_argument("--greedy_search", action="store_true", help="If set, select candidates only from the latest generated nodes (SBS-style).")
     
     # Device arguments
     parser.add_argument("--device", type=str, default="cuda:1", help="Main device for generation.")
@@ -61,6 +62,9 @@ if __name__ == "__main__":
         value_device=args.value_device,
     )
 
+    # Dynamically add the greedy_search flag to the config object
+    config.greedy_search = args.greedy_search
+
     NUM_SAMPLES = 100
     
     dataset = load_dataset("nlile/hendrycks-MATH-benchmark", split='test')
@@ -72,7 +76,7 @@ if __name__ == "__main__":
     for example in dataset:
         question_text = example["problem"]
         # Remove asy blocks, which are not useful for the model
-        cleaned_question = re.sub(r'\[asy\].*?\[/asy\]', '', question_text, flags=re.DOTALL).strip()
+        cleaned_question = re.sub(r'\\[asy\\].*?[/asy\\]', '', question_text, flags=re.DOTALL).strip()
         questions.append(cleaned_question)
         correct_answers.append(example["answer"])
 

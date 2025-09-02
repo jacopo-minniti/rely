@@ -195,14 +195,21 @@ class GuidedTreeSearch:
                 logger.info("No new candidates generated. Stopping search.")
                 break
 
-            # Identify all current leaf nodes in the entire tree
-            parent_ids = {b.parent_id for b in all_branches if b.parent_id is not None}
-            all_leaf_nodes = [b for b in all_branches if b.id not in parent_ids]
+            # --- SELECTION PHASE ---
+            selection_pool = []
+            # hasattr is used to maintain backward compatibility if the config doesn't have the attribute
+            if hasattr(self.config, 'greedy_search') and self.config.greedy_search:
+                # SBS-style: only select from the candidates generated in this cycle.
+                selection_pool = newly_generated_candidates
+            else:
+                # UATS-style: select from all leaf nodes in the entire tree.
+                parent_ids = {b.parent_id for b in all_branches if b.parent_id is not None}
+                selection_pool = [b for b in all_branches if b.id not in parent_ids]
 
-            # Sort the leaf nodes by value to find the top active branches
-            all_leaf_nodes.sort(key=lambda b: b.value, reverse=True)
+            # Sort the chosen pool by value to find the top active branches
+            selection_pool.sort(key=lambda b: b.value, reverse=True)
             
-            top_active_branches = all_leaf_nodes[:self.config.beam_width]
+            top_active_branches = selection_pool[:self.config.beam_width]
             
             # Check if all top branches have final answers
             if len(top_active_branches) == self.config.beam_width and all(b.final_answer is not None for b in top_active_branches):
