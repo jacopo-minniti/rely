@@ -19,13 +19,48 @@ class Scorer:
         """
         separator_token = "<extra_0>"
         
-        steps = [s.strip() for s in text.split('\n\n') if s.strip()]
+        # Handle conversation format - extract assistant content
+        if "<|im_start|>assistant\n" in text:
+            # Extract the assistant response from the full conversation
+            assistant_marker = "<|im_start|>assistant\n"
+            assistant_start = text.find(assistant_marker)
+            assistant_content = text[assistant_start + len(assistant_marker):]
+            # Remove any trailing <|im_end|> if present
+            if assistant_content.endswith("<|im_end|>"):
+                assistant_content = assistant_content[:-len("<|im_end|>")]
+        else:
+            # Assume the entire text is assistant content (fallback)
+            assistant_content = text
+        
+        steps = [s.strip() for s in assistant_content.split('\n\n') if s.strip()]
         if not steps:
             return []
             
         formatted_content = separator_token.join(steps) + separator_token
         
-        messages = [{"role": "assistant", "content": formatted_content}]
+        # For UATS, we need to reconstruct the conversation properly
+        # Extract system and user parts if they exist in the original text
+        if "<|im_start|>system\n" in text and "<|im_start|>user\n" in text:
+            system_start = text.find("<|im_start|>system\n") + len("<|im_start|>system\n")
+            system_end = text.find("<|im_end|>", system_start)
+            user_start = text.find("<|im_start|>user\n") + len("<|im_start|>user\n")
+            user_end = text.find("<|im_end|>", user_start)
+            
+            system_content = text[system_start:system_end]
+            user_content = text[user_start:user_end]
+        else:
+            # Fallback to defaults
+            from rely.utils.text_utils import MATH_SYSTEM_PROMPT
+            system_content = MATH_SYSTEM_PROMPT
+            user_content = "Please solve this problem."
+        
+        # Reconstruct the conversation with proper format
+        messages = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": user_content},
+            {"role": "assistant", "content": formatted_content}
+        ]
+        
         conversation_str = self.tokenizer.apply_chat_template(
             messages, 
             tokenize=False, 
@@ -70,10 +105,10 @@ class Scorer:
         if self.scoring_method == "last_step":
             return step_scores[-1]
         elif self.scoring_method == "product":
-            return np.prod(step_scores)
+            return float(np.prod(step_scores))
         elif self.scoring_method == "average":
-            return np.mean(step_scores)
+            return float(np.mean(step_scores))
         elif self.scoring_method == "minimum":
-            return np.min(step_scores)
+            return float(np.min(step_scores))
         
         return 0.0

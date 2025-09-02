@@ -15,6 +15,7 @@ from rely.utils.text_utils import (
     extract_final_answer,
 )
 
+logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 OPENAI_API_KEY = "EMPTY"
@@ -197,8 +198,7 @@ class GuidedTreeSearch:
 
             # --- SELECTION PHASE ---
             selection_pool = []
-            # hasattr is used to maintain backward compatibility if the config doesn't have the attribute
-            if hasattr(self.config, 'greedy_search') and self.config.greedy_search:
+            if self.config.greedy_search:
                 # SBS-style: only select from the candidates generated in this cycle.
                 selection_pool = newly_generated_candidates
             else:
@@ -220,23 +220,23 @@ class GuidedTreeSearch:
             leaf_nodes_to_expand = [b for b in top_active_branches if b.final_answer is None]
 
         # Final selection of branches
-        final_selection_pool = []
-        if hasattr(self.config, 'greedy_search') and self.config.greedy_search:
-            # SBS-style final selection: pool is all completed branches + all active leaf branches
+        if self.config.greedy_search:
+            # SBS-style final selection: pool is ONLY from the latest generation leaf nodes
+            # In greedy search, leaf_nodes_to_expand should be the only active leaf nodes
+            final_selection_pool = leaf_nodes_to_expand.copy()
+            
+            # Add any branches that have final answers from the last selection
+            for branch in top_active_branches:
+                if branch.final_answer is not None and branch not in final_selection_pool:
+                    final_selection_pool.append(branch)
+            
+            # Verification: In greedy search, these should be the ONLY leaf nodes
             parent_ids = {b.parent_id for b in all_branches if b.parent_id is not None}
             all_leaf_nodes = [b for b in all_branches if b.id not in parent_ids]
-            
-            completed_branches = [b for b in all_branches if b.final_answer is not None]
-            active_leaf_branches = [b for b in all_leaf_nodes if b.final_answer is None]
-            
-            # Combine, ensuring no duplicates if a completed branch is also a leaf
-            final_selection_pool_map = {b.id: b for b in completed_branches}
-            for b in active_leaf_branches:
-                final_selection_pool_map[b.id] = b
-            
-            final_selection_pool = list(final_selection_pool_map.values())
+            if len(final_selection_pool) != len(all_leaf_nodes):
+                logger.warning(f"Greedy search invariant violated: {len(final_selection_pool)} final candidates vs {len(all_leaf_nodes)} total leaf nodes")
         else:
-            # UATS-style: select from all leaf nodes in the entire tree.
+            # UATS-style: select from all leaf nodes in the entire tree
             parent_ids = {b.parent_id for b in all_branches if b.parent_id is not None}
             final_selection_pool = [b for b in all_branches if b.id not in parent_ids]
 

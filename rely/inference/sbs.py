@@ -22,10 +22,6 @@ from datasets import load_dataset
 
 from rely.utils import MATH_SYSTEM_PROMPT, extract_final_answer, normalize_answer
 
-# --- Configuration ---
-# os.environ["TORCH_COMPILE_DISABLE"] = "1"
-# torch._dynamo.config.suppress_errors = True
-
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 

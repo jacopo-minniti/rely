@@ -3,10 +3,12 @@ import logging
 import os
 import random
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Union
 from multiprocessing import Process, Queue
+import multiprocessing as mp
 
 import torch
 import textwrap
@@ -19,13 +21,15 @@ from .guided_tree_search import GuidedTreeSearch
 from .scorer import Scorer
 from rely.utils.text_utils import MATH_SYSTEM_PROMPT, extract_final_answer, normalize_answer
 
+logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 
-def _model_server(model_path, device, task_queue, result_queue, model_type, config):
+def _model_server(model_path, device, task_queue, result_queues, model_type, config):
     """
     Generic server for running inference on a model.
     Loads the correct model class based on model_type and uses the Scorer.
+    Now uses per-worker result queues to avoid race conditions.
     """
     if model_type == "value":
         # The value model (PRM) is a custom model loaded with AutoModel.
@@ -54,10 +58,121 @@ def _model_server(model_path, device, task_queue, result_queue, model_type, conf
             break
         
         score = scorer.score(text)
-        result_queue.put((request_id, score))
+        # Send result to the specific worker's result queue
+        result_queues[rank].put((request_id, score))
 
-def _worker(rank, config, question, system_prompt, uncertainty_task_queue, uncertainty_result_queue, value_task_queue, value_result_queue, worker_result_queue):
-    """Worker process to run the Guided Tree Search."""
+def run_uats(
+    user_questions: List[str],
+    system_prompt: str = MATH_SYSTEM_PROMPT,
+    config: Optional[UATSConfig] = None,
+    save_dir: Optional[Union[str, Path]] = "uats_results",
+    correct_answers: Optional[List[Optional[str]]] = None,
+    num_workers: int = 5,
+) -> List[List[Branch]]:
+    """High-level helper to run UATS for a list of questions with multiple workers."""
+
+    if config is None:
+        config = UATSConfig()
+
+    if save_dir is not None:
+        os.makedirs(save_dir, exist_ok=True)
+    
+    # Set multiprocessing start method to 'spawn' to avoid CUDA issues
+    if mp.get_start_method(allow_none=True) != 'spawn':
+        mp.set_start_method('spawn', force=True)
+    
+    uncertainty_task_queue = Queue()
+    uncertainty_result_queues = {i: Queue() for i in range(num_workers)}
+    value_task_queue = Queue()
+    value_result_queues = {i: Queue() for i in range(num_workers)}
+    
+    uncertainty_server = Process(target=_model_server, args=(config.uncertainty_model_path, config.uncertainty_device, uncertainty_task_queue, uncertainty_result_queues, "uncertainty", config))
+    value_server = Process(target=_model_server, args=(config.value_model_path, config.value_device, value_task_queue, value_result_queues, "value", config))
+    
+    uncertainty_server.start()
+    value_server.start()
+
+    all_results = []
+    
+    if correct_answers is None:
+        answers_list: List[Optional[str]] = [None] * len(user_questions)
+    else:
+        answers_list = correct_answers
+
+    # Create a task queue for questions and result queue
+    question_task_queue = Queue()
+    question_result_queue = Queue()
+    
+    # Add all questions to the task queue
+    for i, (question, correct_answer) in enumerate(zip(user_questions, answers_list)):
+        question_task_queue.put((i, question, correct_answer))
+    
+    # Add sentinel values to signal workers to stop
+    for _ in range(num_workers):
+        question_task_queue.put(None)
+    
+    # Start worker processes
+    worker_processes = []
+    for rank in range(num_workers):
+        worker_process = Process(
+            target=_question_worker, 
+            args=(
+                rank, 
+                config, 
+                system_prompt, 
+                uncertainty_task_queue, 
+                uncertainty_result_queues[rank],
+                value_task_queue, 
+                value_result_queues[rank],
+                question_task_queue,
+                question_result_queue,
+                save_dir
+            )
+        )
+        worker_process.start()
+        worker_processes.append(worker_process)
+    
+    # Collect results
+    results_dict = {}
+    for _ in range(len(user_questions)):
+        question_idx, final_branches_dicts, all_branches_dicts, tokens_used = question_result_queue.get()
+        final_branches = [Branch.from_dict(b) for b in final_branches_dicts]
+        all_branches = [Branch.from_dict(b) for b in all_branches_dicts]
+        results_dict[question_idx] = final_branches
+        logger.info(f"Completed question {question_idx+1}/{len(user_questions)} using {tokens_used} tokens")
+    
+    # Wait for all workers to finish
+    for worker_process in worker_processes:
+        worker_process.join()
+    
+    # Convert results dictionary to ordered list
+    all_results = [results_dict[i] for i in range(len(user_questions))]
+
+    # Shutdown servers
+    uncertainty_task_queue.put((None, None, None))
+    value_task_queue.put((None, None, None))
+    uncertainty_server.join()
+    value_server.join()
+
+    return all_results
+
+
+def _question_worker(
+    rank: int, 
+    config: UATSConfig, 
+    system_prompt: str,
+    uncertainty_task_queue: Queue,
+    uncertainty_result_queue: Queue,
+    value_task_queue: Queue,
+    value_result_queue: Queue,
+    question_task_queue: Queue,
+    question_result_queue: Queue,
+    save_dir: Optional[Union[str, Path]]
+):
+    """Worker process that processes questions from the queue."""
+    logger.info(f"Worker {rank} started")
+    
+    # Create tokenizer and GuidedTreeSearch once per worker
     tokenizer = AutoTokenizer.from_pretrained(config.model_name)
     gts = GuidedTreeSearch(
         tokenizer=tokenizer,
@@ -68,62 +183,28 @@ def _worker(rank, config, question, system_prompt, uncertainty_task_queue, uncer
         value_result_queue=value_result_queue,
         worker_rank=rank,
     )
-
-    final_branches, all_branches, tokens_used = gts.search(question, system_prompt)
     
-    final_branches_dicts = [b.to_dict() for b in final_branches]
-    all_branches_dicts = [b.to_dict() for b in all_branches]
-    
-    worker_result_queue.put((final_branches_dicts, all_branches_dicts, tokens_used))
-
-
-def run_uats(
-    user_questions: List[str],
-    system_prompt: str = MATH_SYSTEM_PROMPT,
-    config: Optional[UATSConfig] = None,
-    save_dir: Optional[Union[str, Path]] = "uats_results",
-    correct_answers: Optional[List[str]] = None,
-) -> List[List[Branch]]:
-    """High-level helper to run UATS for a list of questions."""
-
-    if config is None:
-        config = UATSConfig()
-
-    os.makedirs(save_dir, exist_ok=True)
-    
-    uncertainty_task_queue = Queue()
-    uncertainty_result_queue = Queue()
-    value_task_queue = Queue()
-    value_result_queue = Queue()
-    
-    uncertainty_server = Process(target=_model_server, args=(config.uncertainty_model_path, config.uncertainty_device, uncertainty_task_queue, uncertainty_result_queue, "uncertainty", config))
-    value_server = Process(target=_model_server, args=(config.value_model_path, config.value_device, value_task_queue, value_result_queue, "value", config))
-    
-    uncertainty_server.start()
-    value_server.start()
-
-    all_results = []
-    
-    if correct_answers is None:
-        correct_answers = [None] * len(user_questions)
-
-    for i, (question, correct_answer) in enumerate(zip(user_questions, correct_answers)):
-        logger.info(f"Processing question {i+1}/{len(user_questions)}: {question}")
-        worker_result_queue = Queue()
+    while True:
+        task = question_task_queue.get()
+        if task is None:  # Sentinel value to stop worker
+            logger.info(f"Worker {rank} stopping")
+            break
         
-        worker_process = Process(target=_worker, args=(0, config, question, system_prompt, uncertainty_task_queue, uncertainty_result_queue, value_task_queue, value_result_queue, worker_result_queue))
+        question_idx, question, correct_answer = task
+        start_time = time.time()
+        logger.info(f"Worker {rank} processing question {question_idx+1}: {question[:100]}...")
         
-        worker_process.start()
-        final_branches_dicts, all_branches_dicts, tokens_used = worker_result_queue.get()
-        worker_process.join()
+        # Run tree search directly in this worker process
+        final_branches, all_branches, tokens_used = gts.search(question, system_prompt)
+        
+        # Convert to dicts for serialization
+        final_branches_dicts = [b.to_dict() for b in final_branches]
+        all_branches_dicts = [b.to_dict() for b in all_branches]
 
-        final_branches = [Branch.from_dict(b) for b in final_branches_dicts]
-        all_branches = [Branch.from_dict(b) for b in all_branches_dicts]
-        all_results.append(final_branches)
-
-        if save_dir is not None:
-            question_save_dir = Path(save_dir) / f"question_{i}"
-            logger.info(f"Saving branches to {question_save_dir}")
+        # Save results if save_dir is provided
+        if save_dir is not None:            
+            question_save_dir = Path(save_dir) / f"question_{question_idx}"
+            logger.info(f"Worker {rank} saving branches to {question_save_dir}")
             save_branches(
                 final_branches,
                 all_branches,
@@ -134,13 +215,12 @@ def run_uats(
                 correct_answer=correct_answer,
                 total_tokens_generated=tokens_used,
             )
-
-    uncertainty_task_queue.put((None, None, None))
-    value_task_queue.put((None, None, None))
-    uncertainty_server.join()
-    value_server.join()
-
-    return all_results
+        
+        elapsed_time = time.time() - start_time
+        logger.info(f"Worker {rank} completed question {question_idx+1} in {elapsed_time:.2f} seconds")
+        
+        # Send results back
+        question_result_queue.put((question_idx, final_branches_dicts, all_branches_dicts, tokens_used))
 
 
 def save_branches(
@@ -231,7 +311,10 @@ def save_branches(
 
     logger.info(f"Saved {len(final_branches)} branches and summary to {output_path}")
 
-    _generate_tree_image(all_branches, output_path, correct_answer=correct_answer)
+    try:
+        _generate_tree_image(all_branches, output_path, correct_answer=correct_answer)
+    except Exception as e:
+        logger.warning(f"Could not generate tree image: {e}")
 
 
 def _generate_tree_image(
@@ -243,6 +326,13 @@ def _generate_tree_image(
     """Render a simple tree visualisation of the explored search space using matplotlib and networkx."""
     
     if not branches:
+        return
+    
+    try:
+        import matplotlib
+        matplotlib.use('Agg')  # Use non-interactive backend for multiprocessing
+    except ImportError:
+        logger.warning("Matplotlib not available, skipping tree visualization")
         return
     
     G = nx.DiGraph()
@@ -266,8 +356,8 @@ def _generate_tree_image(
                 steps = branch.text.split('\n\n')
                 latest_step = steps[-1].strip() if steps else branch.text.strip()
         
-        # Sanitize for matplotlib mathtext: replace $ with $
-        latest_step = latest_step.replace('$', '\$')
+        # Sanitize for matplotlib mathtext: replace $ with \$
+        latest_step = latest_step.replace('$', r'\$')
 
         latest_step = re.sub(r'\boxed{(.*?)}', r'\1', latest_step)
         latest_step = (latest_step[:25] + '...') if len(latest_step) > 25 else latest_step
@@ -292,7 +382,7 @@ def _generate_tree_image(
         if branch.is_final and branch.final_answer:
             final_answer_text = re.sub(r'boxed{(.*?)}', r'\1', branch.final_answer)
             # Sanitize final answer text as well
-            final_answer_text = final_answer_text.replace('$', '\$')
+            final_answer_text = final_answer_text.replace('$', r'\$')
             final_node_id = f"final_{branch.id}"
             
             is_correct = False
@@ -305,6 +395,7 @@ def _generate_tree_image(
             G.add_edge(branch.id, final_node_id)
     
     pos = nx.nx_agraph.graphviz_layout(G, prog="dot")
+    
     plt.figure(figsize=(20, 15))
     
     root_nodes = [node for node, data in G.nodes(data=True) if data.get('is_root')]
@@ -329,6 +420,10 @@ def _generate_tree_image(
     plt.margins(0.05)
     plt.tight_layout()
     png_path = output_dir / filename
-    plt.savefig(png_path, bbox_inches='tight', dpi=200)
-    plt.close()
-    logger.info(f"Tree image saved to {png_path}")
+    try:
+        plt.savefig(png_path, bbox_inches='tight', dpi=200)
+        logger.info(f"Tree image saved to {png_path}")
+    except Exception as e:
+        logger.warning(f"Could not save tree image: {e}")
+    finally:
+        plt.close()

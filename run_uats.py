@@ -1,12 +1,20 @@
 import argparse
 import logging
 import re
+import multiprocessing as mp
 
 from datasets import load_dataset
 
 from rely.inference.uats.utils import run_uats, UATSConfig
 
+logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 if __name__ == "__main__":
+    # Set multiprocessing start method to 'spawn' to avoid CUDA issues with forked processes
+    if mp.get_start_method(allow_none=True) != 'spawn':
+        mp.set_start_method('spawn', force=True)
+        
     # Setup logging
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     
@@ -33,6 +41,7 @@ if __name__ == "__main__":
     parser.add_argument("--uncertainty_scoring_method", type=str, default="last_step", choices=["product", "average", "minimum", "last_step"], help="Scoring method for uncertainty.")
     parser.add_argument("--value_scoring_method", type=str, default="product", choices=["product", "average", "minimum", "last_step"], help="Scoring method for value.")
     parser.add_argument("--greedy_search", action="store_true", help="If set, select candidates only from the latest generated nodes (SBS-style).")
+    parser.add_argument("--num_workers", type=int, default=5, help="Number of parallel workers to process questions.")
     
     # Device arguments
     parser.add_argument("--device", type=str, default="cuda:1", help="Main device for generation.")
@@ -63,9 +72,6 @@ if __name__ == "__main__":
         greedy_search=args.greedy_search
     )
 
-    # Dynamically add the greedy_search flag to the config object
-    config.greedy_search = args.greedy_search
-
     NUM_SAMPLES = 100
     
     dataset = load_dataset("nlile/hendrycks-MATH-benchmark", split='test')
@@ -85,7 +91,8 @@ if __name__ == "__main__":
         user_questions=questions, 
         correct_answers=correct_answers,
         config=config, 
-        save_dir=args.output_dir
+        save_dir=args.output_dir,
+        num_workers=args.num_workers
     )
 
 '''
