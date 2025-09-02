@@ -1,5 +1,6 @@
 import os
 import json
+import numpy as np
 from rely.utils import normalize_answer
 import argparse
 
@@ -16,12 +17,16 @@ def process_json_file(path):
         - sample_accuracy (float): The accuracy value from the JSON.
         - best_of_n_applicable (bool): True if 'best of n' logic could be applied.
         - is_best_of_n_correct (bool): True if the 'best of n' answer is correct.
+        - total_tokens (int): The total tokens from the file.
     """
     try:
         with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
         ground_truth = data.get('ground_truth')
+        
+        # Get total tokens
+        total_tokens = int(data.get('total_tokens', 0))
 
         # --- 1. Majority Vote Calculation (Original Logic) ---
         majority_vote = data.get('majority_vote')
@@ -48,6 +53,7 @@ def process_json_file(path):
             max_value = float('-inf')
             
             # Find the solution with the highest 'value'
+            best_solution_answer_key = None
             for sol in solutions:
                 # Accept either 'answer' or 'final_answer' as the answer key
                 answer_key = None
@@ -67,18 +73,18 @@ def process_json_file(path):
                         # Ignore solutions with non-numeric 'value'
                         continue
             # If a best solution was found, compare its answer to the ground truth
-            if best_solution is not None:
+            if best_solution is not None and best_solution_answer_key is not None:
                 best_of_n_applicable = True
                 normalized_gt = normalize_answer(str(ground_truth))
                 normalized_best_answer = normalize_answer(str(best_solution[best_solution_answer_key]))
                 if (normalized_gt == normalized_best_answer) and normalized_gt != "":
                     is_best_of_n_correct = True
 
-        return is_majority_correct, sample_accuracy, best_of_n_applicable, is_best_of_n_correct
+        return is_majority_correct, sample_accuracy, best_of_n_applicable, is_best_of_n_correct, total_tokens
 
     except Exception:
         # For any file reading/parsing error, count as incorrect
-        return False, 0.0, False, False
+        return False, 0.0, False, False, 0
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process JSON files and compute evaluation statistics.')
@@ -88,64 +94,55 @@ if __name__ == '__main__':
     input_dir = args.input_dir
     if not os.path.isdir(input_dir):
         print(f"❌ Error: The directory does not exist: '{input_dir}'")
-        return
+        exit(1)
 
     # Recursively find all .json files
     json_files = [os.path.join(root, f) for root, _, files in os.walk(input_dir) for f in files if f.endswith('.json')]
 
     if not json_files:
         print(f"❌ No JSON files found in '{input_dir}' or its subfolders.")
-        return
+        exit(1)
 
     # --- Initialize counters ---
     total_files = 0
     # Counters for majority vote
     majority_correct_count = 0
-    acc_sum = 0.0
     # Counters for best of n
     best_of_n_applicable_count = 0
     best_of_n_correct_count = 0
-    # Counter for total tokens
-    total_tokens_sum = 0
+    # List to store all token counts for percentile calculation
+    token_counts = []
 
     for path in sorted(json_files):
         total_files += 1
-        is_majority_correct, accuracy, best_of_n_applicable, is_best_of_n_correct = process_json_file(path)
+        is_majority_correct, accuracy, best_of_n_applicable, is_best_of_n_correct, total_tokens = process_json_file(path)
+        
         # Accumulate majority vote stats
-        acc_sum += accuracy
         if is_majority_correct:
             majority_correct_count += 1
+        
         # Accumulate best of n stats
         if best_of_n_applicable:
             best_of_n_applicable_count += 1
             if is_best_of_n_correct:
                 best_of_n_correct_count += 1
-        # Accumulate total tokens
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            total_tokens_sum += int(data.get('total_tokens', 0))
-        except Exception:
-            pass
+        
+        # Store token count for percentile calculation
+        token_counts.append(total_tokens)
 
-    print(f"\n✅ Processed {total_files} JSON files in '{input_dir}'")
-    print("-" * 40)
-
-    # --- Print Majority Vote Statistics ---
-    percent_correct = (majority_correct_count / total_files) * 100 if total_files > 0 else 0.0
-    mean_accuracy = (acc_sum / total_files) if total_files > 0 else 0.0
-    mean_total_tokens = (total_tokens_sum / total_files) if total_files > 0 else 0.0
-
-    print("📊 Majority Vote Statistics")
-    print(f"   Correct: {majority_correct_count} / {total_files} ({percent_correct:.2f}%)")
-    print(f"   Mean sample accuracy: {mean_accuracy:.2f}%")
-    print(f"   Mean total tokens: {mean_total_tokens:.2f}")
-    print("-" * 40)
-
-    # --- Print Best of N Statistics (if applicable) ---
+    # Calculate statistics
+    majority_percent_correct = (majority_correct_count / total_files) * 100 if total_files > 0 else 0.0
+    
     if best_of_n_applicable_count > 0:
         best_of_n_percent_correct = (best_of_n_correct_count / best_of_n_applicable_count) * 100
-        print("🏆 Best of N (by value) Statistics")
-        print(f"   Applicable in: {best_of_n_applicable_count} / {total_files} files")
-        print(f"   Correct: {best_of_n_correct_count} / {best_of_n_applicable_count} ({best_of_n_percent_correct:.2f}%)")
-        print("-" * 40)
+    else:
+        best_of_n_percent_correct = 0.0
+    
+    mean_tokens = np.mean(token_counts) if token_counts else 0.0
+    percentile_95_tokens = np.percentile(token_counts, 95) if token_counts else 0.0
+
+    # Print results in requested format
+    print(f"Majority vote is correct: {majority_percent_correct:.2f}%")
+    print(f"Best of N is correct: {best_of_n_percent_correct:.2f}%")
+    print(f"Mean Token used: {mean_tokens:.2f}")
+    print(f"95 percentile used: {percentile_95_tokens:.2f}")

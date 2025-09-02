@@ -481,8 +481,7 @@ def run_sbs_on_dataset(args: argparse.Namespace):
     for i, item in enumerate(dataset):
         item['original_index'] = i
 
-    random.shuffle(dataset) 
-    dataset = dataset[:100]
+    random.shuffle(dataset)
 
     num_workers = args.num_workers
     value_task_queue = Queue()
