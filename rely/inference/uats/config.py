@@ -22,6 +22,7 @@ class UATSConfig:
     value_device: str = "cuda:0"
     temperature: float = 0.9
     top_p: float = 0.95
+    greedy_search: bool = False
 
 
 @dataclass

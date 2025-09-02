@@ -219,13 +219,29 @@ class GuidedTreeSearch:
             # The nodes to expand are the non-finished ones from the top active branches
             leaf_nodes_to_expand = [b for b in top_active_branches if b.final_answer is None]
 
-        # Final, more robust selection of branches
-        parent_ids = {b.parent_id for b in all_branches if b.parent_id is not None}
-        all_leaf_nodes = [b for b in all_branches if b.id not in parent_ids]
-        all_leaf_nodes.sort(key=lambda b: b.value, reverse=True)
-        
-        # Select the top `beam_width` leaf nodes as the final branches
-        final_branches = all_leaf_nodes[:self.config.beam_width]
+        # Final selection of branches
+        final_selection_pool = []
+        if hasattr(self.config, 'greedy_search') and self.config.greedy_search:
+            # SBS-style final selection: pool is all completed branches + all active leaf branches
+            parent_ids = {b.parent_id for b in all_branches if b.parent_id is not None}
+            all_leaf_nodes = [b for b in all_branches if b.id not in parent_ids]
+            
+            completed_branches = [b for b in all_branches if b.final_answer is not None]
+            active_leaf_branches = [b for b in all_leaf_nodes if b.final_answer is None]
+            
+            # Combine, ensuring no duplicates if a completed branch is also a leaf
+            final_selection_pool_map = {b.id: b for b in completed_branches}
+            for b in active_leaf_branches:
+                final_selection_pool_map[b.id] = b
+            
+            final_selection_pool = list(final_selection_pool_map.values())
+        else:
+            # UATS-style: select from all leaf nodes in the entire tree.
+            parent_ids = {b.parent_id for b in all_branches if b.parent_id is not None}
+            final_selection_pool = [b for b in all_branches if b.id not in parent_ids]
+
+        final_selection_pool.sort(key=lambda b: b.value, reverse=True)
+        final_branches = final_selection_pool[:self.config.beam_width]
 
         # Now, generate final answers for those that don't have one
         for leaf_branch in final_branches:

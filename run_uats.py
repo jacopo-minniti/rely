@@ -60,6 +60,7 @@ if __name__ == "__main__":
         device=args.device,
         uncertainty_device=args.uncertainty_device,
         value_device=args.value_device,
+        greedy_search=args.greedy_search
     )
 
     # Dynamically add the greedy_search flag to the config object
