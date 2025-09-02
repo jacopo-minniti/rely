@@ -281,6 +281,72 @@ class StepBeamSearch:
         
         return solutions, saved_files
         
+    def _force_final_answers(self, question: str, beams: List[SBSNode]) -> None:
+        """Force generation of final answers for beams that haven't terminated naturally."""
+        beams_needing_answers = [beam for beam in beams if not beam.is_terminal and not beam.final_answer]
+        
+        if not beams_needing_answers:
+            return
+            
+        logger.info(f"[Rank {self.worker_rank}] Forcing final answers for {len(beams_needing_answers)} beams")
+        
+        # Create prompts with explicit final answer request
+        force_prompts = []
+        for beam in beams_needing_answers:
+            base_prompt = self.create_prompt(question, beam.full_text)
+            force_prompt = base_prompt + "\n\n# Final Answer\n\\boxed{"
+            force_prompts.append(force_prompt)
+        
+        # Generate with lower max_tokens to focus on final answer
+        forced_outputs = []
+        with ThreadPoolExecutor(max_workers=len(force_prompts)) as executor:
+            def make_forced_request(prompt):
+                try:
+                    completion = self.client.completions.create(
+                        model=self.inference_model_name,
+                        prompt=prompt,
+                        max_tokens=50,  # Lower token limit for final answer generation
+                        temperature=0.1,  # Lower temperature for more focused generation
+                        stop=["}"],  # Stop at closing brace
+                        n=1,
+                    )
+                    return completion.choices[0].text+"}" if completion.choices else ""
+                except Exception as e:
+                    logger.error(f"[Rank {self.worker_rank}] Error during forced final answer generation: {e}")
+                    return ""
+            
+            future_to_index = {executor.submit(make_forced_request, prompt): i for i, prompt in enumerate(force_prompts)}
+            forced_outputs = [""] * len(force_prompts)
+            
+            for future in as_completed(future_to_index):
+                index = future_to_index[future]
+                try:
+                    forced_outputs[index] = future.result()
+                except Exception as exc:
+                    logger.error(f"[Rank {self.worker_rank}] Forced generation exception: {exc}")
+        
+        # Update beams with forced answers
+        for i, beam in enumerate(beams_needing_answers):
+            forced_text = forced_outputs[i]
+            if forced_text:
+                # Add the forced generation to the beam's text
+                full_forced_text = "\n\n# Final Answer\n\\boxed{" + forced_text
+                beam.text += full_forced_text
+                beam.full_text += full_forced_text
+                
+                # Try to extract final answer
+                if ans := extract_final_answer(full_forced_text):
+                    beam.final_answer = ans
+                    beam.is_terminal = True
+                    logger.info(f"[Rank {self.worker_rank}] Successfully forced final answer: {ans}")
+                else:
+                    # If extraction failed, try to use the raw forced text
+                    clean_forced = forced_text.strip().rstrip('}')
+                    if clean_forced:
+                        beam.final_answer = clean_forced
+                        beam.is_terminal = True
+                        logger.info(f"[Rank {self.worker_rank}] Used raw forced text as answer: {clean_forced}")
+
     def run(self, question: str, ground_truth: Optional[str] = None, base_path: Optional[str] = None) -> Dict[str, Any]:
         logger.info(f"[Rank {self.worker_rank}] Starting SBS for question: {question[:100]}...")
         self.clear_cache()
@@ -292,11 +358,13 @@ class StepBeamSearch:
         step = 0
         while self.active_beams:
             if self.config.max_depth is not None and step >= self.config.max_depth:
-                logger.info(f"[Rank {self.worker_rank}] Max depth of {self.config.max_depth} reached, stopping search.")
+                logger.info(f"[Rank {self.worker_rank}] Max depth of {self.config.max_depth} reached, forcing final answers.")
+                self._force_final_answers(question, self.active_beams)
                 break
             
             if self.config.budget is not None and self.total_generated_tokens >= self.config.budget:
-                logger.info(f"[Rank {self.worker_rank}] Token budget of {self.config.budget} reached, stopping search.")
+                logger.info(f"[Rank {self.worker_rank}] Token budget of {self.config.budget} reached, forcing final answers.")
+                self._force_final_answers(question, self.active_beams)
                 break
 
             step += 1
@@ -349,7 +417,7 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
     prompt_pattern = re.compile(
         r"<\|im_start\|>system\n(.*?)"
         r"<\|im_end\|>\n<\|im_start\|>user\n(.*?)"
-        r"<\|im_end\|>\n<|im_start|>assistant\n(.*)",
+        r"<\|im_end\|>\n<\|im_start|>assistant\n(.*)",
         re.DOTALL
     )
 
