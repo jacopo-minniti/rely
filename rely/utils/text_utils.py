@@ -155,6 +155,10 @@ def normalize_answer(answer: str) -> str:
     # Replace \frac{a}{b} with a/b
     normalized = re.sub(r'\\frac\{([^}]+)\}\{([^}]+)\}', r'(\1)/(\2)', normalized)
 
+    # Replace all that comes before a "=" sign
+    if '=' in normalized:
+        normalized = normalized.split('=')[-1].strip()
+    
     # Handle percentages
     normalized = re.sub(r'\\%', '%', normalized)
     if '%' in normalized:
