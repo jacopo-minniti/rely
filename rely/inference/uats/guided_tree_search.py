@@ -157,6 +157,9 @@ class GuidedTreeSearch:
         # For greedy search, track full texts to replicate SBS's duplicate removal
         seen_full_texts = {root_branch.text} if self.config.greedy_search else set()
 
+        # For greedy search, manage beam capacity like SBS
+        current_beam_capacity = self.config.beam_width if self.config.greedy_search else 0
+
         while tokens_used < self.config.budget:
             if not leaf_nodes_to_expand:
                 logger.info("No more branches to expand. Stopping search.")
@@ -221,12 +224,9 @@ class GuidedTreeSearch:
             # --- SELECTION PHASE ---
             if self.config.greedy_search:
                 # SBS-style: only select from the candidates generated in this cycle.
-                # Sort candidates by value (like SBS does)
                 newly_generated_candidates.sort(key=lambda b: b.value, reverse=True)
                 
                 # Take top candidates up to current beam capacity
-                # In SBS, this would be self.current_beam_width, but we start with config.beam_width
-                current_beam_capacity = len(leaf_nodes_to_expand) if len(leaf_nodes_to_expand) > 0 else self.config.beam_width
                 top_candidates = newly_generated_candidates[:current_beam_capacity]
                 
                 # Separate completed from active candidates (like SBS _update_beams does)
@@ -245,6 +245,9 @@ class GuidedTreeSearch:
                 
                 # Update leaf_nodes_to_expand to only include active branches (like SBS active_beams)
                 leaf_nodes_to_expand = new_active_branches
+                
+                # Update beam capacity for the next step
+                current_beam_capacity = len(leaf_nodes_to_expand)
                 logger.info(f"Active branches to expand: {len(leaf_nodes_to_expand)}")
                 
             else:
