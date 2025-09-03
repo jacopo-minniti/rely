@@ -136,11 +136,23 @@ class GuidedTreeSearch:
             uncertainty=None, value=value_score, total_tokens=total_tokens,
             id=branch_id_counter, parent_id=None
         )
+        
+        # Check if root branch already has a final answer
+        if final_answer := extract_final_answer(root_branch.text):
+            root_branch.final_answer = final_answer
+        
         all_branches = [root_branch]
         branch_id_counter += 1
 
         # Contains non-finished leaf nodes for the current expansion step
-        leaf_nodes_to_expand = [root_branch]
+        completed_branches = []  # Track completed branches for greedy search
+        
+        # Handle case where root branch already has final answer
+        if root_branch.final_answer is not None and self.config.greedy_search:
+            completed_branches.append(root_branch)
+            leaf_nodes_to_expand = []
+        else:
+            leaf_nodes_to_expand = [root_branch]
 
         while tokens_used < self.config.budget:
             if not leaf_nodes_to_expand:
@@ -197,55 +209,72 @@ class GuidedTreeSearch:
                 break
 
             # --- SELECTION PHASE ---
-            selection_pool = []
             if self.config.greedy_search:
                 # SBS-style: only select from the candidates generated in this cycle.
-                selection_pool = newly_generated_candidates
+                # Sort candidates by value (like SBS does)
+                newly_generated_candidates.sort(key=lambda b: b.value, reverse=True)
+                
+                # Take top candidates up to current beam capacity
+                # In SBS, this would be self.current_beam_width, but we start with config.beam_width
+                current_beam_capacity = len(leaf_nodes_to_expand) if len(leaf_nodes_to_expand) > 0 else self.config.beam_width
+                top_candidates = newly_generated_candidates[:current_beam_capacity]
+                
+                # Separate completed from active candidates (like SBS _update_beams does)
+                new_active_branches = []
+                newly_completed = []
+                for candidate in top_candidates:
+                    if candidate.final_answer is not None:
+                        newly_completed.append(candidate)
+                        logger.info(f"Branch {candidate.id} completed with final answer during generation")
+                    else:
+                        new_active_branches.append(candidate)
+                
+                # Add newly completed branches to our completed list
+                completed_branches.extend(newly_completed)
+                logger.info(f"Added {len(newly_completed)} newly completed branches. Total completed: {len(completed_branches)}")
+                
+                # Update leaf_nodes_to_expand to only include active branches (like SBS active_beams)
+                leaf_nodes_to_expand = new_active_branches
+                logger.info(f"Active branches to expand: {len(leaf_nodes_to_expand)}")
+                
             else:
                 # UATS-style: select from all leaf nodes in the entire tree.
                 parent_ids = {b.parent_id for b in all_branches if b.parent_id is not None}
                 selection_pool = [b for b in all_branches if b.id not in parent_ids]
 
-            # Sort the chosen pool by value to find the top active branches
-            selection_pool.sort(key=lambda b: b.value, reverse=True)
-            
-            top_active_branches = selection_pool[:self.config.beam_width]
-            
-            # Check if all top branches have final answers
-            if len(top_active_branches) == self.config.beam_width and all(b.final_answer is not None for b in top_active_branches):
-                logger.info("All top branches have final answers. Stopping search.")
-                break
+                # Sort the chosen pool by value to find the top active branches
+                selection_pool.sort(key=lambda b: b.value, reverse=True)
+                top_active_branches = selection_pool[:self.config.beam_width]
+                
+                # Check if all top branches have final answers
+                if len(top_active_branches) == self.config.beam_width and all(b.final_answer is not None for b in top_active_branches):
+                    logger.info("All top branches have final answers. Stopping search.")
+                    break
 
-            # The nodes to expand are the non-finished ones from the top active branches
-            leaf_nodes_to_expand = [b for b in top_active_branches if b.final_answer is None]
+                # The nodes to expand are the non-finished ones from the top active branches
+                leaf_nodes_to_expand = [b for b in top_active_branches if b.final_answer is None]
 
         # Final selection of branches
         if self.config.greedy_search:
-            # SBS-style final selection: pool is ONLY from the latest generation leaf nodes
-            # In greedy search, leaf_nodes_to_expand should be the only active leaf nodes
-            final_selection_pool = leaf_nodes_to_expand.copy()
+            # SBS-style final selection: 
+            # 1. Add any remaining active beams to completed_branches (like SBS does with self.completed_beams.extend(self.active_beams))
+            logger.info(f"Before final extension - completed_branches: {len(completed_branches)}, leaf_nodes_to_expand: {len(leaf_nodes_to_expand)}")
+            completed_branches.extend(leaf_nodes_to_expand)
             
-            # Add any branches that have final answers from the last selection
-            for branch in top_active_branches:
-                if branch.final_answer is not None and branch not in final_selection_pool:
-                    final_selection_pool.append(branch)
+            # 2. Sort ALL completed branches by value and take top beam_width (like SBS does)
+            completed_branches.sort(key=lambda b: b.value, reverse=True)
+            logger.info(f"COMPLETED BRANCHES: {len(completed_branches)}")
+            final_branches = completed_branches[:self.config.beam_width]
             
-            # Verification: In greedy search, these should be the ONLY leaf nodes
-            parent_ids = {b.parent_id for b in all_branches if b.parent_id is not None}
-            all_leaf_nodes = [b for b in all_branches if b.id not in parent_ids]
-            if len(final_selection_pool) != len(all_leaf_nodes):
-                logger.warning(f"Greedy search invariant violated: {len(final_selection_pool)} final candidates vs {len(all_leaf_nodes)} total leaf nodes")
         else:
             # UATS-style: select from all leaf nodes in the entire tree
             parent_ids = {b.parent_id for b in all_branches if b.parent_id is not None}
             final_selection_pool = [b for b in all_branches if b.id not in parent_ids]
-
-        final_selection_pool.sort(key=lambda b: b.value, reverse=True)
-        final_branches = final_selection_pool[:self.config.beam_width]
+            final_selection_pool.sort(key=lambda b: b.value, reverse=True)
+            final_branches = final_selection_pool[:self.config.beam_width]
 
         # Now, generate final answers for those that don't have one
         for leaf_branch in final_branches:
-            # If the branch doesn't have a final answer, try to generate one
             if not leaf_branch.final_answer:
                 generated_text, new_tokens_count = self._generate_final_answer(leaf_branch)
                 tokens_used += new_tokens_count

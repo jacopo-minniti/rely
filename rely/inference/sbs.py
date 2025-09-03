@@ -540,7 +540,7 @@ def run_sbs_on_dataset(args: argparse.Namespace):
     set_start_method('spawn', force=True)
     
     ds = load_dataset(args.dataset, split='test')
-    ds = ds.shuffle(seed=42).select(range(500))
+    ds = ds.shuffle(seed=42).select(range(100))
     dataset = [dict(item) for item in ds]
     for i, item in enumerate(dataset):
         item['original_index'] = i
