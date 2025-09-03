@@ -194,7 +194,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("-m", "--model", type=str)
+    parser.add_argument("-m", "--model", default="jacopo-minniti/Qwen2.5-Math-7B-PUM-half_entropy", type=str)
     parser.add_argument("-b", "--batch_size", type=int, default=24)
     parser.add_argument("-w", "--num_of_workers", type=int, default=4)
     parser.add_argument("-s", "--separator", type=str, default="<extra_0>", help="It's important to use the same separator as the one used during TRL training")

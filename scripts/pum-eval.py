@@ -159,7 +159,7 @@ def evaluate_dataset(dataset, tokenizer, model, batch_size=8):
 # --- Main Execution ---
 if __name__ == "__main__":
     # 1. Load Model and Tokenizer
-    model_name = "outputs/out"
+    model_name = "jacopo-minniti/Qwen2.5-Math-7B-PUM-half_entropy"
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
