@@ -637,5 +637,5 @@ python test.py \
     --num_workers 5 \
     --value_model_gpu 0 \
     --value_method product \
-    --budget 4000
+    --budget 20000
 '''
