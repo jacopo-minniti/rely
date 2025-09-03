@@ -15,6 +15,7 @@ outputs/
 uats_*/
 sbs_results_*/
 rely.egg-info
+results/
 
 *.pdf
 *.jsonl
