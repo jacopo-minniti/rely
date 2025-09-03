@@ -154,6 +154,9 @@ class GuidedTreeSearch:
         else:
             leaf_nodes_to_expand = [root_branch]
 
+        # For greedy search, track full texts to replicate SBS's duplicate removal
+        seen_full_texts = {root_branch.text} if self.config.greedy_search else set()
+
         while tokens_used < self.config.budget:
             if not leaf_nodes_to_expand:
                 logger.info("No more branches to expand. Stopping search.")
@@ -180,6 +183,13 @@ class GuidedTreeSearch:
                         budget_exceeded = True
 
                     new_text = branch.text + "\n\n" + step_text
+
+                    # SBS-style full-text duplicate check for greedy search
+                    if self.config.greedy_search:
+                        if new_text in seen_full_texts:
+                            continue
+                        seen_full_texts.add(new_text)
+
                     value_score = self._get_score_from_server(self.value_task_queue, self.value_result_queue, new_text)
                     total_tokens = count_tokens_after_marker(new_text, self.tokenizer)
 
