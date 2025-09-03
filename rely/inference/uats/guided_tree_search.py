@@ -137,22 +137,22 @@ class GuidedTreeSearch:
             id=branch_id_counter, parent_id=None
         )
         
-        # Check if root branch already has a final answer
         if final_answer := extract_final_answer(root_branch.text):
             root_branch.final_answer = final_answer
         
         all_branches = [root_branch]
         branch_id_counter += 1
 
-        # Contains non-finished leaf nodes for the current expansion step
-        completed_branches = []  # Track completed branches for greedy search
+        completed_branches = []
         
-        # Handle case where root branch already has final answer
         if root_branch.final_answer is not None and self.config.greedy_search:
             completed_branches.append(root_branch)
             leaf_nodes_to_expand = []
         else:
             leaf_nodes_to_expand = [root_branch]
+
+        if self.config.greedy_search:
+            greedy_beam_capacity = self.config.beam_width
 
         while tokens_used < self.config.budget:
             if not leaf_nodes_to_expand:
@@ -162,24 +162,34 @@ class GuidedTreeSearch:
             newly_generated_candidates = []
             budget_exceeded = False
             
+            seen_texts = set()
+
             for branch in leaf_nodes_to_expand:
                 uncertainty_score = self._get_score_from_server(self.uncertainty_task_queue, self.uncertainty_result_queue, branch.text)
                 num_branches_to_gen = self.uncertainty_to_branches(uncertainty_score, self.config.uncertainty_threshold, self.config.max_branches)
                 
                 generated_steps = self._generate_step(branch.ids.to(self.device), num_completions=num_branches_to_gen)
 
-                # Deduplicate generated steps to avoid creating identical branches from the same parent
-                unique_steps = {}
-                for step_text, new_tokens in generated_steps:
-                    if step_text not in unique_steps:
-                        unique_steps[step_text] = new_tokens
+                steps_to_process = generated_steps
+                if not self.config.greedy_search:
+                    unique_steps_dict = {}
+                    for step_text, new_tokens in generated_steps:
+                        if step_text not in unique_steps_dict:
+                            unique_steps_dict[step_text] = new_tokens
+                    steps_to_process = list(unique_steps_dict.items())
 
-                for step_text, new_tokens in unique_steps.items():
+                for step_text, new_tokens in steps_to_process:
                     tokens_used += len(new_tokens)
                     if tokens_used >= self.config.budget:
                         budget_exceeded = True
 
                     new_text = branch.text + "\n\n" + step_text
+
+                    if self.config.greedy_search:
+                        if new_text in seen_texts:
+                            continue
+                        seen_texts.add(new_text)
+
                     value_score = self._get_score_from_server(self.value_task_queue, self.value_result_queue, new_text)
                     total_tokens = count_tokens_after_marker(new_text, self.tokenizer)
 
@@ -210,48 +220,35 @@ class GuidedTreeSearch:
 
             # --- SELECTION PHASE ---
             if self.config.greedy_search:
-                # SBS-style: only select from the candidates generated in this cycle.
-                # Sort candidates by value (like SBS does)
                 newly_generated_candidates.sort(key=lambda b: b.value, reverse=True)
                 
-                # Take top candidates up to current beam capacity
-                # In SBS, this would be self.current_beam_width, but we start with config.beam_width
-                current_beam_capacity = len(leaf_nodes_to_expand) if len(leaf_nodes_to_expand) > 0 else self.config.beam_width
-                top_candidates = newly_generated_candidates[:current_beam_capacity]
+                top_candidates = newly_generated_candidates[:greedy_beam_capacity]
                 
-                # Separate completed from active candidates (like SBS _update_beams does)
                 new_active_branches = []
                 newly_completed = []
                 for candidate in top_candidates:
                     if candidate.final_answer is not None:
                         newly_completed.append(candidate)
-                        logger.info(f"Branch {candidate.id} completed with final answer during generation")
                     else:
                         new_active_branches.append(candidate)
                 
-                # Add newly completed branches to our completed list
                 completed_branches.extend(newly_completed)
-                logger.info(f"Added {len(newly_completed)} newly completed branches. Total completed: {len(completed_branches)}")
-                
-                # Update leaf_nodes_to_expand to only include active branches (like SBS active_beams)
                 leaf_nodes_to_expand = new_active_branches
-                logger.info(f"Active branches to expand: {len(leaf_nodes_to_expand)}")
+                
+                greedy_beam_capacity = len(leaf_nodes_to_expand)
                 
             else:
                 # UATS-style: select from all leaf nodes in the entire tree.
                 parent_ids = {b.parent_id for b in all_branches if b.parent_id is not None}
                 selection_pool = [b for b in all_branches if b.id not in parent_ids]
 
-                # Sort the chosen pool by value to find the top active branches
                 selection_pool.sort(key=lambda b: b.value, reverse=True)
                 top_active_branches = selection_pool[:self.config.beam_width]
                 
-                # Check if all top branches have final answers
                 if len(top_active_branches) == self.config.beam_width and all(b.final_answer is not None for b in top_active_branches):
                     logger.info("All top branches have final answers. Stopping search.")
                     break
 
-                # The nodes to expand are the non-finished ones from the top active branches
                 leaf_nodes_to_expand = [b for b in top_active_branches if b.final_answer is None]
 
         # Final selection of branches
