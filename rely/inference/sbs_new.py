@@ -1,3 +1,4 @@
+# sbs.py
 import re
 import logging
 import time
@@ -83,11 +84,9 @@ class StepBeamSearch:
         self.inference_model_name = inference_model_name
         self.worker_rank = worker_rank
         
-        # Queues for communicating with the Value Server
         self.value_task_queue = value_task_queue
         self.value_result_queue = value_result_queue
 
-        # OpenAI client to connect to the vLLM server
         self.client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_API_BASE)
         logger.info(f"[Rank {self.worker_rank}] Client initialized to connect to {OPENAI_API_BASE}")
         
@@ -97,7 +96,6 @@ class StepBeamSearch:
         self.current_beam_width: int = config.step_beam_width
         self._prompt_cache = {}
 
-        # Token counter for all generations
         self.tokenizer = AutoTokenizer.from_pretrained(self.inference_model_name, trust_remote_code=True)
         self.total_generated_tokens = 0
 
@@ -134,8 +132,10 @@ class StepBeamSearch:
                 self.value_result_queue.put(response)
                 time.sleep(0.01)
 
-    def _make_api_request(self, prompt: str) -> List[str]:
-        """Helper function to make a single API call."""
+    def _make_api_request(self, prompt: str, n_samples: int) -> List[str]:
+        """Helper function to make a single API call for n_samples."""
+        if n_samples <= 0:
+            return []
         try:
             completion = self.client.completions.create(
                 model=self.inference_model_name,
@@ -143,7 +143,7 @@ class StepBeamSearch:
                 max_tokens=self.config.max_tokens,
                 temperature=self.config.temperature,
                 stop=["\n\n"],
-                n=self.config.n_generate_sample,
+                n=n_samples,
             )
             generations = [choice.text for choice in completion.choices]
             try:
@@ -160,12 +160,23 @@ class StepBeamSearch:
         if not self.active_beams:
             return []
 
+        num_active_beams = len(self.active_beams)
+        total_samples_budget = self.config.n_generate_sample
+
+        # Distribute the total sample budget among active beams
+        base_samples = total_samples_budget // num_active_beams
+        remainder = total_samples_budget % num_active_beams
+        samples_per_beam = [base_samples + 1 if i < remainder else base_samples for i in range(num_active_beams)]
+
         all_candidates, seen_full_texts = [], set()
         prompts = [self.create_prompt(question, node.full_text) for node in self.active_beams]
         
         generated_outputs = [[] for _ in self.active_beams]
-        with ThreadPoolExecutor(max_workers=len(self.active_beams)) as executor:
-            future_to_index = {executor.submit(self._make_api_request, prompt): i for i, prompt in enumerate(prompts)}
+        with ThreadPoolExecutor(max_workers=num_active_beams) as executor:
+            future_to_index = {
+                executor.submit(self._make_api_request, prompts[i], samples_per_beam[i]): i
+                for i in range(num_active_beams)
+            }
             for future in as_completed(future_to_index):
                 index = future_to_index[future]
                 try:
@@ -250,7 +261,6 @@ class StepBeamSearch:
             "total_tokens": self.total_generated_tokens
         }
 
-    # MODIFIED: No longer saves individual beam files, only the final summary.json.
     def _save_results(self, final_beams: List[SBSNode], base_path: str, question: str, ground_truth: Optional[str]) -> Tuple[List[Dict[str, Any]], List[str]]:
         solutions, saved_files = [], []
         os.makedirs(base_path, exist_ok=True)
@@ -269,7 +279,6 @@ class StepBeamSearch:
             }
             solutions.append(solution_data)
 
-        # Save only the consolidated summary.json file.
         summary_path = os.path.join(base_path, "summary.json")
         with open(summary_path, 'w', encoding='utf-8') as f:
             json.dump(self._create_summary(solutions, question, ground_truth), f, indent=4)
@@ -286,14 +295,12 @@ class StepBeamSearch:
             
         logger.info(f"[Rank {self.worker_rank}] Forcing final answers for {len(beams_needing_answers)} beams")
         
-        # Create prompts with explicit final answer request
         force_prompts = []
         for beam in beams_needing_answers:
             base_prompt = self.create_prompt(question, beam.full_text)
             force_prompt = base_prompt + "\n\n# Final Answer\n\\boxed{"
             force_prompts.append(force_prompt)
         
-        # Generate with lower max_tokens to focus on final answer
         forced_outputs = []
         with ThreadPoolExecutor(max_workers=len(force_prompts)) as executor:
             def make_forced_request(prompt):
@@ -301,9 +308,9 @@ class StepBeamSearch:
                     completion = self.client.completions.create(
                         model=self.inference_model_name,
                         prompt=prompt,
-                        max_tokens=50,  # Lower token limit for final answer generation
-                        temperature=0.1,  # Lower temperature for more focused generation
-                        stop=["}"],  # Stop at closing brace
+                        max_tokens=50,
+                        temperature=0.1,
+                        stop=["}"],
                         n=1,
                     )
                     return completion.choices[0].text+"}" if completion.choices else ""
@@ -321,22 +328,18 @@ class StepBeamSearch:
                 except Exception as exc:
                     logger.error(f"[Rank {self.worker_rank}] Forced generation exception: {exc}")
         
-        # Update beams with forced answers
         for i, beam in enumerate(beams_needing_answers):
             forced_text = forced_outputs[i]
             if forced_text:
-                # Add the forced generation to the beam's text
                 full_forced_text = "\n\n# Final Answer\n\\boxed{" + forced_text
                 beam.text += full_forced_text
                 beam.full_text += full_forced_text
                 
-                # Try to extract final answer
                 if ans := extract_final_answer(full_forced_text):
                     beam.final_answer = ans
                     beam.is_terminal = True
                     logger.info(f"[Rank {self.worker_rank}] Successfully forced final answer: {ans}")
                 else:
-                    # If extraction failed, try to use the raw forced text
                     clean_forced = forced_text.strip().rstrip('}')
                     if clean_forced:
                         beam.final_answer = clean_forced
@@ -383,7 +386,6 @@ class StepBeamSearch:
         return {"question": question, "ground_truth": ground_truth, "solutions": solutions}
 
 # --- Data Parallel Execution Harness ---
-# (No changes below this line)
 
 def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queues: List[Queue]):
     """
@@ -597,7 +599,7 @@ def main():
     parser.add_argument("--value_model_gpu", type=int, default=0, help="The single GPU ID for the value model server.")
     
     parser.add_argument("--beam_width", type=int, default=4, help="Step-level beam width.")
-    parser.add_argument("--n_samples", type=int, default=5, help="Samples to generate at each step.")
+    parser.add_argument("--n_samples", type=int, default=5, help="Total samples to generate at each step, distributed among active beams.")
     parser.add_argument("--max_depth", type=int, default=None, help="Maximum search depth.")
     parser.add_argument("--budget", type=int, default=None, help="Maximum number of tokens to generate across all steps.")
     parser.add_argument("--temperature", type=float, default=1, help="Generation temperature.")

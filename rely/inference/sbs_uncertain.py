@@ -589,7 +589,6 @@ def run_sbs_on_dataset(args: argparse.Namespace):
     ds = load_dataset(args.dataset, split='test')
     ds = ds.shuffle(seed=42).select(range(100))
     dataset = [{'original_index': i, **item} for i, item in enumerate(ds)]
-    random.shuffle(dataset)
 
     num_workers = args.num_workers
     value_task_queue = Queue()
@@ -605,7 +604,7 @@ def run_sbs_on_dataset(args: argparse.Namespace):
     uncertainty_server_proc = Process(target=_uncertainty_model_server, args=(args, uncertainty_task_queue, uncertainty_result_queues))
     uncertainty_server_proc.start()
     
-    time.sleep(20) # Allow time for models to load
+    time.sleep(30) # Allow time for models to load
 
     total_samples = len(dataset)
     samples_per_worker = (total_samples + num_workers - 1) // num_workers
