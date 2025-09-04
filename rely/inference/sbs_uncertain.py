@@ -201,6 +201,10 @@ class StepBeamSearch:
         
         normalized_scores = [score / total_uncertainty for score in uncertainty_scores]
         
+        # Log normalized scores
+        if self.config.verbose:
+            logger.info(f"[Rank {self.worker_rank}] Normalized uncertainty scores: {[f'{s:.3f}' for s in normalized_scores]}")
+        
         # Calculate samples for each beam
         sample_distribution = []
         total_assigned = 0
