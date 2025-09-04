@@ -737,7 +737,7 @@ def _sbs_worker(args: argparse.Namespace,
             )
         except Exception as e:
             error_traceback = traceback.format_exc()
-            logger.error(f"[Rank {rank] FATAL ERROR processing item {original_index}: {e}\nTRACEBACK:\n{error_traceback}")
+            logger.error(f"[Rank {rank} FATAL ERROR processing item {original_index}: {e}\nTRACEBACK:\n{error_traceback}")
             if output_path:
                 os.makedirs(output_path, exist_ok=True)
                 with open(os.path.join(output_path, "error.log"), 'w') as f:
