@@ -9,15 +9,14 @@ from multiprocessing import Process, Queue, set_start_method
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import uuid
 import random
-
-import torch
-import torch.nn as nn
-from openai import OpenAI
-from transformers import AutoModel, AutoTokenizer, AutoModelForTokenClassification
-import torch.nn.functional as F
 import math
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
+
+import torch
+import torch.nn.functional as F
+from openai import OpenAI
+from transformers import AutoModel, AutoTokenizer, AutoModelForTokenClassification
 from tqdm import tqdm
 import argparse
 from datasets import load_dataset
@@ -36,7 +35,7 @@ OPENAI_API_BASE = "http://localhost:8000/v1"
 class SBSConfig:
     """Configuration for Step-level Beam Search"""
     step_beam_width: int = 3
-    n_total_samples: int = 5  # Total samples to generate at each step (distributed based on uncertainty)
+    n_total_samples: int = 5
     max_depth: Optional[int] = None
     budget: Optional[int] = None
     temperature: float = 0.6
@@ -59,7 +58,7 @@ class SBSNode:
         self.depth = depth
         self.full_text: str = (parent.full_text if parent else "") + text
         self.value: float = -100.0
-        self.uncertainty: float = 0.5  # Default uncertainty score
+        self.uncertainty: float = 0.5
         self.is_terminal = False
         self.final_answer = ""
 
@@ -93,9 +92,7 @@ def make_uncertainty_score(logits, token_masks):
 
 
 class StepBeamSearch:
-    """
-    MODIFIED: Step-level Beam Search implementation with uncertainty-weighted sampling.
-    """
+    """Step-level Beam Search implementation with uncertainty-weighted sampling."""
     def __init__(self,
                  inference_model_name: str,
                  config: SBSConfig,
@@ -107,16 +104,15 @@ class StepBeamSearch:
         self.config = config
         if self.config.max_depth is None and self.config.budget is None:
             raise ValueError("Either max_depth or budget must be specified for the search.")
+        
         self.inference_model_name = inference_model_name
         self.worker_rank = worker_rank
         
-        # Queues for communicating with servers
         self.value_task_queue = value_task_queue
         self.value_result_queue = value_result_queue
         self.uncertainty_task_queue = uncertainty_task_queue
         self.uncertainty_result_queue = uncertainty_result_queue
 
-        # OpenAI client to connect to the vLLM server
         self.client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_API_BASE)
         logger.info(f"[Rank {self.worker_rank}] Client initialized to connect to {OPENAI_API_BASE}")
         
@@ -126,7 +122,6 @@ class StepBeamSearch:
         self.current_beam_width: int = config.step_beam_width
         self._prompt_cache = {}
 
-        # Token counter for all generations
         self.tokenizer = AutoTokenizer.from_pretrained(self.inference_model_name, trust_remote_code=True)
         self.total_generated_tokens = 0
 
@@ -146,52 +141,36 @@ class StepBeamSearch:
         if not prompts:
             return []
         request_id = str(uuid.uuid4())
-        payload = {
-            "request_id": request_id,
-            "worker_rank": self.worker_rank,
-            "prompts": prompts,
-            "generated_texts": generated_texts
-        }
+        payload = {"request_id": request_id, "worker_rank": self.worker_rank, "prompts": prompts, "generated_texts": generated_texts}
         self.value_task_queue.put(payload)
         
         while True:
             response = self.value_result_queue.get()
             if response.get("request_id") == request_id:
                 return response["values"]
-            else:
-                logger.warning(f"[Rank {self.worker_rank}] Received unexpected value result, requeuing.")
-                self.value_result_queue.put(response)
-                time.sleep(0.01)
+            self.value_result_queue.put(response)
+            time.sleep(0.01)
 
     def _get_uncertainties_from_server(self, prompts: List[str]) -> List[float]:
         if not prompts:
             return []
         request_id = str(uuid.uuid4())
-        payload = {
-            "request_id": request_id,
-            "worker_rank": self.worker_rank,
-            "prompts": prompts
-        }
+        payload = {"request_id": request_id, "worker_rank": self.worker_rank, "prompts": prompts}
         self.uncertainty_task_queue.put(payload)
         
         while True:
             response = self.uncertainty_result_queue.get()
             if response.get("request_id") == request_id:
                 return response["uncertainties"]
-            else:
-                logger.warning(f"[Rank {self.worker_rank}] Received unexpected uncertainty result, requeuing.")
-                self.uncertainty_result_queue.put(response)
-                time.sleep(0.01)
+            self.uncertainty_result_queue.put(response)
+            time.sleep(0.01)
 
     def _calculate_sample_distribution(self, uncertainty_scores: List[float]) -> List[int]:
-        """Calculate how many samples each beam should get based on uncertainty scores."""
         if not uncertainty_scores:
             return []
         
-        # Normalize uncertainty scores
         total_uncertainty = sum(uncertainty_scores)
         if total_uncertainty == 0:
-            # If all uncertainties are 0, distribute equally
             samples_per_beam = self.config.n_total_samples // len(uncertainty_scores)
             remainder = self.config.n_total_samples % len(uncertainty_scores)
             distribution = [samples_per_beam] * len(uncertainty_scores)
@@ -201,27 +180,22 @@ class StepBeamSearch:
         
         normalized_scores = [score / total_uncertainty for score in uncertainty_scores]
         
-        # Log normalized scores
         if self.config.verbose:
             logger.info(f"[Rank {self.worker_rank}] Normalized uncertainty scores: {[f'{s:.3f}' for s in normalized_scores]}")
         
-        # Calculate samples for each beam
         sample_distribution = []
         total_assigned = 0
-        
         for i, norm_score in enumerate(normalized_scores):
             if i == len(normalized_scores) - 1:
-                # Last beam gets remaining samples to ensure total is exact
                 samples = self.config.n_total_samples - total_assigned
             else:
                 samples = int(norm_score * self.config.n_total_samples)
                 total_assigned += samples
-            sample_distribution.append(max(1, samples))  # Ensure at least 1 sample per beam
+            sample_distribution.append(max(1, samples))
         
         return sample_distribution
 
     def _make_api_request_with_samples(self, prompt: str, n_samples: int) -> List[str]:
-        """Helper function to make API call with specific number of samples."""
         if n_samples <= 0:
             return []
         try:
@@ -234,11 +208,8 @@ class StepBeamSearch:
                 n=n_samples,
             )
             generations = [choice.text for choice in completion.choices]
-            try:
-                for gen in generations:
-                    self.total_generated_tokens += len(self.tokenizer.encode(gen, add_special_tokens=False))
-            except Exception as e:
-                logger.warning(f"[Rank {self.worker_rank}] Could not count tokens: {e}")
+            for gen in generations:
+                self.total_generated_tokens += len(self.tokenizer.encode(gen, add_special_tokens=False))
             return generations
         except Exception as e:
             logger.error(f"[Rank {self.worker_rank}] Error during API call: {e}")
@@ -248,21 +219,13 @@ class StepBeamSearch:
         if not self.active_beams:
             return []
 
-        # Get uncertainty scores for current beams
-        uncertainty_prompts = []
-        for beam in self.active_beams:
-            # Create full conversation text for uncertainty evaluation
-            full_prompt = self.create_prompt(question, beam.full_text)
-            uncertainty_prompts.append(full_prompt)
-        
+        uncertainty_prompts = [self.create_prompt(question, beam.full_text) for beam in self.active_beams]
         uncertainty_scores = self._get_uncertainties_from_server(uncertainty_prompts)
         
-        # Update beam uncertainty scores
         for i, beam in enumerate(self.active_beams):
             if i < len(uncertainty_scores):
                 beam.uncertainty = uncertainty_scores[i]
         
-        # Calculate sample distribution based on uncertainty
         sample_distribution = self._calculate_sample_distribution(uncertainty_scores)
         
         if self.config.verbose:
@@ -272,13 +235,10 @@ class StepBeamSearch:
         all_candidates, seen_full_texts = [], set()
         prompts = [self.create_prompt(question, node.full_text) for node in self.active_beams]
         
-        # Generate with uncertainty-weighted distribution
         generated_outputs = [[] for _ in self.active_beams]
         with ThreadPoolExecutor(max_workers=len(self.active_beams)) as executor:
-            future_to_index = {}
-            for i, (prompt, n_samples) in enumerate(zip(prompts, sample_distribution)):
-                future = executor.submit(self._make_api_request_with_samples, prompt, n_samples)
-                future_to_index[future] = i
+            future_to_index = {executor.submit(self._make_api_request_with_samples, prompt, n_samples): i 
+                               for i, (prompt, n_samples) in enumerate(zip(prompts, sample_distribution))}
                 
             for future in as_completed(future_to_index):
                 index = future_to_index[future]
@@ -287,10 +247,7 @@ class StepBeamSearch:
                 except Exception as exc:
                     logger.error(f"[Rank {self.worker_rank}] API request generated an exception: {exc}")
 
-        value_request_prompts = []
-        value_request_texts = []
-        parent_nodes = []
-
+        value_request_prompts, value_request_texts, parent_nodes = [], [], []
         for i, gen_texts in enumerate(generated_outputs):
             parent_node = self.active_beams[i]
             for gen_text in gen_texts:
@@ -308,10 +265,7 @@ class StepBeamSearch:
                 snippet = gen_text.rstrip() + '\n\n'
                 child_node = parent_node.add_child(snippet)
                 
-                if self.config.value_method == 'product':
-                    child_node.value = parent_node.value * new_step_value
-                else: 
-                    child_node.value = new_step_value
+                child_node.value = parent_node.value * new_step_value if self.config.value_method == 'product' else new_step_value
                 
                 if ans := extract_final_answer(gen_text):
                     child_node.is_terminal, child_node.final_answer = True, ans
@@ -334,15 +288,18 @@ class StepBeamSearch:
         if not candidates:
             self.active_beams, self.current_beam_width = [], 0
             return 0
+        
         candidates.sort(key=lambda x: x.value, reverse=True)
         new_active_beams, newly_completed = [], 0
-        for cand in candidates[:self.current_beam_width]:
+        
+        for cand in candidates[:self.config.step_beam_width]: # Use original beam width for selection
             max_depth_reached = self.config.max_depth is not None and cand.depth >= self.config.max_depth
             if cand.is_terminal or max_depth_reached:
                 self.completed_beams.append(cand)
                 newly_completed += 1
             else:
                 new_active_beams.append(cand)
+                
         self.active_beams = new_active_beams
         self.current_beam_width = len(self.active_beams)
         return newly_completed
@@ -354,77 +311,55 @@ class StepBeamSearch:
         accuracy = "N/A"
         if ground_truth and answers:
             correct_answers = sum(1 for ans in answers if ans == ground_truth)
-            accuracy = f"{correct_answers / len(answers):.2%}" if answers else "0.00%"
+            accuracy = f"{correct_answers / len(answers):.2%}"
         return {
-            "question": question,
-            "ground_truth": ground_truth,
-            "majority_vote": majority_vote,
-            "accuracy": accuracy,
-            "solutions": solutions,
-            "total_tokens": self.total_generated_tokens
+            "question": question, "ground_truth": ground_truth, "majority_vote": majority_vote,
+            "accuracy": accuracy, "solutions": solutions, "total_tokens": self.total_generated_tokens
         }
 
-    def _save_results(self, final_beams: List[SBSNode], base_path: str, question: str, ground_truth: Optional[str]) -> Tuple[List[Dict[str, Any]], List[str]]:
-        solutions, saved_files = [], []
+    def _save_results(self, final_beams: List[SBSNode], base_path: str, question: str, ground_truth: Optional[str]):
+        solutions = []
         os.makedirs(base_path, exist_ok=True)
 
         for idx, node in enumerate(final_beams):
             if not node.final_answer:
-                node.final_answer = extract_final_answer(node.full_text) or ""
-            termination_reason = "answer_found" if node.final_answer else "max_depth"
+                node.final_answer = extract_final_answer(node.full_text) or "Not found"
+            
             solution_data = {
-                "beam_index": idx + 1,
-                "value": node.value,
-                "uncertainty": node.uncertainty,
-                "final_answer": node.final_answer or "Not found",
-                "depth": node.depth,
-                "termination_reason": termination_reason,
-                "solution_path": node.full_text
+                "beam_index": idx + 1, "value": node.value, "uncertainty": node.uncertainty,
+                "final_answer": node.final_answer, "depth": node.depth, "solution_path": node.full_text
             }
             solutions.append(solution_data)
 
         summary_path = os.path.join(base_path, "summary.json")
         with open(summary_path, 'w', encoding='utf-8') as f:
             json.dump(self._create_summary(solutions, question, ground_truth), f, indent=4)
-        saved_files.append(summary_path)
         
-        return solutions, saved_files
-        
+        return solutions
+
     def _force_final_answers(self, question: str, beams: List[SBSNode]) -> None:
-        """Force generation of final answers for beams that haven't terminated naturally."""
         beams_needing_answers = [beam for beam in beams if not beam.is_terminal and not beam.final_answer]
-        
         if not beams_needing_answers:
             return
             
         logger.info(f"[Rank {self.worker_rank}] Forcing final answers for {len(beams_needing_answers)} beams")
         
-        force_prompts = []
-        for beam in beams_needing_answers:
-            base_prompt = self.create_prompt(question, beam.full_text)
-            force_prompt = base_prompt + "\n\n# Final Answer\n\\boxed{"
-            force_prompts.append(force_prompt)
+        force_prompts = [self.create_prompt(question, beam.full_text) + "\n\n# Final Answer\n\\boxed{" for beam in beams_needing_answers]
         
-        forced_outputs = []
+        forced_outputs = [""] * len(force_prompts)
         with ThreadPoolExecutor(max_workers=len(force_prompts)) as executor:
             def make_forced_request(prompt):
                 try:
                     completion = self.client.completions.create(
-                        model=self.inference_model_name,
-                        prompt=prompt,
-                        max_tokens=50,
-                        temperature=0.1,
-                        stop=["}"],
-                        n=1,
+                        model=self.inference_model_name, prompt=prompt, max_tokens=50,
+                        temperature=0.1, stop=["}"], n=1,
                     )
-                    return completion.choices[0].text+"}" if completion.choices else ""
+                    return completion.choices[0].text + "}" if completion.choices else ""
                 except Exception as e:
-                    logger.error(f"[Rank {self.worker_rank}] Error during forced final answer generation: {e}")
+                    logger.error(f"[Rank {self.worker_rank}] Error during forced generation: {e}")
                     return ""
             
             future_to_index = {executor.submit(make_forced_request, prompt): i for i, prompt in enumerate(force_prompts)}
-            forced_outputs = [""] * len(force_prompts)
-            
             for future in as_completed(future_to_index):
                 index = future_to_index[future]
                 try:
@@ -433,22 +368,12 @@ class StepBeamSearch:
                     logger.error(f"[Rank {self.worker_rank}] Forced generation exception: {exc}")
         
         for i, beam in enumerate(beams_needing_answers):
-            forced_text = forced_outputs[i]
-            if forced_text:
-                full_forced_text = "\n\n# Final Answer\n\\boxed{" + forced_text
+            if forced_outputs[i]:
+                full_forced_text = "\n\n# Final Answer\n\\boxed{" + forced_outputs[i]
                 beam.text += full_forced_text
                 beam.full_text += full_forced_text
-                
-                if ans := extract_final_answer(full_forced_text):
-                    beam.final_answer = ans
-                    beam.is_terminal = True
-                    logger.info(f"[Rank {self.worker_rank}] Successfully forced final answer: {ans}")
-                else:
-                    clean_forced = forced_text.strip().rstrip('}')
-                    if clean_forced:
-                        beam.final_answer = clean_forced
-                        beam.is_terminal = True
-                        logger.info(f"[Rank {self.worker_rank}] Used raw forced text as answer: {clean_forced}")
+                beam.is_terminal = True
+                beam.final_answer = extract_final_answer(full_forced_text) or forced_outputs[i].strip().rstrip('}')
 
     def run(self, question: str, ground_truth: Optional[str] = None, base_path: Optional[str] = None) -> Dict[str, Any]:
         logger.info(f"[Rank {self.worker_rank}] Starting SBS for question: {question[:100]}...")
@@ -456,33 +381,37 @@ class StepBeamSearch:
         self.root = SBSNode(text="", depth=0)
         if self.config.value_method == "product":
             self.root.value = 1.0
+            
         self.active_beams = [self.root]
-        self.completed_beams, self.current_beam_width = [], self.config.step_beam_width
+        self.completed_beams = []
+        self.current_beam_width = self.config.step_beam_width
+        
         step = 0
         while self.active_beams:
-            if self.config.max_depth is not None and step >= self.config.max_depth:
-                logger.info(f"[Rank {self.worker_rank}] Max depth of {self.config.max_depth} reached, forcing final answers.")
-                self._force_final_answers(question, self.active_beams)
-                break
-            
-            if self.config.budget is not None and self.total_generated_tokens >= self.config.budget:
-                logger.info(f"[Rank {self.worker_rank}] Token budget of {self.config.budget} reached, forcing final answers.")
+            if (self.config.max_depth and step >= self.config.max_depth) or \
+               (self.config.budget and self.total_generated_tokens >= self.config.budget):
+                logger.info(f"[Rank {self.worker_rank}] Search limit reached. Forcing final answers.")
                 self._force_final_answers(question, self.active_beams)
                 break
 
             step += 1
-            if self.config.verbose: logger.info(f"\n--- [Rank {self.worker_rank}] SBS Step {step} | Active Beams: {len(self.active_beams)} ---")
+            if self.config.verbose: 
+                logger.info(f"\n--- [Rank {self.worker_rank}] SBS Step {step} | Active Beams: {len(self.active_beams)} ---")
+            
             candidates = self._generate_and_score_candidates(question)
             if not candidates:
                 logger.warning(f"[Rank {self.worker_rank}] No new candidates generated. Stopping search.")
                 break
+                
             self._update_beams(candidates)
 
         self.completed_beams.extend(self.active_beams)
         final_beams = sorted(self.completed_beams, key=lambda x: x.value, reverse=True)[:self.config.step_beam_width]
-        solutions, saved_files = [], []
+        
+        solutions = []
         if base_path:
-            solutions, saved_files = self._save_results(final_beams, base_path, question, ground_truth)
+            solutions = self._save_results(final_beams, base_path, question, ground_truth)
+        
         if self.config.verbose and solutions:
             best = solutions[0]
             logger.info(f"--- [Rank {self.worker_rank}] SBS Complete --- Best solution value: {best['value']:.4f}, Answer: {best['final_answer']}")
@@ -491,262 +420,166 @@ class StepBeamSearch:
 
 
 def _uncertainty_model_server(args: argparse.Namespace, task_queue: Queue, result_queues: List[Queue]):
-    """Server process for uncertainty model scoring."""
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.uncertainty_model_gpu)
     uncertainty_device = torch.device("cuda:0")
     logger.info(f"[UncertaintyServer] Starting on device {uncertainty_device}")
 
     tokenizer = AutoTokenizer.from_pretrained(args.uncertainty_model_path, trust_remote_code=True)
     model = AutoModelForTokenClassification.from_pretrained(
-        args.uncertainty_model_path,
-        dtype=torch.bfloat16,
-        device_map="auto",
-        trust_remote_code=True,
+        args.uncertainty_model_path, dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
     )
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
-
     model.eval()
-    logger.info("[UncertaintyServer] Uncertainty model loaded. Waiting for tasks.")
+    logger.info("[UncertaintyServer] Uncertainty model loaded.")
 
-    prompt_pattern = re.compile(
-        r"<\|im_start\|>system\n(.*?)"
-        r"<\|im_end\|>\n<\|im_start\|>user\n(.*?)"
-        r"<\|im_end\|>\n<\|im_start|>assistant\n(.*)",
-        re.DOTALL
-    )
+    prompt_pattern = re.compile(r"<\|im_start\|>system\n(.*?)<\|im_end\|>\n<\|im_start\|>user\n(.*?)<\|im_end\|>\n<\|im_start\|>assistant\n(.*)", re.DOTALL)
 
     @torch.no_grad()
     def get_uncertainties(prompts: List[str]) -> List[float]:
         conversation_strs = []
         for prompt in prompts:
             match = prompt_pattern.match(prompt)
-            if not match:
-                logger.error(f"Prompt did not match expected format. Cannot score. Prompt: {prompt[:200]}")
-                continue
-
+            if not match: continue
             system_msg, user_msg, partial_solution = match.groups()
-            partial_solution = partial_solution or ""
-            
-            # Add <extra_0> tokens between steps
-            steps = [s.strip() for s in partial_solution.split('\n\n') if s.strip()]
-            if steps:
-                formatted_content = "<extra_0>".join(steps) + "<extra_0>"
-            else:
-                formatted_content = partial_solution.strip() + "<extra_0>" if partial_solution.strip() else "<extra_0>"
-            
-            messages = [
-                {"role": "system", "content": system_msg.strip()},
-                {"role": "user", "content": user_msg.strip()},
-                {"role": "assistant", "content": formatted_content},
-            ]
-            conv_str = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
-            conversation_strs.append(conv_str)
+            steps = [s.strip() for s in (partial_solution or "").split('\n\n') if s.strip()]
+            formatted_content = "<extra_0>".join(steps) + "<extra_0>" if steps else "<extra_0>"
+            messages = [{"role": "system", "content": system_msg.strip()}, {"role": "user", "content": user_msg.strip()}, {"role": "assistant", "content": formatted_content}]
+            conversation_strs.append(tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False))
 
-        if not conversation_strs:
-            return [0.5] * len(prompts)
+        if not conversation_strs: return [0.5] * len(prompts)
 
-        inputs = tokenizer(
-            conversation_strs,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=7000,
-        ).to(uncertainty_device)
-
+        inputs = tokenizer(conversation_strs, return_tensors="pt", padding=True, truncation=True, max_length=7000).to(uncertainty_device)
+        
+        # --- CORRECTED LOGIC ---
         outputs = model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask)
         step_sep_id = tokenizer.encode("<extra_0>", add_special_tokens=False)[0]
         token_masks = (inputs.input_ids == step_sep_id)
-        
-        uncertainty_scores = make_uncertainty_score(outputs.logits, token_masks)
-        
+        uncertainty_scores_per_sample = make_uncertainty_score(outputs.logits, token_masks)
+        # --- END CORRECTION ---
+
         batch_uncertainties = []
-        for i in range(len(uncertainty_scores)):
-            scores = uncertainty_scores[i]
-            if scores:
-                if args.uncertainty_method == "last_step":
-                    uncertainty = scores[-1]
-                elif args.uncertainty_method == "product":
-                    uncertainty = math.prod([max(s, 1e-8) for s in scores])
-                elif args.uncertainty_method == "average":
-                    uncertainty = sum(scores) / len(scores)
-                elif args.uncertainty_method == "minimum":
-                    uncertainty = min(scores)
-                else:
-                    uncertainty = scores[-1]  # Default to last_step
-                batch_uncertainties.append(uncertainty)
-            else:
-                batch_uncertainties.append(0.5)  # Default uncertainty
+        for scores in uncertainty_scores_per_sample:
+            if not scores:
+                batch_uncertainties.append(0.5)
+                continue
+            
+            if args.uncertainty_method == "product":
+                uncertainty = math.prod([max(s, 1e-8) for s in scores])
+            elif args.uncertainty_method == "average":
+                uncertainty = sum(scores) / len(scores)
+            elif args.uncertainty_method == "minimum":
+                uncertainty = min(scores)
+            else: # last_step is default
+                uncertainty = scores[-1]
+            batch_uncertainties.append(uncertainty)
+            
         return batch_uncertainties
 
     while True:
         try:
             task = task_queue.get()
-            if task == "STOP":
-                logger.info("[UncertaintyServer] Received STOP signal. Shutting down.")
-                break
+            if task == "STOP": break
             request_id, worker_rank = task["request_id"], task["worker_rank"]
             uncertainties = get_uncertainties(task["prompts"])
             result_queues[worker_rank].put({"request_id": request_id, "uncertainties": uncertainties})
         except Exception as e:
             logger.error(f"[UncertaintyServer] Error processing task: {e}", exc_info=True)
+    logger.info("[UncertaintyServer] Shutting down.")
 
 
 def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queues: List[Queue]):
-    """
-    This process loads the value model on a dedicated GPU and serves scoring requests
-    from the client workers according to the official PRM documentation.
-    """
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.value_model_gpu)
     value_device = torch.device("cuda:0")
     logger.info(f"[ValueServer] Starting on device {value_device}")
 
     tokenizer = AutoTokenizer.from_pretrained(args.value_model_path, trust_remote_code=True)
     model = AutoModel.from_pretrained(
-        args.value_model_path,
-        num_labels=2,
-        dtype=torch.bfloat16,
-        device_map="auto",
-        trust_remote_code=True,
+        args.value_model_path, num_labels=2, dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
     )
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
-
     model.eval()
-    logger.info("[ValueServer] Value model loaded. Waiting for tasks.")
+    logger.info("[ValueServer] Value model loaded.")
 
-    prompt_pattern = re.compile(
-        r"<\|im_start\|>system\n(.*?)"
-        r"<\|im_end\|>\n<\|im_start\|>user\n(.*?)"
-        r"<\|im_end\|>\n<\|im_start|>assistant\n(.*)",
-        re.DOTALL
-    )
+    prompt_pattern = re.compile(r"<\|im_start\|>system\n(.*?)<\|im_end\|>\n<\|im_start\|>user\n(.*?)<\|im_end\|>\n<\|im_start\|>assistant\n(.*)", re.DOTALL)
 
     @torch.no_grad()
     def get_values(prompts: List[str], generated_texts: List[str]) -> List[float]:
         conversation_strs = []
         for prompt, gen_text in zip(prompts, generated_texts):
             match = prompt_pattern.match(prompt)
-            if not match:
-                logger.error(f"Prompt did not match expected format. Cannot score. Prompt: {prompt[:200]}")
-                continue
-
+            if not match: continue
             system_msg, user_msg, partial_solution = match.groups()
-            partial_solution = partial_solution or ""
-            full_assistant_response = (partial_solution.strip() + '\n\n' + gen_text.strip()).strip()
-
+            full_assistant_response = ((partial_solution or "").strip() + '\n\n' + gen_text.strip()).strip()
             steps = [s.strip() for s in full_assistant_response.split('\n\n') if s.strip()]
             assistant_content = "<extra_0>".join(steps) + "<extra_0>"
-            messages = [
-                {"role": "system", "content": system_msg.strip()},
-                {"role": "user", "content": user_msg.strip()},
-                {"role": "assistant", "content": assistant_content},
-            ]
-            conv_str = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
-            conversation_strs.append(conv_str)
+            messages = [{"role": "system", "content": system_msg.strip()}, {"role": "user", "content": user_msg.strip()}, {"role": "assistant", "content": assistant_content}]
+            conversation_strs.append(tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False))
 
-        if not conversation_strs:
-            return [0.0] * len(prompts)
+        if not conversation_strs: return [0.0] * len(prompts)
 
-        inputs = tokenizer(
-            conversation_strs,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=7000,
-        ).to(value_device)
-
+        inputs = tokenizer(conversation_strs, return_tensors="pt", padding=True, truncation=True, max_length=7000).to(value_device)
         base_model_output = model.model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask, use_cache=False)
         logits = model.score(base_model_output.last_hidden_state)
         probabilities = torch.softmax(logits, dim=-1)
+        
         step_sep_id = tokenizer.encode("<extra_0>", add_special_tokens=False)[0]
         token_masks = (inputs.input_ids == step_sep_id)
         batch_rewards = []
         for i in range(logits.size(0)):
-            sample_probs = probabilities[i]
-            sample_mask = token_masks[i]
-            step_scores = sample_probs[sample_mask][:, 1]
+            step_scores = probabilities[i][token_masks[i]][:, 1]
             if len(step_scores) > 0:
-                last_step_score = step_scores[-1].item()
-                batch_rewards.append(last_step_score)
+                batch_rewards.append(step_scores[-1].item())
             else:
-                logger.warning("No <extra_0> token found in a processed sample, returning reward of 0.0. This might be due to truncation.")
                 batch_rewards.append(0.0)
         return batch_rewards
 
     while True:
         try:
             task = task_queue.get()
-            if task == "STOP":
-                logger.info("[ValueServer] Received STOP signal. Shutting down.")
-                break
+            if task == "STOP": break
             request_id, worker_rank = task["request_id"], task["worker_rank"]
             values = get_values(task["prompts"], task["generated_texts"])
             result_queues[worker_rank].put({"request_id": request_id, "values": values})
         except Exception as e:
             logger.error(f"[ValueServer] Error processing task: {e}", exc_info=True)
+    logger.info("[ValueServer] Shutting down.")
 
 
-def _sbs_worker(args: argparse.Namespace,
-                dataset_slice: List[Dict[str, Any]],
-                rank: int,
-                value_task_queue: Queue,
-                value_result_queue: Queue,
-                uncertainty_task_queue: Queue,
-                uncertainty_result_queue: Queue):
+def _sbs_worker(args: argparse.Namespace, dataset_slice: List[Dict[str, Any]], rank: int, value_task_queue: Queue, value_result_queue: Queue, uncertainty_task_queue: Queue, uncertainty_result_queue: Queue):
     logger.info(f"[Rank {rank}] Worker started.")
-    
     sbs_config = SBSConfig(
-        step_beam_width=args.beam_width,
-        n_total_samples=args.n_samples,
-        max_depth=args.max_depth,
-        budget=args.budget,
-        temperature=args.temperature,
-        verbose=args.verbose,
-        value_method=args.value_method,
-        uncertainty_method=args.uncertainty_method,
+        step_beam_width=args.beam_width, n_total_samples=args.n_samples, max_depth=args.max_depth,
+        budget=args.budget, temperature=args.temperature, verbose=args.verbose,
+        value_method=args.value_method, uncertainty_method=args.uncertainty_method,
     )
-    
     sbs_instance = StepBeamSearch(
-        inference_model_name=args.inference_model,
-        config=sbs_config,
-        value_task_queue=value_task_queue,
-        value_result_queue=value_result_queue,
-        uncertainty_task_queue=uncertainty_task_queue,
-        uncertainty_result_queue=uncertainty_result_queue,
-        worker_rank=rank,
+        inference_model_name=args.inference_model, config=sbs_config, value_task_queue=value_task_queue,
+        value_result_queue=value_result_queue, uncertainty_task_queue=uncertainty_task_queue,
+        uncertainty_result_queue=uncertainty_result_queue, worker_rank=rank,
     )
 
     for item in tqdm(dataset_slice, desc=f"Rank {rank} Processing"):
-        original_index = None
         output_path = None
         try:
-            question = item['problem']
-            ground_truth = item.get('answer')
             original_index = item['original_index']
             output_path = os.path.join(args.output_dir, f"q_{original_index:04d}")
-            
             if os.path.exists(os.path.join(output_path, "summary.json")):
                 logger.info(f"[Rank {rank}] Skipping item {original_index} as it is already completed.")
                 continue
-                
-            sbs_instance.run(
-                question=question,
-                ground_truth=ground_truth,
-                base_path=output_path
-            )
+            sbs_instance.run(question=item['problem'], ground_truth=item.get('answer'), base_path=output_path)
         except Exception as e:
             error_traceback = traceback.format_exc()
-            logger.error(f"[Rank {rank} FATAL ERROR processing item {original_index}: {e}\nTRACEBACK:\n{error_traceback}")
+            logger.error(f"[Rank {rank}] FATAL ERROR processing item {item.get('original_index')}: {e}\n{error_traceback}")
             if output_path:
                 os.makedirs(output_path, exist_ok=True)
                 with open(os.path.join(output_path, "error.log"), 'w') as f:
-                    f.write(f"Error on question index {original_index}:\n{str(e)}\n\n{error_traceback}")
-
+                    f.write(f"Error on question index {item.get('original_index')}:\n{e}\n\n{error_traceback}")
     logger.info(f"[Rank {rank}] Worker finished.")
 
 
@@ -755,10 +588,7 @@ def run_sbs_on_dataset(args: argparse.Namespace):
     
     ds = load_dataset(args.dataset, split='test')
     ds = ds.shuffle(seed=42).select(range(100))
-    dataset = [dict(item) for item in ds]
-    for i, item in enumerate(dataset):
-        item['original_index'] = i
-
+    dataset = [{'original_index': i, **item} for i, item in enumerate(ds)]
     random.shuffle(dataset)
 
     num_workers = args.num_workers
@@ -766,46 +596,31 @@ def run_sbs_on_dataset(args: argparse.Namespace):
     value_result_queues = [Queue() for _ in range(num_workers)]
     uncertainty_task_queue = Queue()
     uncertainty_result_queues = [Queue() for _ in range(num_workers)]
-    procs = []
-
+    
     logger.info("Starting Value Model Server process...")
-    value_server_proc = Process(
-        target=_value_model_server,
-        args=(args, value_task_queue, value_result_queues)
-    )
+    value_server_proc = Process(target=_value_model_server, args=(args, value_task_queue, value_result_queues))
     value_server_proc.start()
-    procs.append(value_server_proc)
     
     logger.info("Starting Uncertainty Model Server process...")
-    uncertainty_server_proc = Process(
-        target=_uncertainty_model_server,
-        args=(args, uncertainty_task_queue, uncertainty_result_queues)
-    )
+    uncertainty_server_proc = Process(target=_uncertainty_model_server, args=(args, uncertainty_task_queue, uncertainty_result_queues))
     uncertainty_server_proc.start()
-    procs.append(uncertainty_server_proc)
     
-    time.sleep(15)
+    time.sleep(20) # Allow time for models to load
 
     total_samples = len(dataset)
     samples_per_worker = (total_samples + num_workers - 1) // num_workers
+    worker_procs = []
 
     logger.info(f"Starting {num_workers} SBS client workers.")
     for i in range(num_workers):
         start_idx = i * samples_per_worker
         end_idx = min(start_idx + samples_per_worker, total_samples)
-        dataset_slice = dataset[start_idx:end_idx]
-        if not dataset_slice:
-            continue
-            
-        proc = Process(
-            target=_sbs_worker,
-            args=(args, dataset_slice, i, value_task_queue, value_result_queues[i], 
-                  uncertainty_task_queue, uncertainty_result_queues[i])
-        )
+        if not (dataset_slice := dataset[start_idx:end_idx]): continue
+        proc = Process(target=_sbs_worker, args=(args, dataset_slice, i, value_task_queue, value_result_queues[i], uncertainty_task_queue, uncertainty_result_queues[i]))
         proc.start()
-        procs.append(proc)
+        worker_procs.append(proc)
         
-    for proc in procs[2:]:  # Skip the two server processes
+    for proc in worker_procs:
         proc.join()
 
     logger.info("All SBS workers finished. Shutting down servers...")
@@ -821,35 +636,22 @@ def main():
     parser.add_argument("--dataset", type=str, required=True, help="Path to input JSONL dataset.")
     parser.add_argument("--output_dir", type=str, required=True, help="Directory to save results.")
     parser.add_argument("--inference_model", type=str, default="Qwen/Qwen2.5-1.5B-Instruct", help="Model name served by vLLM.")
-    parser.add_argument("--value_model_path", type=str, required=True, help="Path to pretrained value model (AutoModelForSequenceClassification).")
+    parser.add_argument("--value_model_path", type=str, required=True, help="Path to pretrained value model.")
     parser.add_argument("--uncertainty_model_path", type=str, default="jacopo-minniti/Qwen2.5-Math-7B-PUM-half_entropy", help="Path to pretrained uncertainty model.")
     
     parser.add_argument("--num_workers", type=int, default=4, help="Number of parallel client worker processes.")
-    parser.add_argument("--value_model_gpu", type=int, default=0, help="The single GPU ID for the value model server.")
-    parser.add_argument("--uncertainty_model_gpu", type=int, default=0, help="The single GPU ID for the uncertainty model server.")
+    parser.add_argument("--value_model_gpu", type=int, default=0, help="GPU ID for the value model server.")
+    parser.add_argument("--uncertainty_model_gpu", type=int, default=0, help="GPU ID for the uncertainty model server.")
     
     parser.add_argument("--beam_width", type=int, default=4, help="Step-level beam width.")
-    parser.add_argument("--n_samples", type=int, default=12, help="Total samples to generate at each step (distributed based on uncertainty).")
+    parser.add_argument("--n_samples", type=int, default=12, help="Total samples per step, distributed by uncertainty.")
     parser.add_argument("--max_depth", type=int, default=None, help="Maximum search depth.")
-    parser.add_argument("--budget", type=int, default=None, help="Maximum number of tokens to generate across all steps.")
-    parser.add_argument("--temperature", type=float, default=1, help="Generation temperature.")
+    parser.add_argument("--budget", type=int, default=None, help="Maximum total generated tokens.")
+    parser.add_argument("--temperature", type=float, default=1.0, help="Generation temperature.")
     parser.add_argument("--verbose", action='store_true', help="Enable verbose logging.")
     
-    parser.add_argument(
-        "--value_method", 
-        type=str, 
-        default="last_step", 
-        choices=["last_step", "product"], 
-        help="Method to calculate node value: 'last_step' (default) or 'product' of path."
-    )
-    
-    parser.add_argument(
-        "--uncertainty_method", 
-        type=str, 
-        default="last_step", 
-        choices=["last_step", "product", "average", "minimum"], 
-        help="Method to calculate uncertainty score: 'last_step' (default), 'product', 'average', or 'minimum'."
-    )
+    parser.add_argument("--value_method", type=str, default="last_step", choices=["last_step", "product"], help="Method to calculate node value.")
+    parser.add_argument("--uncertainty_method", type=str, default="last_step", choices=["last_step", "product", "average", "minimum"], help="Method to aggregate uncertainty scores.")
     
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
@@ -857,25 +659,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-'''
-CUDA_VISIBLE_DEVICES="1" vllm serve Qwen/Qwen2.5-1.5B-Instruct \
-    --tensor-parallel-size 1 \
-    --pipeline-parallel-size 1 \
-    --gpu-memory-utilization 0.90 \
-    --max-model-len 5000 \
-    --dtype bfloat16 \
-    --enable-prefix-caching \
-    --port 8000
-
-python rely/inference/sbs.py \
-    --dataset nlile/hendrycks-MATH-benchmark \
-    --output_dir sbs_results_b1_4_b2_5_product// \
-    --value_model_path Qwen/Qwen2.5-Math-PRM-7B \
-    --num_workers 5 \
-    --value_model_gpu 0 \
-    --uncertainty_model_gpu 0 \
-    --value_method product \
-    --uncertainty_method last_step \
-    --budget 5000
-'''
