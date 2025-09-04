@@ -166,7 +166,13 @@ class StepBeamSearch:
         # Distribute the total sample budget among active beams
         base_samples = total_samples_budget // num_active_beams
         remainder = total_samples_budget % num_active_beams
-        samples_per_beam = [base_samples + 1 if i < remainder else base_samples for i in range(num_active_beams)]
+        
+        # Randomly distribute remainder samples instead of giving them to the first beams
+        samples_per_beam = [base_samples] * num_active_beams
+        if remainder > 0:
+            indices_for_extra = random.sample(range(num_active_beams), remainder)
+            for idx in indices_for_extra:
+                samples_per_beam[idx] += 1
 
         all_candidates, seen_full_texts = [], set()
         prompts = [self.create_prompt(question, node.full_text) for node in self.active_beams]
