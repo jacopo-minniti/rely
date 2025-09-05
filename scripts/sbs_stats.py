@@ -34,15 +34,10 @@ def process_json_file(path):
         if ground_truth is not None and majority_vote is not None:
             normalized_gt = normalize_answer(str(ground_truth))
             normalized_mv = normalize_answer(str(majority_vote))
-            if (normalized_gt == normalized_mv) and normalized_gt != "":
+            if (normalized_gt == normalized_mv or ground_truth == majority_vote) and normalized_gt != "":
                 is_majority_correct = True
-        
-        try:
-            sample_accuracy = float(str(data.get('accuracy', '0.00%')).strip('%'))
-        except (ValueError, TypeError):
-            sample_accuracy = 0.0
 
-        # --- 2. Best of N Calculation (New Logic) ---
+        # --- 2. Best of N Calculation ---
         best_of_n_applicable = False
         is_best_of_n_correct = False
         
@@ -80,7 +75,7 @@ def process_json_file(path):
                 if (normalized_gt == normalized_best_answer) and normalized_gt != "":
                     is_best_of_n_correct = True
 
-        return is_majority_correct, sample_accuracy, best_of_n_applicable, is_best_of_n_correct, total_tokens
+        return is_majority_correct, best_of_n_applicable, is_best_of_n_correct, total_tokens
 
     except Exception:
         # For any file reading/parsing error, count as incorrect
@@ -115,7 +110,7 @@ if __name__ == '__main__':
 
     for path in sorted(json_files):
         total_files += 1
-        is_majority_correct, accuracy, best_of_n_applicable, is_best_of_n_correct, total_tokens = process_json_file(path)
+        is_majority_correct, best_of_n_applicable, is_best_of_n_correct, total_tokens = process_json_file(path)
         
         # Accumulate majority vote stats
         if is_majority_correct:
