@@ -261,20 +261,34 @@ if __name__ == "__main__":
 
     dataset = load_dataset("nlile/hendrycks-MATH-benchmark", split="test")
 
-    questions, answers = [], []
-    for item in dataset:
-        questions.append(item["problem"])
-        answers.append(item["answer"])
-
-    run_self_consistency(
-        user_question=questions,
-        correct_answer=answers,
-        config=SelfConsistencyConfig(
-            num_samples=1,
-            max_new_tokens=4000,
-            temperature=1.0,
-            top_p=0.95,
-            model_name="Qwen/Qwen2.5-1.5B-Instruct",
-        ),
-        save_path="results/normal_generation",
+    # Process in batches to avoid OOM
+    batch_size = 100  # Adjust based on your GPU memory
+    total_items = len(dataset)
+    
+    config = SelfConsistencyConfig(
+        num_samples=1,
+        max_new_tokens=4000,
+        temperature=1.0,
+        top_p=0.95,
+        model_name="Qwen/Qwen2.5-1.5B-Instruct",
     )
+    
+    for batch_start in range(0, total_items, batch_size):
+        batch_end = min(batch_start + batch_size, total_items)
+        logger.info(f"Processing batch {batch_start//batch_size + 1}/{(total_items + batch_size - 1)//batch_size}")
+        
+        questions, answers = [], []
+        for i in range(batch_start, batch_end):
+            item = dataset[i]
+            questions.append(item["problem"])
+            answers.append(item["answer"])
+
+        run_self_consistency(
+            user_question=questions,
+            correct_answer=answers,
+            config=config,
+            save_path=f"results/normal_generation/batch_{batch_start//batch_size}",
+        )
+        
+        # Clear variables to free memory
+        del questions, answers
