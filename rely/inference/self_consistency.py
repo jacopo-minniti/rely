@@ -6,9 +6,9 @@ import re
 from pathlib import Path
 from collections import Counter
 
-from vllm import LLM, SamplingParams, RequestOutput
+from vllm import LLM, SamplingParams
+from transformers import AutoTokenizer
 
-# Import helpers from sbs.py
 from rely.utils import MATH_SYSTEM_PROMPT, format_prompt, extract_final_answer, normalize_answer
 
 
@@ -44,6 +44,7 @@ class SelfConsistencyInference:
     def __init__(self, config: SelfConsistencyConfig):
         self.config = config
         self.llm: Optional[LLM] = None
+        self.tokenizer = None
         self._initialize_model()
 
     def _initialize_model(self):
@@ -55,7 +56,9 @@ class SelfConsistencyInference:
                 enable_prefix_caching=True,
                 gpu_memory_utilization=self.config.gpu_memory_utilization,
             )
-            logger.info("Model loaded successfully.")
+            # Load tokenizer for token counting
+            self.tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
+            logger.info("Model and tokenizer loaded successfully.")
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             raise
@@ -99,7 +102,7 @@ class SelfConsistencyInference:
         """Run self-consistency for a single question and return aggregated results."""
         logger.info(f"Running self-consistency for '{user_question[:50]}...' with {self.config.num_samples} samples...")
         
-        # `results` now contains (answer, text)
+        # `results` now contains (answer, text, token_count)
         results = self._get_consistent_samples(system_prompt, user_question)
 
         # Unpack the results into separate lists
@@ -156,21 +159,34 @@ def save_self_consistency_result(
         with open(output_path / f"beam_{i:02d}.txt", "w") as f:
             f.write(text)
     
-    # Prepare solutions in the exact same format as SBS
+    # Calculate total tokens using tokenizer
+    inference = SelfConsistencyInference(result.config)
+    total_tokens = 0
+    for text in result.generated_texts:
+        # Count tokens in the generated portion only (after the prompt)
+        generated_portion = text.split("<|im_start|>assistant\n")[-1] if "<|im_start|>assistant\n" in text else text
+        tokens = inference.tokenizer.encode(generated_portion, add_special_tokens=False)
+        total_tokens += len(tokens)
+    
+    # Prepare solutions without value/best-of-n concepts
     solutions = []
     for i, (answer, text) in enumerate(zip(result.answers, result.generated_texts)):
+        # Count tokens for this specific generation
+        generated_portion = text.split("<|im_start|>assistant\n")[-1] if "<|im_start|>assistant\n" in text else text
+        tokens = inference.tokenizer.encode(generated_portion, add_special_tokens=False)
+        token_count = len(tokens)
+        
         solution_data = {
             "beam_index": i + 1,
-            "value": 1.0,  # Self-consistency doesn't have value scores, use uniform value
             "final_answer": answer,
-            "depth": 1,  # Self-consistency is single-step, so depth is always 1
             "termination_reason": "answer_found" if answer != "Not found" else "max_tokens",
-            "solution_path": text.split("<|im_start|>assistant\n")[-1] if "<|im_start|>assistant\n" in text else text
+            "solution_path": generated_portion,
+            "tokens_used": token_count
         }
         solutions.append(solution_data)
     
-    # Create summary in exact same format as SBS
-    def create_summary(solutions: List[Dict[str, Any]], question: str, ground_truth: Optional[str]) -> Dict[str, Any]:
+    # Create summary without value/best-of-n concepts
+    def create_summary(solutions: List[Dict[str, Any]], question: str, ground_truth: Optional[str], total_tokens: int) -> Dict[str, Any]:
         ground_truth = normalize_answer(ground_truth) if ground_truth else ""
         answers = [normalize_answer(s['final_answer']) for s in solutions if s['final_answer'] != "Not found"]
         majority_vote = Counter(answers).most_common(1)[0][0] if answers else "N/A"
@@ -184,7 +200,7 @@ def save_self_consistency_result(
             "majority_vote": majority_vote,
             "accuracy": accuracy,
             "solutions": solutions,
-            "total_tokens": 0  # vLLM doesn't easily provide token counts, so we use 0
+            "total_tokens": total_tokens
         }
     
     # Handle correct_answer input (string or list)
@@ -195,10 +211,10 @@ def save_self_consistency_result(
         else:
             correct_answer_str = str(correct_answer)
     
-    summary_data = create_summary(solutions, user_question, correct_answer_str)
+    summary_data = create_summary(solutions, user_question, correct_answer_str, total_tokens)
         
     with open(output_path / "summary.json", "w") as f:
-        json.dump(summary_data, f, indent=4)  # Use indent=4 to match SBS format
+        json.dump(summary_data, f, indent=4)
 
     logger.info(f"Saved self-consistency results to {output_path}")
 
@@ -255,7 +271,7 @@ if __name__ == "__main__":
         user_question=questions,
         correct_answer=answers,
         config=SelfConsistencyConfig(
-            num_samples=4,
+            num_samples=1,
             max_new_tokens=6000,
             temperature=1.0,
             top_p=0.95,
