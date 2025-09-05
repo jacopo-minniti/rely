@@ -587,7 +587,7 @@ def run_sbs_on_dataset(args: argparse.Namespace):
     set_start_method('spawn', force=True)
     
     ds = load_dataset(args.dataset, split='test')
-    ds = ds.shuffle(seed=42).select(range(100))
+    ds = ds.shuffle(seed=42) # .select(range(100))
     dataset = [{'original_index': i, **item} for i, item in enumerate(ds)]
 
     num_workers = args.num_workers
