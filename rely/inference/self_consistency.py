@@ -1,8 +1,7 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Union
 import json
 import logging
-import re
 from pathlib import Path
 from collections import Counter
 
@@ -272,7 +271,7 @@ if __name__ == "__main__":
         correct_answer=answers,
         config=SelfConsistencyConfig(
             num_samples=1,
-            max_new_tokens=6000,
+            max_new_tokens=4000,
             temperature=1.0,
             top_p=0.95,
             model_name="Qwen/Qwen2.5-1.5B-Instruct",
