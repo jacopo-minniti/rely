@@ -409,6 +409,7 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
         dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,
+        # max_model_len=4000,
     )
 
     if tokenizer.pad_token is None:
@@ -456,7 +457,7 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
             return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=7000,
+            max_length=5000,
         ).to(value_device)
 
         base_model_output = model.model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask, use_cache=False)
