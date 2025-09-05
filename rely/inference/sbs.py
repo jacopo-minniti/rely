@@ -630,7 +630,7 @@ CUDA_VISIBLE_DEVICES="1" vllm serve Qwen/Qwen2.5-1.5B-Instruct \
 
 python rely/inference/sbs.py \
     --dataset nlile/hendrycks-MATH-benchmark \
-    --output_dir sbs_results_b1_4_b2_5_product// \
+    --output_dir sbs_results_b1_4_b2_5/ \
     --value_model_path Qwen/Qwen2.5-Math-PRM-7B \
     --num_workers 5 \
     --value_model_gpu 0 \

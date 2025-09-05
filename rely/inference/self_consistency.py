@@ -4,92 +4,15 @@ import json
 import logging
 import re
 from pathlib import Path
+from collections import Counter
 
 from vllm import LLM, SamplingParams, RequestOutput
 
 # Import helpers from sbs.py
-from rely.utils import MATH_SYSTEM_PROMPT
+from rely.utils import MATH_SYSTEM_PROMPT, format_prompt, extract_final_answer, normalize_answer
 
 
 logger = logging.getLogger(__name__)
-
-
-def create_prompt(question: str, partial_solution: str = "", system_prompt: str = MATH_SYSTEM_PROMPT) -> str:
-    """Create a formatted prompt using the chat template format from sbs.py."""
-    prompt = f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{question}<|im_end|>\n<|im_start|>assistant\n{partial_solution}"
-    return prompt
-
-
-def normalize_answer(answer: str) -> str:
-    """
-    Normalize an answer for comparison by:
-    - Converting to lowercase
-    - Removing all whitespace (spaces, tabs, newlines)
-    - Removing common punctuation that doesn't affect mathematical meaning
-    - Handling special cases like fractions, decimals, etc.
-    """
-    if not answer or answer == "?":
-        return answer
-    
-    # Convert to string and lowercase
-    normalized = str(answer).lower()
-    
-    # Remove all whitespace
-    normalized = re.sub(r'\s+', '', normalized)
-    
-    # Remove common punctuation that doesn't affect meaning
-    # Keep mathematical operators and decimal points
-    normalized = re.sub(r'[,;:()[\]{}"]', '', normalized)
-    
-    # Handle common mathematical expressions
-    # Convert fractions like "1/2" to consistent format
-    normalized = re.sub(r'(\d+)/(\d+)', r'\1/\2', normalized)
-    
-    # Remove trailing zeros after decimal point
-    if '.' in normalized:
-        normalized = normalized.rstrip('0').rstrip('.')
-    
-    return normalized
-
-
-def extract_final_answer(text: str) -> Optional[str]:
-    """
-    Finds the last \\boxed{} in a string and extracts its content,
-    correctly handling nested braces.
-    """
-    # 1. Find the starting position of the last \boxed{
-    start_marker = r'\boxed{'
-    last_box_start_pos = text.rfind(start_marker)
-
-    # If \boxed{ is not found, return None
-    if last_box_start_pos == -1:
-        return None
-
-    # 2. The actual content starts right after the marker
-    content_start_pos = last_box_start_pos + len(start_marker)
-
-    # 3. Use a counter (brace_level) to find the matching closing brace
-    brace_level = 1
-    for i in range(content_start_pos, len(text)):
-        char = text[i]
-        if char == '{':
-            brace_level += 1
-        elif char == '}':
-            brace_level -= 1
-
-        # 4. When the brace level is 0, we've found the matching brace
-        if brace_level == 0:
-            # The content is the substring between the start and this point
-            return text[content_start_pos:i]
-
-    # If the loop finishes, it means a matching closing brace was not found
-    return None
-
-
-
-def format_prompt(system_prompt: str, user_question: str) -> str:
-    """Format a prompt with system and user messages."""
-    return create_prompt(user_question, "", system_prompt)
 
 
 @dataclass
@@ -159,7 +82,7 @@ class SelfConsistencyInference:
         Returns:
             A list of tuples: (answer, full_generated_text).
         """
-        base_prompt = format_prompt(system_prompt, user_question)
+        base_prompt = format_prompt(user_question, system_prompt)
 
         # Generate all N samples
         generated_texts = self._generate(base_prompt, self.config.max_new_tokens, n=self.config.num_samples)
@@ -168,7 +91,7 @@ class SelfConsistencyInference:
         for generated_text in generated_texts:
             full_text = base_prompt + generated_text
             answer = extract_final_answer(full_text)
-            results.append(("?" if answer is None else answer, full_text))
+            results.append(("Not found" if answer is None else answer, full_text))
 
         return results
 
@@ -233,45 +156,49 @@ def save_self_consistency_result(
         with open(output_path / f"beam_{i:02d}.txt", "w") as f:
             f.write(text)
     
-    # Calculate accuracy
-    accuracy = 0.0
+    # Prepare solutions in the exact same format as SBS
+    solutions = []
+    for i, (answer, text) in enumerate(zip(result.answers, result.generated_texts)):
+        solution_data = {
+            "beam_index": i + 1,
+            "value": 1.0,  # Self-consistency doesn't have value scores, use uniform value
+            "final_answer": answer,
+            "depth": 1,  # Self-consistency is single-step, so depth is always 1
+            "termination_reason": "answer_found" if answer != "Not found" else "max_tokens",
+            "solution_path": text.split("<|im_start|>assistant\n")[-1] if "<|im_start|>assistant\n" in text else text
+        }
+        solutions.append(solution_data)
+    
+    # Create summary in exact same format as SBS
+    def create_summary(solutions: List[Dict[str, Any]], question: str, ground_truth: Optional[str]) -> Dict[str, Any]:
+        ground_truth = normalize_answer(ground_truth) if ground_truth else ""
+        answers = [normalize_answer(s['final_answer']) for s in solutions if s['final_answer'] != "Not found"]
+        majority_vote = Counter(answers).most_common(1)[0][0] if answers else "N/A"
+        accuracy = "N/A"
+        if ground_truth and answers:
+            correct_answers = sum(1 for ans in answers if ans == ground_truth)
+            accuracy = f"{correct_answers / len(answers):.2%}" if answers else "0.00%"
+        return {
+            "question": question,
+            "ground_truth": ground_truth,
+            "majority_vote": majority_vote,
+            "accuracy": accuracy,
+            "solutions": solutions,
+            "total_tokens": 0  # vLLM doesn't easily provide token counts, so we use 0
+        }
+    
+    # Handle correct_answer input (string or list)
     correct_answer_str = ""
     if correct_answer:
-        # Handle the case where correct_answer might be a list or string
         if isinstance(correct_answer, list):
             correct_answer_str = str(correct_answer[0]) if correct_answer else ""
         else:
             correct_answer_str = str(correct_answer)
-        
-        # Normalize the correct answer for comparison
-        normalized_correct = normalize_answer(correct_answer_str)
-        
-        # Count matches using normalized comparison
-        correct_count = sum(1 for ans in result.answers 
-                          if normalize_answer(str(ans)) == normalized_correct)
-        accuracy = correct_count / len(result.answers) if result.answers else 0.0
     
-    # Prepare and save summary file in the new format
-    summary_data = {
-        "question": user_question,
-        "ground_truth": correct_answer_str if correct_answer else "",
-        "majority_vote": result.most_consistent_answer or "",
-        "accuracy": f"{accuracy:.2%}",
-        "solutions": [
-            {
-                "beam_index": i + 1,
-                "value": 1.0,  # Placeholder value since we don't have actual beam scores
-                "final_answer": answer,
-                "depth": 1,  # Placeholder depth since we don't have step counting
-                "termination_reason": "answer_found" if answer != "?" else "max_tokens",
-                "solution_path": text.split("<|im_start|>assistant\n")[-1] if "<|im_start|>assistant\n" in text else text
-            }
-            for i, (answer, text) in enumerate(zip(result.answers, result.generated_texts))
-        ]
-    }
+    summary_data = create_summary(solutions, user_question, correct_answer_str)
         
     with open(output_path / "summary.json", "w") as f:
-        json.dump(summary_data, f, indent=2)
+        json.dump(summary_data, f, indent=4)  # Use indent=4 to match SBS format
 
     logger.info(f"Saved self-consistency results to {output_path}")
 
@@ -311,3 +238,28 @@ def run_self_consistency(
         results.append(result)
     
     return results
+
+
+if __name__ == "__main__":
+    from datasets import load_dataset
+    logging.basicConfig(level=logging.INFO)
+
+    dataset = load_dataset("nlile/hendrycks-MATH-benchmark", split="test")
+
+    questions, answers = [], []
+    for item in dataset:
+        questions.append(item["problem"])
+        answers.append(item["answer"])
+
+    run_self_consistency(
+        user_question=questions,
+        correct_answer=answers,
+        config=SelfConsistencyConfig(
+            num_samples=4,
+            max_new_tokens=6000,
+            temperature=1.0,
+            top_p=0.95,
+            model_name="Qwen/Qwen2.5-1.5B-Instruct",
+        ),
+        save_path="results/self_consistency_max_4",
+    )
