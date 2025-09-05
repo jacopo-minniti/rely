@@ -1,13 +1,14 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Union
 import json
 import logging
+import re
 from pathlib import Path
 from collections import Counter
 
-from vllm import LLM, SamplingParams
-from transformers import AutoTokenizer
+from vllm import LLM, SamplingParams, RequestOutput
 
+# Import helpers from sbs.py
 from rely.utils import MATH_SYSTEM_PROMPT, format_prompt, extract_final_answer, normalize_answer
 
 
@@ -43,7 +44,6 @@ class SelfConsistencyInference:
     def __init__(self, config: SelfConsistencyConfig):
         self.config = config
         self.llm: Optional[LLM] = None
-        self.tokenizer = None
         self._initialize_model()
 
     def _initialize_model(self):
@@ -55,9 +55,7 @@ class SelfConsistencyInference:
                 enable_prefix_caching=True,
                 gpu_memory_utilization=self.config.gpu_memory_utilization,
             )
-            # Load tokenizer for token counting
-            self.tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
-            logger.info("Model and tokenizer loaded successfully.")
+            logger.info("Model loaded successfully.")
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             raise
@@ -101,7 +99,7 @@ class SelfConsistencyInference:
         """Run self-consistency for a single question and return aggregated results."""
         logger.info(f"Running self-consistency for '{user_question[:50]}...' with {self.config.num_samples} samples...")
         
-        # `results` now contains (answer, text, token_count)
+        # `results` now contains (answer, text)
         results = self._get_consistent_samples(system_prompt, user_question)
 
         # Unpack the results into separate lists
@@ -158,34 +156,21 @@ def save_self_consistency_result(
         with open(output_path / f"beam_{i:02d}.txt", "w") as f:
             f.write(text)
     
-    # Calculate total tokens using tokenizer
-    inference = SelfConsistencyInference(result.config)
-    total_tokens = 0
-    for text in result.generated_texts:
-        # Count tokens in the generated portion only (after the prompt)
-        generated_portion = text.split("<|im_start|>assistant\n")[-1] if "<|im_start|>assistant\n" in text else text
-        tokens = inference.tokenizer.encode(generated_portion, add_special_tokens=False)
-        total_tokens += len(tokens)
-    
-    # Prepare solutions without value/best-of-n concepts
+    # Prepare solutions in the exact same format as SBS
     solutions = []
     for i, (answer, text) in enumerate(zip(result.answers, result.generated_texts)):
-        # Count tokens for this specific generation
-        generated_portion = text.split("<|im_start|>assistant\n")[-1] if "<|im_start|>assistant\n" in text else text
-        tokens = inference.tokenizer.encode(generated_portion, add_special_tokens=False)
-        token_count = len(tokens)
-        
         solution_data = {
             "beam_index": i + 1,
+            "value": 1.0,  # Self-consistency doesn't have value scores, use uniform value
             "final_answer": answer,
+            "depth": 1,  # Self-consistency is single-step, so depth is always 1
             "termination_reason": "answer_found" if answer != "Not found" else "max_tokens",
-            "solution_path": generated_portion,
-            "tokens_used": token_count
+            "solution_path": text.split("<|im_start|>assistant\n")[-1] if "<|im_start|>assistant\n" in text else text
         }
         solutions.append(solution_data)
     
-    # Create summary without value/best-of-n concepts
-    def create_summary(solutions: List[Dict[str, Any]], question: str, ground_truth: Optional[str], total_tokens: int) -> Dict[str, Any]:
+    # Create summary in exact same format as SBS
+    def create_summary(solutions: List[Dict[str, Any]], question: str, ground_truth: Optional[str]) -> Dict[str, Any]:
         ground_truth = normalize_answer(ground_truth) if ground_truth else ""
         answers = [normalize_answer(s['final_answer']) for s in solutions if s['final_answer'] != "Not found"]
         majority_vote = Counter(answers).most_common(1)[0][0] if answers else "N/A"
@@ -199,7 +184,7 @@ def save_self_consistency_result(
             "majority_vote": majority_vote,
             "accuracy": accuracy,
             "solutions": solutions,
-            "total_tokens": total_tokens
+            "total_tokens": 0  # vLLM doesn't easily provide token counts, so we use 0
         }
     
     # Handle correct_answer input (string or list)
@@ -210,10 +195,10 @@ def save_self_consistency_result(
         else:
             correct_answer_str = str(correct_answer)
     
-    summary_data = create_summary(solutions, user_question, correct_answer_str, total_tokens)
+    summary_data = create_summary(solutions, user_question, correct_answer_str)
         
     with open(output_path / "summary.json", "w") as f:
-        json.dump(summary_data, f, indent=4)
+        json.dump(summary_data, f, indent=4)  # Use indent=4 to match SBS format
 
     logger.info(f"Saved self-consistency results to {output_path}")
 
@@ -261,34 +246,20 @@ if __name__ == "__main__":
 
     dataset = load_dataset("nlile/hendrycks-MATH-benchmark", split="test")
 
-    # Process in batches to avoid OOM
-    batch_size = 100  # Adjust based on your GPU memory
-    total_items = len(dataset)
-    
-    config = SelfConsistencyConfig(
-        num_samples=1,
-        max_new_tokens=4000,
-        temperature=1.0,
-        top_p=0.95,
-        model_name="Qwen/Qwen2.5-1.5B-Instruct",
-    )
-    
-    for batch_start in range(0, total_items, batch_size):
-        batch_end = min(batch_start + batch_size, total_items)
-        logger.info(f"Processing batch {batch_start//batch_size + 1}/{(total_items + batch_size - 1)//batch_size}")
-        
-        questions, answers = [], []
-        for i in range(batch_start, batch_end):
-            item = dataset[i]
-            questions.append(item["problem"])
-            answers.append(item["answer"])
+    questions, answers = [], []
+    for item in dataset:
+        questions.append(item["problem"])
+        answers.append(item["answer"])
 
-        run_self_consistency(
-            user_question=questions,
-            correct_answer=answers,
-            config=config,
-            save_path=f"results/normal_generation/batch_{batch_start//batch_size}",
-        )
-        
-        # Clear variables to free memory
-        del questions, answers
+    run_self_consistency(
+        user_question=questions,
+        correct_answer=answers,
+        config=SelfConsistencyConfig(
+            num_samples=1,
+            max_new_tokens=6000,
+            temperature=1.0,
+            top_p=0.95,
+            model_name="Qwen/Qwen2.5-1.5B-Instruct",
+        ),
+        save_path="results/self_consistency_max_4",
+    )
