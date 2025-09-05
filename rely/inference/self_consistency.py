@@ -277,5 +277,5 @@ if __name__ == "__main__":
             top_p=0.95,
             model_name="Qwen/Qwen2.5-1.5B-Instruct",
         ),
-        save_path="results/self_consistency_max_4",
+        save_path="results/normal_generation",
     )
