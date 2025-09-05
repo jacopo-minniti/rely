@@ -409,7 +409,6 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
         dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,
-        # max_model_len=4000,
     )
 
     if tokenizer.pad_token is None:
@@ -452,31 +451,83 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
         if not conversation_strs:
             return [0.0] * len(prompts)
 
-        inputs = tokenizer(
-            conversation_strs,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=5000,
-        ).to(value_device)
+        # Process in batches to avoid CUDA OOM
+        batch_size = 8  # Adjust this value based on your GPU memory
+        all_rewards = []
+        
+        for i in range(0, len(conversation_strs), batch_size):
+            batch_conversations = conversation_strs[i:i + batch_size]
+            
+            inputs = tokenizer(
+                batch_conversations,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=5000,
+            ).to(value_device)
 
-        base_model_output = model.model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask, use_cache=False)
-        logits = model.score(base_model_output.last_hidden_state)
-        probabilities = torch.softmax(logits, dim=-1)
-        step_sep_id = tokenizer.encode("<extra_0>", add_special_tokens=False)[0]
-        token_masks = (inputs.input_ids == step_sep_id)
-        batch_rewards = []
-        for i in range(logits.size(0)):
-            sample_probs = probabilities[i]
-            sample_mask = token_masks[i]
-            step_scores = sample_probs[sample_mask][:, 1]
-            if len(step_scores) > 0:
-                last_step_score = step_scores[-1].item()
-                batch_rewards.append(last_step_score)
-            else:
-                logger.warning("No <extra_0> token found in a processed sample, returning reward of 0.0. This might be due to truncation.")
-                batch_rewards.append(0.0)
-        return batch_rewards
+            try:
+                base_model_output = model.model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask, use_cache=False)
+                logits = model.score(base_model_output.last_hidden_state)
+                probabilities = torch.softmax(logits, dim=-1)
+                step_sep_id = tokenizer.encode("<extra_0>", add_special_tokens=False)[0]
+                token_masks = (inputs.input_ids == step_sep_id)
+                
+                batch_rewards = []
+                for j in range(logits.size(0)):
+                    sample_probs = probabilities[j]
+                    sample_mask = token_masks[j]
+                    step_scores = sample_probs[sample_mask][:, 1]
+                    if len(step_scores) > 0:
+                        last_step_score = step_scores[-1].item()
+                        batch_rewards.append(last_step_score)
+                    else:
+                        logger.warning("No <extra_0> token found in a processed sample, returning reward of 0.0. This might be due to truncation.")
+                        batch_rewards.append(0.0)
+                
+                all_rewards.extend(batch_rewards)
+                
+                # Clear GPU cache after each batch
+                del inputs, base_model_output, logits, probabilities
+                torch.cuda.empty_cache()
+                
+            except torch.cuda.OutOfMemoryError as e:
+                logger.error(f"[ValueServer] CUDA OOM in batch {i//batch_size + 1}, falling back to smaller batch size")
+                # Fallback: process one by one
+                for single_conv in batch_conversations:
+                    try:
+                        single_inputs = tokenizer(
+                            [single_conv],
+                            return_tensors="pt",
+                            padding=True,
+                            truncation=True,
+                            max_length=5000,
+                        ).to(value_device)
+                        
+                        single_output = model.model(input_ids=single_inputs.input_ids, attention_mask=single_inputs.attention_mask, use_cache=False)
+                        single_logits = model.score(single_output.last_hidden_state)
+                        single_probs = torch.softmax(single_logits, dim=-1)
+                        step_sep_id = tokenizer.encode("<extra_0>", add_special_tokens=False)[0]
+                        single_mask = (single_inputs.input_ids == step_sep_id)
+                        
+                        sample_probs = single_probs[0]
+                        sample_mask = single_mask[0]
+                        step_scores = sample_probs[sample_mask][:, 1]
+                        if len(step_scores) > 0:
+                            last_step_score = step_scores[-1].item()
+                            all_rewards.append(last_step_score)
+                        else:
+                            logger.warning("No <extra_0> token found in single sample, returning reward of 0.0.")
+                            all_rewards.append(0.0)
+                        
+                        del single_inputs, single_output, single_logits, single_probs
+                        torch.cuda.empty_cache()
+                        
+                    except Exception as single_e:
+                        logger.error(f"[ValueServer] Error processing single sample: {single_e}")
+                        all_rewards.append(0.0)
+        
+        return all_rewards
 
     while True:
         try:
