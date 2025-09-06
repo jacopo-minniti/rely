@@ -77,7 +77,7 @@ save_strategy: "no"
 evals_per_epoch: 1
 
 debug:
-deepspeed: deepspeed_configs/zero1.json
+deepspeed: ~/rely/deepspeed_configs/zero1.json
 weight_decay: 0.01
 fsdp:
 fsdp_config:
