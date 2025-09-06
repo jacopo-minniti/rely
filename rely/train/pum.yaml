@@ -46,13 +46,13 @@ wandb_name: Math-Qwen2.5-1.5B-half_entropy
 wandb_log_model:
 
 
-gradient_accumulation_steps: 2
+gradient_accumulation_steps: 4
 micro_batch_size: 32
 eval_batch_size: 32
-num_epochs: 7
+num_epochs: 10
 optimizer: adamw_torch_fused
 lr_scheduler: cosine
-learning_rate: 1e-4
+learning_rate: 5e-4
 
 
 gradient_checkpointing: true
@@ -78,9 +78,9 @@ evals_per_epoch: 1
 
 debug:
 deepspeed: deepspeed_configs/zero1.json
-weight_decay: 0.00
+weight_decay: 0.01
 fsdp:
 fsdp_config:
 
-hub_model_id: jacopo-minniti/Qwen2.5-Math-7B-PUM-half_entropy
+hub_model_id: jacopo-minniti/Qwen2.5-Math-7B-PUM-half_entropy-v2
 hub_strategy: "end"
