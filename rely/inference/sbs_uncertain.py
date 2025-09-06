@@ -69,28 +69,6 @@ class SBSNode:
         return child
 
 
-def make_uncertainty_score(logits, token_masks):
-    """Extract uncertainty score from classification model outputs."""
-    probabilities = F.softmax(logits, dim=-1)
-    probabilities = probabilities * token_masks.unsqueeze(-1)
-    
-    all_scores_res = []
-    for i in range(probabilities.size(0)):
-        sample = probabilities[i]
-        non_zero_mask = sample.sum(dim=-1) != 0
-        if non_zero_mask.any():
-            valid_probs = sample[non_zero_mask]
-            if valid_probs.size(1) >= 2:
-                uncertainty_probs = valid_probs[:, 1]
-                non_zero_elements_list = uncertainty_probs.cpu().tolist()
-            else:
-                non_zero_elements_list = valid_probs.flatten().cpu().tolist()
-        else:
-            non_zero_elements_list = []
-        all_scores_res.append(non_zero_elements_list)
-    return all_scores_res
-
-
 class StepBeamSearch:
     """Step-level Beam Search implementation with uncertainty-weighted sampling."""
     def __init__(self,
@@ -453,30 +431,39 @@ def _uncertainty_model_server(args: argparse.Namespace, task_queue: Queue, resul
 
         inputs = tokenizer(conversation_strs, return_tensors="pt", padding=True, truncation=True, max_length=7000).to(uncertainty_device)
         
-        # --- CORRECTED LOGIC ---
         outputs = model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask)
         step_sep_id = tokenizer.encode("<extra_0>", add_special_tokens=False)[0]
         token_masks = (inputs.input_ids == step_sep_id)
-        uncertainty_scores_per_sample = make_uncertainty_score(outputs.logits, token_masks)
-        # --- END CORRECTION ---
+        
+        # --- OPTIMIZED/VECTORIZED LOGIC ---
+        uncertainty_probs = torch.softmax(outputs.logits, dim=-1)[:, :, 1]
+        has_separator = token_masks.any(dim=1)
+        default_uncertainty = torch.tensor(0.5, device=uncertainty_device)
+        
+        calculated_uncertainties = torch.zeros_like(has_separator, dtype=torch.float)
 
-        batch_uncertainties = []
-        for scores in uncertainty_scores_per_sample:
-            if not scores:
-                batch_uncertainties.append(0.5)
-                continue
+        if args.uncertainty_method == "product":
+            clamped_probs = uncertainty_probs.clamp(min=1e-8)
+            masked_probs = torch.where(token_masks, clamped_probs, 1.0)
+            calculated_uncertainties = masked_probs.prod(dim=1)
+        elif args.uncertainty_method == "average":
+            masked_probs = uncertainty_probs * token_masks.float()
+            sums = masked_probs.sum(dim=1)
+            counts = token_masks.sum(dim=1).clamp(min=1)
+            calculated_uncertainties = sums / counts
+        elif args.uncertainty_method == "minimum":
+            masked_probs = torch.where(token_masks, uncertainty_probs, 2.0)
+            minimums, _ = masked_probs.min(dim=1)
+            calculated_uncertainties = minimums
+        else:  # "last_step" is default
+            seq_len = token_masks.size(1)
+            reverse_mask = torch.flip(token_masks, dims=[1])
+            last_indices = (seq_len - 1) - torch.argmax(reverse_mask, dim=1)
+            calculated_uncertainties = torch.gather(uncertainty_probs, 1, last_indices.unsqueeze(-1)).squeeze(-1)
             
-            if args.uncertainty_method == "product":
-                uncertainty = math.prod([max(s, 1e-8) for s in scores])
-            elif args.uncertainty_method == "average":
-                uncertainty = sum(scores) / len(scores)
-            elif args.uncertainty_method == "minimum":
-                uncertainty = min(scores)
-            else: # last_step is default
-                uncertainty = scores[-1]
-            batch_uncertainties.append(uncertainty)
-            
-        return batch_uncertainties
+        final_uncertainties = torch.where(has_separator, calculated_uncertainties, default_uncertainty)
+        return final_uncertainties.cpu().tolist()
+        # --- END OPTIMIZED LOGIC ---
 
     while True:
         try:
@@ -497,7 +484,7 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
 
     tokenizer = AutoTokenizer.from_pretrained(args.value_model_path, trust_remote_code=True)
     model = AutoModel.from_pretrained(
-        args.value_model_path, num_labels=2, dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
+        args.value_model_path, num_labels=2, device_map="auto", trust_remote_code=True
     )
 
     if tokenizer.pad_token is None:
@@ -526,18 +513,26 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
         inputs = tokenizer(conversation_strs, return_tensors="pt", padding=True, truncation=True, max_length=7000).to(value_device)
         base_model_output = model.model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask, use_cache=False)
         logits = model.score(base_model_output.last_hidden_state)
-        probabilities = torch.softmax(logits, dim=-1)
         
+        # --- OPTIMIZED/VECTORIZED LOGIC ---
+        probabilities = torch.softmax(logits, dim=-1)
         step_sep_id = tokenizer.encode("<extra_0>", add_special_tokens=False)[0]
         token_masks = (inputs.input_ids == step_sep_id)
-        batch_rewards = []
-        for i in range(logits.size(0)):
-            step_scores = probabilities[i][token_masks[i]][:, 1]
-            if len(step_scores) > 0:
-                batch_rewards.append(step_scores[-1].item())
-            else:
-                batch_rewards.append(0.0)
-        return batch_rewards
+        
+        scores = probabilities[:, :, 1]
+        
+        seq_len = token_masks.size(1)
+        reverse_mask = torch.flip(token_masks, dims=[1])
+        last_indices = (seq_len - 1) - torch.argmax(reverse_mask, dim=1)
+        
+        last_step_scores = torch.gather(scores, 1, last_indices.unsqueeze(-1)).squeeze(-1)
+        
+        has_separator = token_masks.any(dim=1)
+        
+        batch_rewards_tensor = torch.where(has_separator, last_step_scores, torch.tensor(0.0, device=value_device))
+        
+        return batch_rewards_tensor.cpu().tolist()
+        # --- END OPTIMIZED LOGIC ---
 
     while True:
         try:
@@ -591,20 +586,20 @@ def run_sbs_on_dataset(args: argparse.Namespace):
     dataset = [{'original_index': i, **item} for i, item in enumerate(ds)]
 
     # --- Check for already processed questions and exclude them ---
-    results_dir = "results/sbs_uncertain_max_4_20"
-    if os.path.exists(results_dir):
-        processed_indices = set()
-        for folder_name in os.listdir(results_dir):
-            if folder_name.startswith("q_"):
-                try:
-                    idx = int(folder_name.split("_")[1])
-                    processed_indices.add(idx)
-                except (IndexError, ValueError):
-                    continue
+    # results_dir = "results/sbs_uncertain_max_4_20"
+    # if os.path.exists(results_dir):
+    #     processed_indices = set()
+    #     for folder_name in os.listdir(results_dir):
+    #         if folder_name.startswith("q_"):
+    #             try:
+    #                 idx = int(folder_name.split("_")[1])
+    #                 processed_indices.add(idx)
+    #             except (IndexError, ValueError):
+    #                 continue
         
-        original_count = len(dataset)
-        dataset = [item for item in dataset if item['original_index'] not in processed_indices]
-        logger.info(f"Excluded {original_count - len(dataset)} already processed questions. Remaining: {len(dataset)}")
+    #     original_count = len(dataset)
+    #     dataset = [item for item in dataset if item['original_index'] not in processed_indices]
+    #     logger.info(f"Excluded {original_count - len(dataset)} already processed questions. Remaining: {len(dataset)}")
     # --- End of exclusion block ---
 
     num_workers = args.num_workers
