@@ -65,8 +65,8 @@ class RegressionPRMTrainer(Trainer):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
             The dataset to use for evaluation.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], ...):
-            Processing class used to process the data.
+        tokenizer ([`~transformers.PreTrainedTokenizerBase`], ...):
+            Tokenizer used to process the data.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training.
         compute_metrics (`Callable[[transformers.EvalPrediction], dict]`, *optional*, defaults to `compute_regression_metrics`):
@@ -88,7 +88,7 @@ class RegressionPRMTrainer(Trainer):
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
-        processing_class: Optional[
+        tokenizer: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
@@ -110,16 +110,16 @@ class RegressionPRMTrainer(Trainer):
             compute_metrics = compute_regression_metrics
 
         if data_collator is None:
-            if processing_class is None:
+            if tokenizer is None:
                 raise ValueError(
-                    "A processing_class must be specified when using the default DataCollatorForTokenClassification"
+                    "A tokenizer must be specified when using the default DataCollatorForTokenClassification"
                 )
-            data_collator = DataCollatorForTokenClassification(processing_class, max_length=args.max_length)
+            data_collator = DataCollatorForTokenClassification(tokenizer, max_length=args.max_length)
 
         if "input_ids" not in train_dataset.column_names:
             with PartialState().main_process_first():
                 fn_kwargs = {
-                    "tokenizer": processing_class,
+                    "tokenizer": tokenizer,
                     "step_separator": args.step_separator,
                     "max_length": args.max_length,
                     "max_prompt_length": args.max_prompt_length,
@@ -164,7 +164,7 @@ class RegressionPRMTrainer(Trainer):
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            processing_class=processing_class,
+            tokenizer=tokenizer,
             model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
@@ -192,7 +192,7 @@ class RegressionPRMTrainer(Trainer):
 
         Args:
             features (`dict[str, str]`):
-                Row of the dataset, should contain `"prompt"`, `"completions"`, and `"labels"`.
+                Row of the dataset, should contain "prompt", "completions", and "labels".
                 Labels should be continuous float values.
             tokenizer (`PreTrainedTokenizerBase`):
                 Tokenizer used to process the data.
@@ -200,12 +200,12 @@ class RegressionPRMTrainer(Trainer):
 
         Returns:
             `dict[str, list]`:
-                Tokenized sequences with `"input_ids"` and `"labels"`.
+                Tokenized sequences with "input_ids" and "labels".
         """
         # Tokenize the prompt and completions
-        prompt_ids = tokenizer(features["prompt"], add_special_tokens=False)["input_ids"]
+        prompt_ids = tokenizer(features["prompt"], add_special_tokens=False)("input_ids")
         completions_ids = [
-            tokenizer(completion, add_special_tokens=False)["input_ids"] for completion in features["completions"]
+            tokenizer(completion, add_special_tokens=False)("input_ids") for completion in features["completions"]
         ]
         
         # MODIFIED: Cast labels to float instead of int
@@ -289,7 +289,7 @@ class RegressionPRMTrainer(Trainer):
         tags.update(self._tag_names)
 
         # docstyle-ignore
-        citation = textwrap.dedent("""\
+        citation = textwrap.dedent("""
         @article{uesato2022solving,
             title        = {{Solving Math Word Problems With Process- and Outcome-Based Feedback}},
             author       = {Uesato, Jonathan and Kushman, Nate and Kumar, Ramana and Song, Francis and Siegel, Noah and Wang, Lisa and Creswell, Antonia and Irving, Geoffrey and Higgins, Irina},
