@@ -6,15 +6,13 @@ from transformers import (
     AutoTokenizer,
     TrainingArguments,
     Trainer,
-    BitsAndBytesConfig,
     DataCollatorForTokenClassification
 )
 import numpy as np
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from process_dataset import load_cached_dataset, process_and_cache_dataset
 
-# ---------------------------------------------------------------------------
-# Configuration - Based on your provided parameters
-# ---------------------------------------------------------------------------
+
 class ModelConfig:
     # Model and Tokenizer
     base_model = "Qwen/Qwen2.5-Math-7B"
@@ -27,7 +25,7 @@ class ModelConfig:
     
     # Dataset
     dataset_path = "jacopo-minniti/MATH-PUM-qwen2.5-1.5B"
-    dataset_name = "half_entropy"
+    dataset_name = "regression"
     train_split = "train"
     test_split = "test"
     
@@ -42,12 +40,12 @@ class ModelConfig:
     output_dir = "./outputs/out"
     sequence_len = 4096
     gradient_accumulation_steps = 4
-    micro_batch_size = 8
-    eval_batch_size = 8
-    num_epochs = 10
+    micro_batch_size = 1
+    eval_batch_size = 1
+    num_epochs = 7
     optimizer = "adamw_torch_fused"
     lr_scheduler = "cosine"
-    learning_rate = 5e-4
+    learning_rate = 1e-4
     weight_decay = 0.01
     warmup_ratio = 0.3
     
@@ -58,84 +56,16 @@ class ModelConfig:
     
     # Logging and Saving
     logging_steps = 5
-    save_strategy = "epoch"
+    
+    # Cache settings
+    cache_dir = "/scratch/jacopo04/.cache/datasets"
+    processed_dataset_name = "processed_pum_regression"
     
     # Hugging Face Hub
     hub_model_id = "jacopo-minniti/Qwen2.5-Math-7B-PUM-regression"
-    hub_strategy = "end" # push at the end of training
 
 # ---------------------------------------------------------------------------
-# Data Preprocessing
-# ---------------------------------------------------------------------------
-
-def process_and_tokenize(examples, tokenizer):
-    """
-    Processes each example into cumulative steps, tokenizes them, and creates
-    token-level labels for regression. The label is applied only at the last
-    <extra_0> token of each cumulative step.
-    """
-    # These will hold the processed data for the entire batch
-    batch_input_ids, batch_attention_mask, batch_labels = [], [], []
-
-    separator_token_id = tokenizer.convert_tokens_to_ids(ModelConfig.step_separator_token)
-    
-    prompts = examples["prompt"]
-    completions = examples["completions"]
-    scores = examples["labels"]
-
-    for i in range(len(prompts)): # Iterate through each example in the batch
-        user_prompt = prompts[i]
-        
-        for j in range(len(completions[i])): # Iterate through each step in the example
-            # 1. Create the cumulative completion string
-            cumulative_completion = ModelConfig.step_separator_token.join(completions[i][:j+1])
-
-            # 2. Apply the chat template
-            messages = [
-                {"role": "system", "content": ModelConfig.MATH_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-                {"role": "assistant", "content": cumulative_completion}
-            ]
-            formatted_text = tokenizer.apply_chat_template(messages, tokenize=False)
-            
-            # 3. Tokenize the formatted text
-            tokenized_inputs = tokenizer(
-                formatted_text,
-                truncation=True,
-                padding="max_length",
-                max_length=ModelConfig.sequence_len,
-            )
-            
-            input_ids = tokenized_inputs["input_ids"]
-            
-            # 4. Create the token-level labels tensor
-            # Initialize with -100 (ignore index for loss calculation)
-            labels = np.full(len(input_ids), -100, dtype=np.float32)
-
-            # Find the position of the *last* separator token
-            # We search in reverse to find the last occurrence efficiently
-            last_sep_idx = -1
-            for k in range(len(input_ids) - 1, -1, -1):
-                if input_ids[k] == separator_token_id:
-                    last_sep_idx = k
-                    break
-            
-            # If a separator token is found, assign the score to that position
-            if last_sep_idx != -1:
-                labels[last_sep_idx] = scores[i][j]
-
-            batch_input_ids.append(input_ids)
-            batch_attention_mask.append(tokenized_inputs["attention_mask"])
-            batch_labels.append(labels)
-            
-    return {
-        "input_ids": batch_input_ids,
-        "attention_mask": batch_attention_mask,
-        "labels": batch_labels,
-    }
-
-# ---------------------------------------------------------------------------
-# Evaluation Metrics
+# Metrics
 # ---------------------------------------------------------------------------
 
 def compute_metrics(eval_pred):
@@ -164,11 +94,8 @@ def compute_metrics(eval_pred):
         "r2": r2,
     }
 
-# ---------------------------------------------------------------------------
-# Main Training Script
-# ---------------------------------------------------------------------------
 
-def main():
+if __name__ == "__main__":
     print("Starting Token Classification Reward Model Training for Regression...")
 
     # 1. Load Tokenizer
@@ -182,28 +109,19 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # 2. Load and Preprocess Dataset
-    print(f"Loading dataset from path: {ModelConfig.dataset_path}, name: {ModelConfig.dataset_name}")
-    dataset = load_dataset(ModelConfig.dataset_path, ModelConfig.dataset_name)
+    # 2. Load Preprocessed Dataset from Cache
+    print("Loading preprocessed dataset from cache...")
+    try:
+        tokenized_dataset = load_cached_dataset()
+        print("Successfully loaded cached dataset!")
+    except FileNotFoundError:
+        print("Cached dataset not found. Processing dataset for the first time...")
+        tokenized_dataset = process_and_cache_dataset()
     
-    if ModelConfig.test_split not in dataset:
-        print(f"'{ModelConfig.test_split}' split not found. Splitting 'train' into train/test (90/10).")
-        train_test_split = dataset[ModelConfig.train_split].train_test_split(test_size=0.1, seed=42)
-        dataset = DatasetDict({'train': train_test_split['train'], 'test': train_test_split['test']})
-
-    print("Processing and tokenizing the dataset...")
-    original_columns = dataset[ModelConfig.train_split].column_names
-    tokenized_dataset = dataset.map(
-        lambda examples: process_and_tokenize(examples, tokenizer),
-        batched=True,
-        remove_columns=original_columns,
-        num_proc=os.cpu_count() # Use multiple processors for faster preprocessing
-    )
-
     train_dataset = tokenized_dataset[ModelConfig.train_split]
     eval_dataset = tokenized_dataset[ModelConfig.test_split]
     
-    print(f"Dataset prepared. Train samples: {len(train_dataset)}, Eval samples: {len(eval_dataset)}")
+    print(f"Dataset loaded. Train samples: {len(train_dataset)}, Eval samples: {len(eval_dataset)}")
     
     # 3. Load Model
     print(f"Loading base model for Token Classification: {ModelConfig.base_model}")
@@ -235,14 +153,15 @@ def main():
         tf32=ModelConfig.tf32,
         logging_dir=f"{ModelConfig.output_dir}/logs",
         logging_steps=ModelConfig.logging_steps,
-        save_strategy=ModelConfig.save_strategy,
-        evaluation_strategy=ModelConfig.save_strategy,
+        evaluation_strategy="steps",
+        eval_steps=ModelConfig.logging_steps,
+        save_strategy="steps",
+        save_steps=ModelConfig.logging_steps,
         load_best_model_at_end=True,
         metric_for_best_model="mse",
         greater_is_better=False,
         push_to_hub=True,
         hub_model_id=ModelConfig.hub_model_id,
-        hub_strategy=ModelConfig.hub_strategy,
         report_to="wandb",
     )
     
@@ -256,7 +175,6 @@ def main():
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        tokenizer=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
     )
@@ -271,7 +189,3 @@ def main():
     trainer.push_to_hub()
     
     print("Script finished successfully.")
-
-
-if __name__ == "__main__":
-    main()
