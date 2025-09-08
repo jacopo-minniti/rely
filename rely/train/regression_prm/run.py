@@ -11,7 +11,7 @@ def main():
     print("Loading model and tokenizer...")
     
     # Load the custom regression model
-    model = RegressionPRMModel.from_pretrained("Qwen/Qwen2.5-Math-1.5B")
+    model = RegressionPRMModel.from_base_model("Qwen/Qwen2.5-Math-1.5B")
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Math-1.5B")
     
     # Add special tokens if they don't exist

@@ -48,7 +48,7 @@ class RegressionPRMModel(PreTrainedModel):
         self.post_init()
     
     @classmethod
-    def from_pretrained(cls, base_model_name: str, **kwargs):
+    def from_base_model(cls, base_model_name: str, **kwargs):
         """
         Load a RegressionPRMModel from a pretrained base model.
         
