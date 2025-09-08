@@ -25,6 +25,7 @@ class RegressionPRMModel(PreTrainedModel):
         if self.base_model_name:
             self.transformer = AutoModel.from_pretrained(
                 self.base_model_name,
+                config=config,
                 torch_dtype=getattr(config, 'torch_dtype', torch.bfloat16),
                 trust_remote_code=True,
                 attn_implementation="eager"
