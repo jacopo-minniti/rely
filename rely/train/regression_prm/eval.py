@@ -1,3 +1,5 @@
+# eval.py (FIXED)
+
 import torch
 import numpy as np
 from datasets import load_dataset
@@ -9,7 +11,6 @@ from pathlib import Path
 
 from model import RegressionPRMModel
 from trainer import RegressionPRMTrainer
-from trl import PRMConfig
 
 
 def load_model_and_tokenizer(checkpoint_path: str):
@@ -19,13 +20,14 @@ def load_model_and_tokenizer(checkpoint_path: str):
     # Load tokenizer from checkpoint
     tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
     
-    # Load the model from checkpoint
-    model = RegressionPRMModel.from_pretrained(checkpoint_path, torch_dtype=torch.float32)
+    # ✅ FIX: Load the model from checkpoint, letting from_pretrained infer the correct dtype
+    # from the model's config. This ensures consistency with the training dtype (e.g., bfloat16).
+    model = RegressionPRMModel.from_pretrained(checkpoint_path)
     
     return model, tokenizer
 
 
-def tokenize_example(example, tokenizer, step_separator="<extra_0>", max_length=4096):
+def tokenize_example(example, tokenizer, step_separator, max_length):
     """Tokenize a single example in the same format as training."""
     # Get the tokenization function from trainer
     tokenized = RegressionPRMTrainer.tokenize_row(
@@ -33,24 +35,25 @@ def tokenize_example(example, tokenizer, step_separator="<extra_0>", max_length=
         tokenizer=tokenizer,
         step_separator=step_separator,
         max_length=max_length,
-        max_prompt_length=None,
-        max_completion_length=None,
+        max_prompt_length=None,       # Assuming None, adjust if needed
+        max_completion_length=None, # Assuming None, adjust if needed
         train_on_last_step_only=False,
         is_eval=True,
     )
     return tokenized
 
 
-def evaluate_model(model, tokenizer, dataset, device, max_examples=None):
+def evaluate_model(model, tokenizer, dataset, device, max_length, step_separator, max_examples=None):
     """Evaluate the model on the dataset and return predictions and labels."""
     model.eval()
-    model = model.to(device)
+    model.to(device)
     
     all_predictions = []
     all_labels = []
     
     # Limit examples if specified
     if max_examples is not None:
+        dataset = dataset.shuffle(seed=42)
         dataset = dataset.select(range(min(max_examples, len(dataset))))
     
     print(f"Evaluating on {len(dataset)} examples...")
@@ -59,14 +62,15 @@ def evaluate_model(model, tokenizer, dataset, device, max_examples=None):
         for i, example in enumerate(tqdm(dataset, desc="Evaluating")):
             try:
                 # Tokenize the example
-                tokenized = tokenize_example(example, tokenizer)
+                tokenized = tokenize_example(example, tokenizer, step_separator, max_length)
                 
                 # Convert to tensors and move to device
                 input_ids = torch.tensor([tokenized["input_ids"]], device=device)
                 labels_tensor = torch.tensor([tokenized["labels"]], device=device, dtype=torch.float32)
                 
-                # Create attention mask and cast it to the model's dtype
-                attention_mask = (input_ids != tokenizer.pad_token_id).to(model.dtype)
+                # ✅ FIX: Create attention mask with the correct integer dtype (torch.long).
+                # Transformer models expect an integer mask, not a float one.
+                attention_mask = (input_ids != tokenizer.pad_token_id).long()
 
                 # Forward pass
                 outputs = model(
@@ -98,28 +102,41 @@ def main():
     parser.add_argument(
         "--checkpoint_path", 
         type=str, 
-        default="/scratch/jacopo04/outputs/out/checkpoint-7650",
-        help="Path to the model checkpoint"
+        required=True,
+        help="Path to the model checkpoint directory."
     )
     parser.add_argument(
         "--max_examples", 
         type=int, 
         default=None,
-        help="Maximum number of examples to evaluate (default: all)"
+        help="Maximum number of examples to evaluate (default: all)."
     )
     parser.add_argument(
         "--device", 
         type=str, 
         default="cuda" if torch.cuda.is_available() else "cpu",
-        help="Device to run evaluation on"
+        help="Device to run evaluation on (e.g., 'cuda', 'cpu')."
+    )
+    # ✅ NEW: Added arguments for tokenization to ensure they match training config
+    parser.add_argument(
+        "--max_length",
+        type=int,
+        default=4096,
+        help="Max sequence length for tokenization. MUST match training."
+    )
+    parser.add_argument(
+        "--step_separator",
+        type=str,
+        default="<extra_0>",
+        help="Step separator token. MUST match training."
     )
     
     args = parser.parse_args()
     
     # Validate checkpoint path
     checkpoint_path = Path(args.checkpoint_path)
-    if not checkpoint_path.exists():
-        raise ValueError(f"Checkpoint path does not exist: {checkpoint_path}")
+    if not checkpoint_path.exists() or not checkpoint_path.is_dir():
+        raise ValueError(f"Checkpoint path does not exist or is not a directory: {checkpoint_path}")
     
     print("="*60)
     print("REGRESSION PRM MODEL EVALUATION")
@@ -127,6 +144,7 @@ def main():
     print(f"Checkpoint: {args.checkpoint_path}")
     print(f"Device: {args.device}")
     print(f"Max examples: {args.max_examples or 'All'}")
+    print(f"Max length: {args.max_length}")
     print("="*60)
     
     # Load model and tokenizer
@@ -147,10 +165,12 @@ def main():
         tokenizer=tokenizer, 
         dataset=test_dataset,
         device=args.device,
+        max_length=args.max_length,
+        step_separator=args.step_separator,
         max_examples=args.max_examples
     )
     
-    # Calculate metrics
+    # Calculate and print metrics
     if len(predictions) > 0:
         r2 = r2_score(labels, predictions)
         mse = np.mean((predictions - labels) ** 2)
@@ -159,27 +179,21 @@ def main():
         print("\n" + "="*60)
         print("EVALUATION RESULTS")
         print("="*60)
-        print(f"Number of predictions: {len(predictions)}")
+        print(f"Number of valid predictions: {len(predictions)}")
         print(f"R² Score: {r2:.4f}")
-        print(f"MSE: {mse:.4f}")
-        print(f"MAE: {mae:.4f}")
+        print(f"Mean Squared Error (MSE): {mse:.4f}")
+        print(f"Mean Absolute Error (MAE): {mae:.4f}")
         print("="*60)
         
         # Additional statistics
-        print(f"\nLabel statistics:")
-        print(f"  Mean: {np.mean(labels):.4f}")
-        print(f"  Std:  {np.std(labels):.4f}")
-        print(f"  Min:  {np.min(labels):.4f}")
-        print(f"  Max:  {np.max(labels):.4f}")
+        print("\nLabel statistics:")
+        print(f"  Mean: {np.mean(labels):.4f}, Std: {np.std(labels):.4f}, Min: {np.min(labels):.4f}, Max: {np.max(labels):.4f}")
         
-        print(f"\nPrediction statistics:")
-        print(f"  Mean: {np.mean(predictions):.4f}")
-        print(f"  Std:  {np.std(predictions):.4f}")
-        print(f"  Min:  {np.min(predictions):.4f}")
-        print(f"  Max:  {np.max(predictions):.4f}")
+        print("\nPrediction statistics:")
+        print(f"  Mean: {np.mean(predictions):.4f}, Std: {np.std(predictions):.4f}, Min: {np.min(predictions):.4f}, Max: {np.max(predictions):.4f}")
         
     else:
-        print("No valid predictions found!")
+        print("\nNo valid predictions were generated. Check dataset and tokenization.")
 
 
 if __name__ == "__main__":

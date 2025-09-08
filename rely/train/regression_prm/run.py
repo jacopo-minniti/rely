@@ -48,11 +48,11 @@ def main():
         step_separator=step_separator_token,
         
         # Training Hyperparameters
-        num_train_epochs=3,
-        learning_rate=1e-4,
+        num_train_epochs=5,
+        learning_rate=1e-5,
         lr_scheduler_type="cosine",
-        warmup_ratio=0.2,
-        weight_decay=0.01,
+        warmup_ratio=0.15,
+        weight_decay=0.1,
         optim="adamw_torch_fused",
         
         # Batching and Gradient
@@ -66,7 +66,7 @@ def main():
         tf32=torch.cuda.is_available() and torch.cuda.is_tf32_supported(),
         
         # Logging and Saving
-        logging_steps=5,
+        logging_steps=10,
         save_strategy="epoch",
         eval_strategy="epoch",
         push_to_hub=False,
@@ -91,8 +91,8 @@ def main():
     print("Training finished!")
 
     # --- 6. Push to Hub ---
-    # print("Pushing final model to the Hub...")
-    # trainer.push_to_hub(token="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")
+    print("Pushing final model to the Hub...")
+    trainer.push_to_hub("Qwen2.5-Math-7B-PUM-regression", token="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")
     print("Script finished successfully.")
 
 

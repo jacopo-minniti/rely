@@ -1,3 +1,5 @@
+# model.py
+
 import torch
 import torch.nn as nn
 from transformers import AutoModel, PreTrainedModel, AutoConfig
@@ -15,30 +17,20 @@ class RegressionPRMModel(PreTrainedModel):
     regression tasks.
     """
     
-    def __init__(self, config, base_model_name: str = None):
+    def __init__(self, config):
         super().__init__(config)
         
-        # Store the base model name for loading
-        self.base_model_name = base_model_name or getattr(config, 'base_model_name', None)
-        
-        # Load the base transformer model (without classification head)
-        if self.base_model_name:
-            self.transformer = AutoModel.from_pretrained(
-                self.base_model_name,
-                config=config,
-                torch_dtype=getattr(config, 'torch_dtype', torch.bfloat16),
-                trust_remote_code=True,
-                attn_implementation="eager"
-            )
-        else:
-            # If no base model name, assume transformer is already loaded
-            self.transformer = None
+        # Instantiate the base transformer using the config from the checkpoint.
+        # This creates the correct architecture without loading any weights yet.
+        self.transformer = AutoModel.from_config(
+            config,
+            torch_dtype=getattr(config, 'torch_dtype', torch.bfloat16),
+            trust_remote_code=True,
+            attn_implementation="eager"  # or your preferred implementation
+        )
             
         # Get hidden size from transformer config
-        if self.transformer:
-            self.hidden_size = self.transformer.config.hidden_size
-        else:
-            self.hidden_size = getattr(config, 'hidden_size', 768)
+        self.hidden_size = self.transformer.config.hidden_size
             
         # Regression head - single linear layer outputting 1 value per token
         self.regression_head = nn.Linear(self.hidden_size, 1)
@@ -52,28 +44,19 @@ class RegressionPRMModel(PreTrainedModel):
     @classmethod
     def from_base_model(cls, base_model_name: str, **kwargs):
         """
-        Load a RegressionPRMModel from a pretrained base model.
-        
-        Args:
-            base_model_name: Name of the base model to load (e.g., "Qwen/Qwen2.5-Math-7B")
-            **kwargs: Additional arguments passed to the base model
+        Load a RegressionPRMModel from a pretrained base model for initial training.
         """
-        # Force eager attention implementation to avoid compatibility issues
-        # kwargs['attn_implementation'] = 'flash_attention_2' 
+        # Load the base model config first
+        config = AutoConfig.from_pretrained(base_model_name, **kwargs)
         
-        # Load the base model config
-        base_model = AutoModel.from_pretrained(base_model_name, **kwargs)
-        config = base_model.config
-        
-        # Add our custom attributes to config
+        # Add our custom attributes to config for saving
         config.base_model_name = base_model_name
-        config.hidden_size = base_model.config.hidden_size
-        if 'torch_dtype' in kwargs:
-            config.torch_dtype = kwargs['torch_dtype']
-            
-        # Create our model
-        model = cls(config, base_model_name=base_model_name)
-        model.transformer = base_model
+        
+        # Create our custom model shell using the config
+        model = cls(config)
+        
+        # Now, load the pretrained weights for the transformer part
+        model.transformer = AutoModel.from_pretrained(base_model_name, **kwargs)
         
         return model
     
@@ -91,15 +74,6 @@ class RegressionPRMModel(PreTrainedModel):
     ) -> TokenClassifierOutput:
         """
         Forward pass of the regression model.
-        
-        Args:
-            input_ids: Input token IDs
-            attention_mask: Attention mask
-            labels: Regression labels (continuous values)
-            **kwargs: Additional arguments
-            
-        Returns:
-            TokenClassifierOutput with logits and loss
         """
         # Get transformer outputs
         outputs = self.transformer(
