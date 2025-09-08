@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 from accelerate import PartialState
 from datasets import Dataset, features
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import mean_squared_error, r2_score
 from transformers import (
     BaseImageProcessor,
     DataCollator,
@@ -30,16 +30,20 @@ if is_wandb_available():
     import wandb
 
 
-def compute_mse(eval_pred: EvalPrediction):
+def compute_regression_metrics(eval_pred: EvalPrediction):
     """
-    Computes Mean Squared Error for regression tasks.
+    Computes metrics for regression tasks (MSE and R2).
     Filters out predictions where the label is -100.
     """
     predictions, labels = eval_pred
     # Filter out ignored indices
     active_predictions = predictions[labels != -100]
     active_labels = labels[labels != -100]
-    return {"mse": mean_squared_error(active_labels, active_predictions)}
+    
+    mse = mean_squared_error(active_labels, active_predictions)
+    r2 = r2_score(active_labels, active_predictions)
+    
+    return {"mse": mse, "r2": r2}
 
 
 class RegressionPRMTrainer(Trainer):
@@ -65,8 +69,8 @@ class RegressionPRMTrainer(Trainer):
             Processing class used to process the data.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training.
-        compute_metrics (`Callable[[transformers.EvalPrediction], dict]`, *optional*, defaults to `compute_mse`):
-            The metrics to use for evaluation. Defaults to Mean Squared Error for regression.
+        compute_metrics (`Callable[[transformers.EvalPrediction], dict]`, *optional*, defaults to `compute_regression_metrics`):
+            The metrics to use for evaluation. Defaults to Mean Squared Error and R2 score for regression.
         callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
@@ -101,9 +105,9 @@ class RegressionPRMTrainer(Trainer):
         if args.disable_dropout:
             disable_dropout_in_model(model)
         
-        # Set default compute_metrics to compute_mse for regression
+        # Set default compute_metrics for regression
         if compute_metrics is None:
-            compute_metrics = compute_mse
+            compute_metrics = compute_regression_metrics
 
         if data_collator is None:
             if processing_class is None:
