@@ -59,7 +59,7 @@ def main():
         per_device_train_batch_size=1,
         per_device_eval_batch_size=1,
         gradient_accumulation_steps=4,
-        gradient_checkpointing=False,
+        gradient_checkpointing=True,
         
         # Hardware & Performance
         bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),

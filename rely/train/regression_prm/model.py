@@ -6,6 +6,7 @@ from typing import Optional, Union
 
 
 class RegressionPRMModel(PreTrainedModel):
+    _supports_sdpa = True
     """
     A regression model that wraps a base transformer model with a linear regression head.
     
@@ -56,7 +57,8 @@ class RegressionPRMModel(PreTrainedModel):
             **kwargs: Additional arguments passed to the base model
         """
         # Force eager attention implementation to avoid compatibility issues
-        kwargs['attn_implementation'] = 'eager'
+                # Use flash_attention_2 for memory efficiency on H100s
+        kwargs['attn_implementation'] = 'flash_attention_2' 
         
         # Load the base model config
         base_model = AutoModel.from_pretrained(base_model_name, **kwargs)
