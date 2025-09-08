@@ -11,8 +11,8 @@ def main():
     print("Loading model and tokenizer...")
     
     # Load the custom regression model
-    model = RegressionPRMModel.from_pretrained("Qwen/Qwen2.5-Math-7B")
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Math-7B")
+    model = RegressionPRMModel.from_pretrained("Qwen/Qwen2.5-Math-1.5B")
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Math-1.5B")
     
     # Add special tokens if they don't exist
     step_separator_token = "<extra_0>"
@@ -48,18 +48,18 @@ def main():
         step_separator=step_separator_token,
         
         # Training Hyperparameters
-        num_train_epochs=7,
+        num_train_epochs=3,
         learning_rate=1e-4,
         lr_scheduler_type="cosine",
-        warmup_ratio=0.3,
+        warmup_ratio=0.2,
         weight_decay=0.01,
         optim="adamw_torch_fused",
         
         # Batching and Gradient
-        per_device_train_batch_size=1,
-        per_device_eval_batch_size=1,
+        per_device_train_batch_size=2,
+        per_device_eval_batch_size=2,
         gradient_accumulation_steps=4,
-        gradient_checkpointing=True,
+        gradient_checkpointing=False,
         
         # Hardware & Performance
         bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
@@ -91,8 +91,8 @@ def main():
     print("Training finished!")
 
     # --- 6. Push to Hub ---
-    print("Pushing final model to the Hub...")
-    trainer.push_to_hub(token="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")
+    # print("Pushing final model to the Hub...")
+    # trainer.push_to_hub(token="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")
     print("Script finished successfully.")
 
 

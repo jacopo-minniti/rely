@@ -4,7 +4,6 @@ from itertools import chain
 from pathlib import Path
 from typing import Callable, Optional, Union
 
-import numpy as np
 import torch
 import torch.nn as nn
 from accelerate import PartialState
@@ -132,7 +131,6 @@ class RegressionPRMTrainer(Trainer):
                     desc="Tokenizing train dataset",
                     features=features.Features(
                         {
-                            # MODIFIED: Use float32 for continuous regression labels
                             "labels": features.Sequence(features.Value("float32")),
                             "input_ids": features.Sequence(features.Value("int64")),
                         }

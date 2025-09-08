@@ -57,8 +57,7 @@ class RegressionPRMModel(PreTrainedModel):
             **kwargs: Additional arguments passed to the base model
         """
         # Force eager attention implementation to avoid compatibility issues
-                # Use flash_attention_2 for memory efficiency on H100s
-        kwargs['attn_implementation'] = 'flash_attention_2' 
+        # kwargs['attn_implementation'] = 'flash_attention_2' 
         
         # Load the base model config
         base_model = AutoModel.from_pretrained(base_model_name, **kwargs)
