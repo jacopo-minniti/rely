@@ -1,11 +1,12 @@
 import torch
 import torch.nn as nn
-from transformers import AutoModel, PreTrainedModel
+from transformers import AutoModel, PreTrainedModel, AutoConfig
 from transformers.modeling_outputs import TokenClassifierOutput
 from typing import Optional, Union
 
 
 class RegressionPRMModel(PreTrainedModel):
+    config_class = AutoConfig
     _supports_sdpa = True
     """
     A regression model that wraps a base transformer model with a linear regression head.
