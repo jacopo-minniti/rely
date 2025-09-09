@@ -19,9 +19,6 @@ def load_model_and_tokenizer(checkpoint_path: str):
     
     # Load tokenizer from checkpoint
     tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
-    
-    # ✅ FIX: Load the model from checkpoint, letting from_pretrained infer the correct dtype
-    # from the model's config. This ensures consistency with the training dtype (e.g., bfloat16).
     model = RegressionPRMModel.from_pretrained(checkpoint_path)
     
     return model, tokenizer

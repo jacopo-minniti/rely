@@ -114,7 +114,12 @@ class RegressionPRMTrainer(Trainer):
                 raise ValueError(
                     "A tokenizer must be specified when using the default DataCollatorForTokenClassification"
                 )
-            data_collator = DataCollatorForTokenClassification(tokenizer, max_length=args.max_length)
+            data_collator = DataCollatorForTokenClassification(
+                tokenizer, 
+                padding=True,
+                pad_to_multiple_of=8,  # Pad to multiple of 8 for efficiency
+                return_tensors="pt"
+            )
 
         if "input_ids" not in train_dataset.column_names:
             with PartialState().main_process_first():
@@ -203,9 +208,9 @@ class RegressionPRMTrainer(Trainer):
                 Tokenized sequences with "input_ids" and "labels".
         """
         # Tokenize the prompt and completions
-        prompt_ids = tokenizer(features["prompt"], add_special_tokens=False)("input_ids")
+        prompt_ids = tokenizer(features["prompt"], add_special_tokens=False)["input_ids"]
         completions_ids = [
-            tokenizer(completion, add_special_tokens=False)("input_ids") for completion in features["completions"]
+            tokenizer(completion, add_special_tokens=False)["input_ids"] for completion in features["completions"]
         ]
         
         # MODIFIED: Cast labels to float instead of int

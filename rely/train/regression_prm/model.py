@@ -10,6 +10,7 @@ from typing import Optional, Union
 class RegressionPRMModel(PreTrainedModel):
     config_class = AutoConfig
     _supports_sdpa = True
+    supports_gradient_checkpointing = True  # Enable gradient checkpointing support
     """
     A regression model that wraps a base transformer model with a linear regression head.
     
@@ -24,18 +25,14 @@ class RegressionPRMModel(PreTrainedModel):
         # This creates the correct architecture without loading any weights yet.
         self.transformer = AutoModel.from_config(
             config,
-            torch_dtype=getattr(config, 'torch_dtype', torch.bfloat16),
+            dtype=getattr(config, 'torch_dtype', torch.bfloat16),
             trust_remote_code=True,
-            attn_implementation="eager"  # or your preferred implementation
+            attn_implementation="eager"
         )
             
-        # Get hidden size from transformer config
         self.hidden_size = self.transformer.config.hidden_size
             
-        # Regression head - single linear layer outputting 1 value per token
         self.regression_head = nn.Linear(self.hidden_size, 1)
-        
-        # Ensure regression head uses float32
         self.regression_head = self.regression_head.float()
         
         # Initialize weights
@@ -64,6 +61,15 @@ class RegressionPRMModel(PreTrainedModel):
         """Resize token embeddings when new tokens are added."""
         if self.transformer:
             self.transformer.resize_token_embeddings(new_num_tokens)
+    
+    def _set_gradient_checkpointing(self, module, value=False):
+        """Enable or disable gradient checkpointing for the underlying transformer."""
+        # Only apply gradient checkpointing to the transformer module, not the regression head
+        if module is self.transformer:
+            if hasattr(module, '_set_gradient_checkpointing'):
+                module._set_gradient_checkpointing(module, value)
+            elif hasattr(module, 'gradient_checkpointing'):
+                module.gradient_checkpointing = value
     
     def forward(
         self,
