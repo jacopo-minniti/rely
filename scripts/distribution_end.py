@@ -1,11 +1,10 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from collections import defaultdict
-from rely.utils import load_dataset
+from datasets import load_dataset
 
 
-# data = load_dataset("jacopo-minniti/MATH-PUM-qwen2.5-1.5B", "pp-1", split="test")
-data = load_dataset("half_entropy_train.jsonl")
+data = load_dataset("jacopo-minniti/MATH-PUM-qwen2.5-1.5B", "half_entropy", split="test")
 labels = [d["labels"] for d in data]
 
 # --- Data Processing ---
@@ -72,9 +71,9 @@ for i, pos in enumerate(positions):
 plt.tight_layout()
 
 # Save the plot to a file
-plt.savefig("high_entropy_percentage.png")
+plt.savefig("/scratch/jacopo04/gt_entropy_dist.png")
 
-print("Plot saved as high_entropy_percentage.png")
+print("Plot saved as gt_entropy_dist.png")
 
 # Also, let's print the counts for the last few positions to give a precise answer
 print("\nCounts for the last 5 positions:")

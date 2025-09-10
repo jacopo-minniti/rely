@@ -6,6 +6,8 @@ from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 import numpy as np
 from tqdm import tqdm
 from datasets import load_dataset
+import matplotlib.pyplot as plt
+from collections import defaultdict
 
 MATH_SYSTEM_PROMPT = """The following are questions about mathematics. Think step by step and provide your answer in the format '\\boxed{}' with inside your final answer. The final answers should either be a number (in digits) or a latex expression."""
 
@@ -153,7 +155,8 @@ def evaluate_dataset(dataset, tokenizer, model, batch_size=8):
         'probability_stats': {
             'mean': prob_mean, 'std': prob_std, 'min': prob_min,
             'max': prob_max, 'avg_confidence': avg_confidence
-        }
+        },
+        'all_predictions': all_predictions  # Add this for plotting
     }
 
 # --- Main Execution ---
@@ -217,5 +220,88 @@ if __name__ == "__main__":
         print(f"  Min probability: {prob_stats['min']:.4f}")
         print(f"  Max probability: {prob_stats['max']:.4f}")
         print(f"  Average confidence (distance from 0.5): {prob_stats['avg_confidence']:.4f}")
+        
+        # --- Distribution Plotting Code (similar to distribution_end.py) ---
+        # 6. Plot Distribution of Model Predictions at End of Sequences
+        
+        # We'll look at the last 20 positions of model predictions
+        num_positions_to_check = 20
+        
+        # Create a dictionary to store the counts of True/False for each position from the end
+        position_counts = defaultdict(lambda: defaultdict(int))
+        
+        # Get predictions organized by sample
+        sample_predictions = []
+        pred_idx = 0
+        for sample in dataset:
+            num_labels = len(sample['labels'])
+            sample_preds = results['all_predictions'][pred_idx:pred_idx + num_labels]
+            sample_predictions.append([bool(p) for p in sample_preds])  # Convert to boolean
+            pred_idx += num_labels
+        
+        # Iterate over each list of predictions
+        for pred_list in sample_predictions:
+            # Iterate from the end of the list backwards
+            for i in range(1, min(len(pred_list) + 1, num_positions_to_check + 1)):
+                position_from_end = -i
+                pred_value = pred_list[position_from_end]
+                position_counts[position_from_end][pred_value] += 1
+        
+        # Get the positions we have data for
+        positions = sorted(position_counts.keys())
+        
+        # Extract the counts for True and False for each position
+        true_counts = [position_counts[pos][True] for pos in positions]
+        false_counts = [position_counts[pos][False] for pos in positions]
+        
+        # Create the figure and axes for the plot
+        fig, ax = plt.subplots(figsize=(12, 7))
+        
+        # Create the stacked bar chart
+        bar_width = 0.8
+        ax.bar(positions, false_counts, bar_width, label='False (predicted entropy <= 1.04)', color='salmon')
+        ax.bar(positions, true_counts, bar_width, bottom=false_counts, label='True (predicted entropy > 1.04)', color='skyblue')
+        
+        # Add labels, title, and legend
+        ax.set_xlabel("Position from the end of the list", fontsize=12)
+        ax.set_ylabel("Count", fontsize=12)
+        ax.set_title("Frequency of Predicted True/False Labels at the End of Sequences", fontsize=14)
+        ax.legend()
+        
+        # Set the x-axis ticks to be the positions
+        ax.set_xticks(positions)
+        ax.set_xticklabels(positions)
+        
+        # Add a grid for better readability
+        ax.yaxis.grid(True, linestyle='--', which='major', color='grey', alpha=.5)
+        
+        # Add text labels on the bars to show the counts
+        for i, pos in enumerate(positions):
+            # Add text for the 'False' part of the bar
+            if false_counts[i] > 0:
+                ax.text(pos, false_counts[i] / 2, str(false_counts[i]), ha='center', va='center', color='white', fontweight='bold')
+            # Add text for the 'True' part of the bar
+            if true_counts[i] > 0:
+                ax.text(pos, false_counts[i] + true_counts[i] / 2, str(true_counts[i]), ha='center', va='center', color='white', fontweight='bold')
+        
+        # Make the layout tight to prevent labels from overlapping
+        plt.tight_layout()
+        
+        # Save the plot to a file
+        plt.savefig("/scratch/jacopo04/pred_entropy_dist.png")
+        print("Plot saved as pred_entropy_dist.png")
+        
+        # Print the counts for the last few positions
+        print("\nPrediction counts for the last 5 positions:")
+        for i in range(-1, -6, -1):
+            if i in position_counts:
+                print(f"Position {i}:")
+                print(f"  False: {position_counts[i][False]}")
+                print(f"  True:  {position_counts[i][True]}")
+                total = position_counts[i][False] + position_counts[i][True]
+                if total > 0:
+                    false_percentage = (position_counts[i][False] / total) * 100
+                    print(f"  % False: {false_percentage:.2f}%")
+                print("-" * 20)
     else:
         print("Evaluation failed - no valid predictions found.")

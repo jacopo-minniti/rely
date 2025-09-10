@@ -11,6 +11,7 @@ class RegressionPRMModel(PreTrainedModel):
     config_class = AutoConfig
     _supports_sdpa = True
     supports_gradient_checkpointing = True  # Enable gradient checkpointing support
+    _no_split_modules = ["Qwen2DecoderLayer"]  # Add this to prevent splitting during gradient checkpointing
     """
     A regression model that wraps a base transformer model with a linear regression head.
     
@@ -27,7 +28,7 @@ class RegressionPRMModel(PreTrainedModel):
             config,
             dtype=getattr(config, 'torch_dtype', torch.bfloat16),
             trust_remote_code=True,
-            attn_implementation="eager"
+            attn_implementation="flash_attention_2" if torch.cuda.is_available() else "eager"
         )
             
         self.hidden_size = self.transformer.config.hidden_size
@@ -44,7 +45,7 @@ class RegressionPRMModel(PreTrainedModel):
         Load a RegressionPRMModel from a pretrained base model for initial training.
         """
         # Load the base model config first
-        config = AutoConfig.from_pretrained(base_model_name, **kwargs)
+        config = AutoConfig.from_pretrained(base_model_name, trust_remote_code=True)
         
         # Add our custom attributes to config for saving
         config.base_model_name = base_model_name
@@ -53,7 +54,12 @@ class RegressionPRMModel(PreTrainedModel):
         model = cls(config)
         
         # Now, load the pretrained weights for the transformer part
-        model.transformer = AutoModel.from_pretrained(base_model_name, **kwargs)
+        model.transformer = AutoModel.from_pretrained(
+            base_model_name, 
+            trust_remote_code=True,
+            attn_implementation="flash_attention_2" if torch.cuda.is_available() else "eager",
+            **kwargs
+        )
         
         return model
     
@@ -66,10 +72,26 @@ class RegressionPRMModel(PreTrainedModel):
         """Enable or disable gradient checkpointing for the underlying transformer."""
         # Only apply gradient checkpointing to the transformer module, not the regression head
         if module is self.transformer:
-            if hasattr(module, '_set_gradient_checkpointing'):
-                module._set_gradient_checkpointing(module, value)
+            if hasattr(module, 'gradient_checkpointing_enable'):
+                if value:
+                    module.gradient_checkpointing_enable()
+                else:
+                    module.gradient_checkpointing_disable()
             elif hasattr(module, 'gradient_checkpointing'):
                 module.gradient_checkpointing = value
+    
+    def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs=None):
+        """Enable gradient checkpointing for the model."""
+        if hasattr(self.transformer, 'gradient_checkpointing_enable'):
+            if gradient_checkpointing_kwargs is not None:
+                self.transformer.gradient_checkpointing_enable(**gradient_checkpointing_kwargs)
+            else:
+                self.transformer.gradient_checkpointing_enable()
+    
+    def gradient_checkpointing_disable(self):
+        """Disable gradient checkpointing for the model."""
+        if hasattr(self.transformer, 'gradient_checkpointing_disable'):
+            self.transformer.gradient_checkpointing_disable()
     
     def forward(
         self,

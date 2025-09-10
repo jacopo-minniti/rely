@@ -117,7 +117,7 @@ class RegressionPRMTrainer(Trainer):
             data_collator = DataCollatorForTokenClassification(
                 tokenizer, 
                 padding=True,
-                pad_to_multiple_of=8,  # Pad to multiple of 8 for efficiency
+                pad_to_multiple_of=8,
                 return_tensors="pt"
             )
 
@@ -169,7 +169,7 @@ class RegressionPRMTrainer(Trainer):
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
+            processing_class=tokenizer,  # Use processing_class instead of tokenizer
             model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
@@ -305,7 +305,7 @@ class RegressionPRMTrainer(Trainer):
         model_card = generate_model_card(
             base_model=base_model,
             model_name=model_name,
-            hub_model_id=self.hub_model_id,
+            hub_model_id=self.args.hub_model_id,
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
