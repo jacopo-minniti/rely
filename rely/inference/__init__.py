@@ -30,7 +30,7 @@ from .self_consistency import (
     save_self_consistency_result
 )
 
-from .sbs import (
+from ...scripts.sbs_old import (
     SBSConfig,
     StepBeamSearch
 )

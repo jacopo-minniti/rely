@@ -24,7 +24,7 @@ from datasets import load_dataset
 from rely.utils import MATH_SYSTEM_PROMPT, extract_final_answer, normalize_answer
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__) 
 
 # --- OpenAI Client Configuration ---
 OPENAI_API_KEY = "EMPTY"
@@ -270,7 +270,7 @@ class StepBeamSearch:
         candidates.sort(key=lambda x: x.value, reverse=True)
         new_active_beams, newly_completed = [], 0
         
-        for cand in candidates[:self.config.step_beam_width]: # Use original beam width for selection
+        for cand in candidates[:self.current_beam_width]:
             max_depth_reached = self.config.max_depth is not None and cand.depth >= self.config.max_depth
             if cand.is_terminal or max_depth_reached:
                 self.completed_beams.append(cand)
@@ -322,7 +322,8 @@ class StepBeamSearch:
             
         logger.info(f"[Rank {self.worker_rank}] Forcing final answers for {len(beams_needing_answers)} beams")
         
-        force_prompts = [self.create_prompt(question, beam.full_text) + "\n\n# Final Answer\n\\boxed{" for beam in beams_needing_answers]
+        force_prompts = [self.create_prompt(question, beam.full_text) + "\n\n# Final Answer\n\\boxed{"
+ for beam in beams_needing_answers]
         
         forced_outputs = [""] * len(force_prompts)
         with ThreadPoolExecutor(max_workers=len(force_prompts)) as executor:
@@ -347,7 +348,8 @@ class StepBeamSearch:
         
         for i, beam in enumerate(beams_needing_answers):
             if forced_outputs[i]:
-                full_forced_text = "\n\n# Final Answer\n\\boxed{" + forced_outputs[i]
+                full_forced_text = "\n\n# Final Answer\n\\boxed{"
+ + forced_outputs[i]
                 beam.text += full_forced_text
                 beam.full_text += full_forced_text
                 beam.is_terminal = True
