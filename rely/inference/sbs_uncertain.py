@@ -146,31 +146,55 @@ class StepBeamSearch:
     def _calculate_sample_distribution(self, uncertainty_scores: List[float]) -> List[int]:
         if not uncertainty_scores:
             return []
-        
+
+        num_beams = len(uncertainty_scores)
+        total_samples = self.config.n_total_samples
+
         total_uncertainty = sum(uncertainty_scores)
         if total_uncertainty == 0:
-            samples_per_beam = self.config.n_total_samples // len(uncertainty_scores)
-            remainder = self.config.n_total_samples % len(uncertainty_scores)
-            distribution = [samples_per_beam] * len(uncertainty_scores)
+            # Fallback to even distribution if all uncertainties are zero
+            samples_per_beam = total_samples // num_beams
+            remainder = total_samples % num_beams
+            distribution = [samples_per_beam] * num_beams
             for i in range(remainder):
                 distribution[i] += 1
             return distribution
-        
+
+        # Proportional allocation
         normalized_scores = [score / total_uncertainty for score in uncertainty_scores]
+        sample_distribution = [int(norm_score * total_samples) for norm_score in normalized_scores]
+
+        # Distribute remainder to most uncertain beams to stay within budget
+        total_assigned = sum(sample_distribution)
+        remainder = total_samples - total_assigned
+        if remainder > 0:
+            sorted_indices = sorted(range(num_beams), key=lambda k: uncertainty_scores[k], reverse=True)
+            for i in range(remainder):
+                sample_distribution[sorted_indices[i % num_beams]] += 1
+        
+        # "Robin Hood" redistribution: take from the richest, give to the poorest
+        zero_indices = [i for i, s in enumerate(sample_distribution) if s == 0]
+        if zero_indices:
+            for i in zero_indices:
+                # Find the current richest beam that can afford to give one sample
+                # This needs to be re-evaluated in each iteration as the max might change
+                donatable_beams = sorted([(s, j) for j, s in enumerate(sample_distribution) if s > 1], reverse=True)
+                
+                if donatable_beams:
+                    # Index of the richest beam
+                    max_index = donatable_beams[0][1]
+                    
+                    # Redistribute
+                    sample_distribution[max_index] -= 1
+                    sample_distribution[i] += 1
+                else:
+                    # This occurs if n_samples < num_beams, where no beam has more than 1 sample.
+                    # Cannot redistribute without violating budget or the "min 1" rule.
+                    break
         
         if self.config.verbose:
             logger.info(f"[Rank {self.worker_rank}] Normalized uncertainty scores: {[f'{s:.3f}' for s in normalized_scores]}")
-        
-        sample_distribution = []
-        total_assigned = 0
-        for i, norm_score in enumerate(normalized_scores):
-            if i == len(normalized_scores) - 1:
-                samples = self.config.n_total_samples - total_assigned
-            else:
-                samples = int(norm_score * self.config.n_total_samples)
-                total_assigned += samples
-            sample_distribution.append(max(1, samples))
-        
+
         return sample_distribution
 
     def _make_api_request_with_samples(self, prompt: str, n_samples: int) -> List[str]:
