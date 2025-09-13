@@ -372,7 +372,8 @@ class StepBeamSearch:
         
         for i, beam in enumerate(beams_needing_answers):
             if forced_outputs[i]:
-                full_forced_text = "\n\n# Final Answer\n\\boxed{" + forced_outputs[i]
+                full_forced_text = "\n\n# Final Answer\n\\boxed{"
+ + forced_outputs[i]
                 beam.text += full_forced_text
                 beam.full_text += full_forced_text
                 beam.is_terminal = True
@@ -437,7 +438,7 @@ def _uncertainty_model_server(args: argparse.Namespace, task_queue: Queue, resul
     model.eval()
     logger.info("[UncertaintyServer] Uncertainty model loaded.")
 
-    prompt_pattern = re.compile(r"<\|im_start\|>system\n(.*?)<\|im_end\|>\n<\|im_start\|>user\n(.*?)<\|im_end\|>\n<\|im_start\|>assistant\n(.*)", re.DOTALL)
+    prompt_pattern = re.compile(r"<\|im_start\|>system\n(.*?)\|im_end\|>\n<\|im_start\|>user\n(.*?)\|im_end\|>\n<\|im_start\|>assistant\n(.*)", re.DOTALL)
 
     @torch.no_grad()
     def get_uncertainties(prompts: List[str]) -> List[float]:
@@ -516,7 +517,7 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
     model.eval()
     logger.info("[ValueServer] Value model loaded.")
 
-    prompt_pattern = re.compile(r"<\|im_start\|>system\n(.*?)<\|im_end\|>\n<\|im_start\|>user\n(.*?)<\|im_end\|>\n<\|im_start\|>assistant\n(.*)", re.DOTALL)
+    prompt_pattern = re.compile(r"<\|im_start\|>system\n(.*?)\|im_end\|>\n<\|im_start\|>user\n(.*?)\|im_end\|>\n<\|im_start\|>assistant\n(.*)", re.DOTALL)
 
     @torch.no_grad()
     def get_values(prompts: List[str], generated_texts: List[str]) -> List[float]:
@@ -608,6 +609,10 @@ def run_sbs_on_dataset(args: argparse.Namespace):
     ds = ds.shuffle(seed=42)
     dataset = [{'original_index': i, **item} for i, item in enumerate(ds)]
 
+    if args.idx_start is not None and args.idx_end is not None:
+        dataset = dataset[args.idx_start:args.idx_end]
+        logger.info(f"Processing dataset slice from {args.idx_start} to {args.idx_end}. Total items: {len(dataset)}")
+
     # --- Check for already processed questions and exclude them ---
     results_dir = "results/sbs_uncertain_max_4_20"
     if os.path.exists(results_dir):
@@ -686,6 +691,9 @@ def main():
     
     parser.add_argument("--value_method", type=str, default="last_step", choices=["last_step", "product"], help="Method to calculate node value.")
     parser.add_argument("--uncertainty_method", type=str, default="last_step", choices=["last_step", "product", "average", "minimum"], help="Method to aggregate uncertainty scores.")
+
+    parser.add_argument("--idx_start", type=int, default=None, help="Start index of the dataset split.")
+    parser.add_argument("--idx_end", type=int, default=None, help="End index of the dataset split.")
     
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
@@ -693,3 +701,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

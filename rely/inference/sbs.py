@@ -292,7 +292,7 @@ class StepBeamSearch:
         
         return solutions, saved_files
         
-    def _force_final_answers(self, question: str, beams: List[SBSNode]) -> None:
+    def _force_final_answers(self, question: str, beams: List[SBSNode]) -> None: 
         """Force generation of final answers for beams that haven't terminated naturally."""
         beams_needing_answers = [beam for beam in beams if not beam.is_terminal and not beam.final_answer]
         
@@ -337,7 +337,7 @@ class StepBeamSearch:
         for i, beam in enumerate(beams_needing_answers):
             forced_text = forced_outputs[i]
             if forced_text:
-                full_forced_text = "\n\n# Final Answer\n\\boxed{" + forced_text
+                full_forced_text = "\n\n# Final Answer\n\\boxed{"
                 beam.text += full_forced_text
                 beam.full_text += full_forced_text
                 
@@ -605,6 +605,10 @@ def run_sbs_on_dataset(args: argparse.Namespace):
     for i, item in enumerate(dataset):
         item['original_index'] = i
 
+    if args.idx_start is not None and args.idx_end is not None:
+        dataset = dataset[args.idx_start:args.idx_end]
+        logger.info(f"Processing dataset slice from {args.idx_start} to {args.idx_end}. Total items: {len(dataset)}")
+
     # --- TEMPORARY: Filter out already processed questions ---
     # existing_results_dir = "results/sbs_max_4_20"
     # if os.path.exists(existing_results_dir):
@@ -684,9 +688,12 @@ def main():
         "--value_method", 
         type=str, 
         default="last_step", 
-        choices=["last_step", "product"], 
+        choices=["last_step", "product"],
         help="Method to calculate node value: 'last_step' (default) or 'product' of path."
     )
+
+    parser.add_argument("--idx_start", type=int, default=None, help="Start index of the dataset split.")
+    parser.add_argument("--idx_end", type=int, default=None, help="End index of the dataset split.")
     
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
