@@ -694,23 +694,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-'''
-CUDA_VISIBLE_DEVICES="1" vllm serve Qwen/Qwen2.5-1.5B-Instruct \
-    --tensor-parallel-size 1 \
-    --pipeline-parallel-size 1 \
-    --gpu-memory-utilization 0.90 \
-    --max-model-len 5000 \
-    --dtype bfloat16 \
-    --enable-prefix-caching \
-    --port 8000
-
-python rely/inference/sbs.py \
-    --dataset nlile/hendrycks-MATH-benchmark \
-    --output_dir sbs_results_b1_4_b2_5_product// \
-    --value_model_path Qwen/Qwen2.5-Math-PRM-7B \
-    --num_workers 5 \
-    --value_model_gpu 0 \
-    --value_method product \
-    --budget 20000
-'''
