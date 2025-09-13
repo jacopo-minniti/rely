@@ -372,8 +372,7 @@ class StepBeamSearch:
         
         for i, beam in enumerate(beams_needing_answers):
             if forced_outputs[i]:
-                full_forced_text = "\n\n# Final Answer\n\\boxed{"
- + forced_outputs[i]
+                full_forced_text = "\n\n# Final Answer\n\\boxed{" + forced_outputs[i]
                 beam.text += full_forced_text
                 beam.full_text += full_forced_text
                 beam.is_terminal = True
@@ -424,8 +423,7 @@ class StepBeamSearch:
 
 
 def _uncertainty_model_server(args: argparse.Namespace, task_queue: Queue, result_queues: List[Queue]):
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.uncertainty_model_gpu)
-    uncertainty_device = torch.device("cuda:0")
+    uncertainty_device = torch.device(f"cuda:{args.uncertainty_model_gpu}")
     logger.info(f"[UncertaintyServer] Starting on device {uncertainty_device}")
 
     tokenizer = AutoTokenizer.from_pretrained(args.uncertainty_model_path, trust_remote_code=True)
@@ -484,7 +482,7 @@ def _uncertainty_model_server(args: argparse.Namespace, task_queue: Queue, resul
         else:  # "last_step" is default
             seq_len = token_masks.size(1)
             reverse_mask = torch.flip(token_masks, dims=[1])
-            last_indices = (seq_len - 1) - torch.argmax(reverse_mask, dim=1)
+            last_indices = (seq_len - 1) - torch.argmax(reverse_mask.float(), dim=1)
             calculated_uncertainties = torch.gather(uncertainty_probs, 1, last_indices.unsqueeze(-1)).squeeze(-1)
             
         final_uncertainties = torch.where(has_separator, calculated_uncertainties, default_uncertainty)
@@ -504,8 +502,7 @@ def _uncertainty_model_server(args: argparse.Namespace, task_queue: Queue, resul
 
 
 def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queues: List[Queue]):
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.value_model_gpu)
-    value_device = torch.device("cuda:0")
+    value_device = torch.device(f"cuda:{args.value_model_gpu}")
     logger.info(f"[ValueServer] Starting on device {value_device}")
 
     tokenizer = AutoTokenizer.from_pretrained(args.value_model_path, trust_remote_code=True)
@@ -549,7 +546,7 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
         
         seq_len = token_masks.size(1)
         reverse_mask = torch.flip(token_masks, dims=[1])
-        last_indices = (seq_len - 1) - torch.argmax(reverse_mask, dim=1)
+        last_indices = (seq_len - 1) - torch.argmax(reverse_mask.float(), dim=1)
         
         last_step_scores = torch.gather(scores, 1, last_indices.unsqueeze(-1)).squeeze(-1)
         
