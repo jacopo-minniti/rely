@@ -2,6 +2,7 @@ import json
 import glob
 from collections import Counter
 import os
+import numpy as np
 
 def _find_result_files(base_path: str) -> list[str]:
     """
@@ -153,5 +154,11 @@ def display_metrics(metrics: dict):
     print("----------------------------------------------------\n")
 
 
-# calculated_metrics = process_and_calculate_metrics(base_dir)
-# display_metrics(calculated_metrics)
+def calc_flops(tokens):
+    """
+    Calculates the flops based on the number of tokens.
+    """
+    # calculate flops
+    flops_val = 2_620_000_000 * tokens
+    # convert as power of 2
+    return round(np.log2(flops_val), 2)
