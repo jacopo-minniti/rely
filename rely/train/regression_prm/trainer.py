@@ -3,12 +3,13 @@ import textwrap
 from itertools import chain
 from pathlib import Path
 from typing import Callable, Optional, Union
+import numpy as np
 
 import torch
 import torch.nn as nn
 from accelerate import PartialState
 from datasets import Dataset, features
-from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.metrics import mean_squared_error, r2_score, accuracy_score, roc_auc_score, f1_score
 from transformers import (
     BaseImageProcessor,
     DataCollator,
@@ -30,9 +31,9 @@ if is_wandb_available():
     import wandb
 
 
-def compute_regression_metrics(eval_pred: EvalPrediction):
+def compute_soft_classification_metrics(eval_pred: EvalPrediction):
     """
-    Computes metrics for regression tasks (MSE and R2).
+    Computes metrics for soft classification tasks (MSE, R2, Accuracy, AUROC, F1).
     Filters out predictions where the label is -100.
     """
     predictions, labels = eval_pred
@@ -43,19 +44,35 @@ def compute_regression_metrics(eval_pred: EvalPrediction):
     mse = mean_squared_error(active_labels, active_predictions)
     r2 = r2_score(active_labels, active_predictions)
     
-    return {"mse": mse, "r2": r2}
+    # For classification metrics, we need to binarize the labels and predictions.
+    # Let's use a 0.5 threshold.
+    pred_class = (active_predictions > 0.5).astype(int)
+    label_class = (active_labels > 0.5).astype(int)
+    
+    accuracy = accuracy_score(label_class, pred_class)
+    
+    # AUROC can be calculated with soft predictions (probabilities)
+    try:
+        auroc = roc_auc_score(label_class, active_predictions)
+    except ValueError:
+        # This can happen if only one class is present in the labels.
+        auroc = 0.5
+
+    f1 = f1_score(label_class, pred_class, zero_division=0)
+    
+    return {"mse": mse, "r2": r2, "accuracy": accuracy, "auroc": auroc, "f1": f1}
 
 
-class RegressionPRMTrainer(Trainer):
+class SoftClassificationPRMTrainer(Trainer):
     """
-    Initialize RegressionPRMTrainer.
+    Initialize SoftClassificationPRMTrainer.
 
-    This trainer is adapted for PRM-style (Process Reward Model) training for **regression** tasks.
-    It expects continuous, real-valued labels instead of binary 0/1 labels.
+    This trainer is adapted for PRM-style (Process Reward Model) training for **soft classification** tasks.
+    It expects continuous, real-valued labels between 0 and 1.
 
     Args:
         model (`transformers.PreTrainedModel`):
-            The model to train, preferably a `RegressionPRMModel` or similar model with regression capabilities.
+            The model to train, preferably a `SoftClassificationPRMModel` or similar model.
         args (`PRMConfig`):
             The arguments to use for training.
         data_collator (`transformers.DataCollator`):
@@ -69,8 +86,8 @@ class RegressionPRMTrainer(Trainer):
             Tokenizer used to process the data.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training.
-        compute_metrics (`Callable[[transformers.EvalPrediction], dict]`, *optional*, defaults to `compute_regression_metrics`):
-            The metrics to use for evaluation. Defaults to Mean Squared Error and R2 score for regression.
+        compute_metrics (`Callable[[transformers.EvalPrediction], dict]`, *optional*, defaults to `compute_soft_classification_metrics`):
+            The metrics to use for evaluation. Defaults to MSE, R2, Accuracy, AUROC, and F1 score for soft classification.
         callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
@@ -79,7 +96,7 @@ class RegressionPRMTrainer(Trainer):
             The function to use to preprocess the logits before computing the metrics.
     """
 
-    _tag_names = ["trl", "prm", "regression"]
+    _tag_names = ["trl", "prm", "soft-classification"]
 
     def __init__(
         self,
@@ -101,13 +118,11 @@ class RegressionPRMTrainer(Trainer):
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
     ):
 
-        # Disable dropout in the model
         if args.disable_dropout:
             disable_dropout_in_model(model)
         
-        # Set default compute_metrics for regression
         if compute_metrics is None:
-            compute_metrics = compute_regression_metrics
+            compute_metrics = compute_soft_classification_metrics
 
         if data_collator is None:
             if tokenizer is None:
@@ -156,7 +171,6 @@ class RegressionPRMTrainer(Trainer):
                         desc="Tokenizing eval dataset",
                         features=features.Features(
                             {
-                                # MODIFIED: Use float32 for continuous regression labels
                                 "labels": features.Sequence(features.Value("float32")),
                                 "input_ids": features.Sequence(features.Value("int64")),
                             }
@@ -294,13 +308,13 @@ class RegressionPRMTrainer(Trainer):
         tags.update(self._tag_names)
 
         # docstyle-ignore
-        citation = textwrap.dedent("""
+        citation = textwrap.dedent('''
         @article{uesato2022solving,
             title        = {{Solving Math Word Problems With Process- and Outcome-Based Feedback}},
             author       = {Uesato, Jonathan and Kushman, Nate and Kumar, Ramana and Song, Francis and Siegel, Noah and Wang, Lisa and Creswell, Antonia and Irving, Geoffrey and Higgins, Irina},
             year         = 2022,
             journal      = {arXiv preprint arXiv:2211.14275}
-        }""")
+        }''')
 
         model_card = generate_model_card(
             base_model=base_model,

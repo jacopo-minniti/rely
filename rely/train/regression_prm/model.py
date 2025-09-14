@@ -7,23 +7,21 @@ from transformers.modeling_outputs import TokenClassifierOutput
 from typing import Optional, Union
 
 
-class RegressionPRMModel(PreTrainedModel):
+class SoftClassificationPRMModel(PreTrainedModel):
     config_class = AutoConfig
     _supports_sdpa = True
-    supports_gradient_checkpointing = True  # Enable gradient checkpointing support
-    _no_split_modules = ["Qwen2DecoderLayer"]  # Add this to prevent splitting during gradient checkpointing
+    supports_gradient_checkpointing = True
+    _no_split_modules = ["Qwen2DecoderLayer"]
     """
-    A regression model that wraps a base transformer model with a linear regression head.
+    A soft classification model that wraps a base transformer model with a linear head.
     
-    This model outputs continuous values for each token, suitable for Process Reward Model (PRM)
-    regression tasks.
+    This model outputs continuous values between 0 and 1 for each token, suitable for 
+    Process Reward Model (PRM) tasks with normalized scores.
     """
     
     def __init__(self, config):
         super().__init__(config)
         
-        # Instantiate the base transformer using the config from the checkpoint.
-        # This creates the correct architecture without loading any weights yet.
         self.transformer = AutoModel.from_config(
             config,
             dtype=getattr(config, 'torch_dtype', torch.bfloat16),
@@ -33,27 +31,22 @@ class RegressionPRMModel(PreTrainedModel):
             
         self.hidden_size = self.transformer.config.hidden_size
             
-        self.regression_head = nn.Linear(self.hidden_size, 1)
-        self.regression_head = self.regression_head.float()
+        self.classification_head = nn.Linear(self.hidden_size, 1)
+        self.classification_head = self.classification_head.float()
         
-        # Initialize weights
         self.post_init()
     
     @classmethod
     def from_base_model(cls, base_model_name: str, **kwargs):
         """
-        Load a RegressionPRMModel from a pretrained base model for initial training.
+        Load a SoftClassificationPRMModel from a pretrained base model for initial training.
         """
-        # Load the base model config first
         config = AutoConfig.from_pretrained(base_model_name, trust_remote_code=True)
         
-        # Add our custom attributes to config for saving
         config.base_model_name = base_model_name
         
-        # Create our custom model shell using the config
         model = cls(config)
         
-        # Now, load the pretrained weights for the transformer part
         model.transformer = AutoModel.from_pretrained(
             base_model_name, 
             trust_remote_code=True,
@@ -64,13 +57,10 @@ class RegressionPRMModel(PreTrainedModel):
         return model
     
     def resize_token_embeddings(self, new_num_tokens: int):
-        """Resize token embeddings when new tokens are added."""
         if self.transformer:
             self.transformer.resize_token_embeddings(new_num_tokens)
     
     def _set_gradient_checkpointing(self, module, value=False):
-        """Enable or disable gradient checkpointing for the underlying transformer."""
-        # Only apply gradient checkpointing to the transformer module, not the regression head
         if module is self.transformer:
             if hasattr(module, 'gradient_checkpointing_enable'):
                 if value:
@@ -81,7 +71,6 @@ class RegressionPRMModel(PreTrainedModel):
                 module.gradient_checkpointing = value
     
     def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs=None):
-        """Enable gradient checkpointing for the model."""
         if hasattr(self.transformer, 'gradient_checkpointing_enable'):
             if gradient_checkpointing_kwargs is not None:
                 self.transformer.gradient_checkpointing_enable(**gradient_checkpointing_kwargs)
@@ -89,7 +78,6 @@ class RegressionPRMModel(PreTrainedModel):
                 self.transformer.gradient_checkpointing_enable()
     
     def gradient_checkpointing_disable(self):
-        """Disable gradient checkpointing for the model."""
         if hasattr(self.transformer, 'gradient_checkpointing_disable'):
             self.transformer.gradient_checkpointing_disable()
     
@@ -101,40 +89,32 @@ class RegressionPRMModel(PreTrainedModel):
         **kwargs
     ) -> TokenClassifierOutput:
         """
-        Forward pass of the regression model.
+        Forward pass of the soft classification model.
         """
-        # Get transformer outputs
         outputs = self.transformer(
             input_ids=input_ids,
             attention_mask=attention_mask,
             **kwargs
         )
         
-        # Get hidden states
-        hidden_states = outputs.last_hidden_state  # (batch_size, seq_len, hidden_size)
+        hidden_states = outputs.last_hidden_state
         
-        # Apply regression head
-        logits = self.regression_head(hidden_states)  # (batch_size, seq_len, 1)
-        logits = logits.squeeze(-1)  # (batch_size, seq_len)
+        logits = self.classification_head(hidden_states)
+        logits = logits.squeeze(-1)
         
-        # Ensure logits are float for regression
         if logits.dtype != torch.float32:
             logits = logits.float()
         
         loss = None
         if labels is not None:
-            # Ensure labels are float type for regression
             if labels.dtype != torch.float32:
                 labels = labels.float()
                 
-            # Use MSE loss for regression
-            loss_fct = nn.MSELoss()
+            loss_fct = nn.BCEWithLogitsLoss()
             
-            # Only compute loss on non-ignored tokens (labels != -100.0)
             active_loss = attention_mask.view(-1) == 1
             active_logits = logits.view(-1)[active_loss]
             
-            # Filter out -100.0 labels
             active_labels = labels.view(-1)[active_loss]
             loss_mask = active_labels != -100.0
             
@@ -145,9 +125,11 @@ class RegressionPRMModel(PreTrainedModel):
             else:
                 loss = torch.tensor(0.0, device=logits.device, requires_grad=True)
         
+        final_outputs = torch.sigmoid(logits)
+        
         return TokenClassifierOutput(
             loss=loss,
-            logits=logits,
+            logits=final_outputs,
             hidden_states=outputs.hidden_states if hasattr(outputs, 'hidden_states') else None,
             attentions=outputs.attentions if hasattr(outputs, 'attentions') else None,
         )

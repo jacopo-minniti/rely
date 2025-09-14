@@ -3,8 +3,8 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 from accelerate import Accelerator
 from accelerate.utils import DummyOptim, DummyScheduler
-from trainer import RegressionPRMTrainer
-from model import RegressionPRMModel
+from trainer import SoftClassificationPRMTrainer
+from model import SoftClassificationPRMModel
 from trl import PRMConfig
 
 def main():
@@ -24,7 +24,7 @@ def main():
     
     # Load model - DeepSpeed will handle initialization
     print("Loading model...")
-    model = RegressionPRMModel.from_base_model(model_name, torch_dtype=torch.bfloat16)
+    model = SoftClassificationPRMModel.from_base_model(model_name, torch_dtype=torch.bfloat16)
     
     # Resize token embeddings if needed
     if step_separator_token not in tokenizer.get_vocab():
@@ -54,7 +54,7 @@ def main():
     print("Configuring training arguments...")
     training_args = PRMConfig(
         output_dir="./outputs/out",
-        hub_model_id="jacopo-minniti/Qwen2.5-Math-7B-PUM-regression",
+        hub_model_id="jacopo-minniti/Qwen2.5-Math-7B-PUM-soft-classification",
         max_length=2048,
         train_on_last_step_only=False,
         step_separator=step_separator_token,
@@ -83,7 +83,7 @@ def main():
 
     # --- 4. Initialize Trainer ---
     print("Initializing Trainer...")
-    trainer = RegressionPRMTrainer(
+    trainer = SoftClassificationPRMTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
@@ -98,7 +98,7 @@ def main():
 
     # --- 6. Push to Hub ---
     print("Pushing final model to the Hub...")
-    trainer.push_to_hub("Qwen2.5-Math-7B-PUM-regression", token="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")
+    trainer.push_to_hub("Qwen2.5-Math-7B-PUM-soft-classification", token="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")
     print("Script finished successfully.")
 
 

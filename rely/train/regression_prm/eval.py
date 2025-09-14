@@ -4,13 +4,13 @@ import torch
 import numpy as np
 from datasets import load_dataset
 from transformers import AutoTokenizer
-from sklearn.metrics import r2_score
+from sklearn.metrics import r2_score, accuracy_score, roc_auc_score, f1_score
 from tqdm import tqdm
 import argparse
 from pathlib import Path
 
-from model import RegressionPRMModel
-from trainer import RegressionPRMTrainer
+from model import SoftClassificationPRMModel
+from trainer import SoftClassificationPRMTrainer
 
 
 def load_model_and_tokenizer(checkpoint_path: str):
@@ -19,7 +19,7 @@ def load_model_and_tokenizer(checkpoint_path: str):
     
     # Load tokenizer from checkpoint
     tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
-    model = RegressionPRMModel.from_pretrained(checkpoint_path)
+    model = SoftClassificationPRMModel.from_pretrained(checkpoint_path)
     
     return model, tokenizer
 
@@ -27,7 +27,7 @@ def load_model_and_tokenizer(checkpoint_path: str):
 def tokenize_example(example, tokenizer, step_separator, max_length):
     """Tokenize a single example in the same format as training."""
     # Get the tokenization function from trainer
-    tokenized = RegressionPRMTrainer.tokenize_row(
+    tokenized = SoftClassificationPRMTrainer.tokenize_row(
         features=example,
         tokenizer=tokenizer,
         step_separator=step_separator,
@@ -95,7 +95,7 @@ def evaluate_model(model, tokenizer, dataset, device, max_length, step_separator
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate Regression PRM model")
+    parser = argparse.ArgumentParser(description="Evaluate Soft Classification PRM model")
     parser.add_argument(
         "--checkpoint_path", 
         type=str, 
@@ -136,7 +136,7 @@ def main():
         raise ValueError(f"Checkpoint path does not exist or is not a directory: {checkpoint_path}")
     
     print("="*60)
-    print("REGRESSION PRM MODEL EVALUATION")
+    print("SOFT CLASSIFICATION PRM MODEL EVALUATION")
     print("="*60)
     print(f"Checkpoint: {args.checkpoint_path}")
     print(f"Device: {args.device}")
@@ -169,17 +169,36 @@ def main():
     
     # Calculate and print metrics
     if len(predictions) > 0:
+        # --- Soft Metrics (on probabilities) ---
         r2 = r2_score(labels, predictions)
         mse = np.mean((predictions - labels) ** 2)
         mae = np.mean(np.abs(predictions - labels))
         
+        # Binarize for classification metrics
+        label_class = (labels > 0.5).astype(int)
+        
+        try:
+            auroc = roc_auc_score(label_class, predictions)
+        except ValueError:
+            auroc = 0.5 # If only one class is present in labels
+
+        # --- Hard Metrics (on binarized classes with 0.5 threshold) ---
+        pred_class = (predictions > 0.5).astype(int)
+        accuracy = accuracy_score(label_class, pred_class)
+        f1 = f1_score(label_class, pred_class, zero_division=0)
+
         print("\n" + "="*60)
         print("EVALUATION RESULTS")
         print("="*60)
         print(f"Number of valid predictions: {len(predictions)}")
+        print("\n--- Soft Metrics (on probabilities) ---")
+        print(f"Mean Squared Error (Brier Score): {mse:.4f}")
+        print(f"Mean Absolute Error: {mae:.4f}")
         print(f"R² Score: {r2:.4f}")
-        print(f"Mean Squared Error (MSE): {mse:.4f}")
-        print(f"Mean Absolute Error (MAE): {mae:.4f}")
+        print(f"AUROC: {auroc:.4f}")
+        print("\n--- Hard Metrics (threshold @ 0.5) ---")
+        print(f"Accuracy: {accuracy:.4f}")
+        print(f"F1 Score: {f1:.4f}")
         print("="*60)
         
         # Additional statistics
