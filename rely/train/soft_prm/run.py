@@ -10,7 +10,7 @@ from trl import PRMConfig
 def main():
     # --- 1. Load Model and Tokenizer ---
     print("Loading model and tokenizer...")
-    model_name = "Qwen/Qwen2.5-Math-7B"
+    model_name = "Qwen/Qwen2.5-Math-1.5B"
     
     # Load tokenizer first
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -55,7 +55,7 @@ def main():
     training_args = PRMConfig(
         output_dir="./outputs/out",
         hub_model_id="jacopo-minniti/Qwen2.5-Math-7B-PUM-soft-classification",
-        max_length=2048,
+        max_length=4096,
         train_on_last_step_only=False,
         step_separator=step_separator_token,
         num_train_epochs=2, 
@@ -64,9 +64,9 @@ def main():
         warmup_ratio=0.15,
         weight_decay=0.1,
         optim="adamw_torch",  # Changed from adamw_torch_fused to avoid compilation issues
-        per_device_train_batch_size=2,  # Increased from 1 for better efficiency
-        per_device_eval_batch_size=2,   # Increased from 1 for better efficiency
-        gradient_accumulation_steps=2,  # Reduced from 4 since we increased batch size
+        per_device_train_batch_size=4,
+        per_device_eval_batch_size=4, 
+        gradient_accumulation_steps=4,
         gradient_checkpointing=False,    # Enable gradient checkpointing for memory savings
         bf16=True,
         logging_steps=10,  
