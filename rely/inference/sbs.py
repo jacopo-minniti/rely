@@ -463,7 +463,7 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=5000,
+                max_length=6000,
             ).to(value_device)
 
             try:
