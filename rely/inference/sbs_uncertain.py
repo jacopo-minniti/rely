@@ -24,7 +24,7 @@ from datasets import load_dataset
 from rely.utils import MATH_SYSTEM_PROMPT, extract_final_answer, normalize_answer
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__) 
+logger = logging.getLogger(__name__)
 
 # --- OpenAI Client Configuration ---
 OPENAI_API_KEY = "EMPTY"
@@ -445,50 +445,95 @@ def _uncertainty_model_server(args: argparse.Namespace, task_queue: Queue, resul
         conversation_strs = []
         for prompt in prompts:
             match = prompt_pattern.match(prompt)
-            if not match: continue
+            if not match:
+                logger.error(f"Prompt did not match expected format. Cannot score. Prompt: {prompt[:200]}")
+                continue
             system_msg, user_msg, partial_solution = match.groups()
             steps = [s.strip() for s in (partial_solution or "").split('\n\n') if s.strip()]
             formatted_content = "<extra_0>".join(steps) + "<extra_0>" if steps else "<extra_0>"
             messages = [{"role": "system", "content": system_msg.strip()}, {"role": "user", "content": user_msg.strip()}, {"role": "assistant", "content": formatted_content}]
             conversation_strs.append(tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False))
 
-        if not conversation_strs: return [0.5] * len(prompts)
+        if not conversation_strs:
+            return [0.5] * len(prompts)
 
-        inputs = tokenizer(conversation_strs, return_tensors="pt", padding=True, truncation=True, max_length=7000).to(uncertainty_device)
-        
-        outputs = model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask)
+        batch_size = 8
+        all_uncertainties = []
         step_sep_id = tokenizer.encode("<extra_0>", add_special_tokens=False)[0]
-        token_masks = (inputs.input_ids == step_sep_id)
-        
-        # --- OPTIMIZED/VECTORIZED LOGIC ---
-        uncertainty_probs = torch.softmax(outputs.logits, dim=-1)[:, :, 1]
-        has_separator = token_masks.any(dim=1)
-        default_uncertainty = torch.tensor(0.5, device=uncertainty_device)
-        
-        calculated_uncertainties = torch.zeros_like(has_separator, dtype=torch.float)
 
-        if args.uncertainty_method == "product":
-            clamped_probs = uncertainty_probs.clamp(min=1e-8)
-            masked_probs = torch.where(token_masks, clamped_probs, 1.0)
-            calculated_uncertainties = masked_probs.prod(dim=1)
-        elif args.uncertainty_method == "average":
-            masked_probs = uncertainty_probs * token_masks.float()
-            sums = masked_probs.sum(dim=1)
-            counts = token_masks.sum(dim=1).clamp(min=1)
-            calculated_uncertainties = sums / counts
-        elif args.uncertainty_method == "minimum":
-            masked_probs = torch.where(token_masks, uncertainty_probs, 2.0)
-            minimums, _ = masked_probs.min(dim=1)
-            calculated_uncertainties = minimums
-        else:  # "last_step" is default
-            seq_len = token_masks.size(1)
-            reverse_mask = torch.flip(token_masks, dims=[1])
-            last_indices = (seq_len - 1) - torch.argmax(reverse_mask.float(), dim=1)
-            calculated_uncertainties = torch.gather(uncertainty_probs, 1, last_indices.unsqueeze(-1)).squeeze(-1)
-            
-        final_uncertainties = torch.where(has_separator, calculated_uncertainties, default_uncertainty)
-        return final_uncertainties.cpu().tolist()
-        # --- END OPTIMIZED LOGIC ---
+        for i in range(0, len(conversation_strs), batch_size):
+            batch_conversations = conversation_strs[i:i + batch_size]
+            inputs = tokenizer(batch_conversations, return_tensors="pt", padding=True, truncation=True, max_length=7000).to(uncertainty_device)
+
+            try:
+                outputs = model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask)
+                token_masks = (inputs.input_ids == step_sep_id)
+                
+                uncertainty_probs = torch.softmax(outputs.logits, dim=-1)[:, :, 1]
+                has_separator = token_masks.any(dim=1)
+                default_uncertainty = torch.tensor(0.5, device=uncertainty_device)
+                
+                calculated_uncertainties = torch.zeros_like(has_separator, dtype=torch.float)
+
+                if args.uncertainty_method == "product":
+                    clamped_probs = uncertainty_probs.clamp(min=1e-8)
+                    masked_probs = torch.where(token_masks, clamped_probs, 1.0)
+                    calculated_uncertainties = masked_probs.prod(dim=1)
+                elif args.uncertainty_method == "average":
+                    masked_probs = uncertainty_probs * token_masks.float()
+                    sums = masked_probs.sum(dim=1)
+                    counts = token_masks.sum(dim=1).clamp(min=1)
+                    calculated_uncertainties = sums / counts
+                elif args.uncertainty_method == "minimum":
+                    masked_probs = torch.where(token_masks, uncertainty_probs, 2.0)
+                    minimums, _ = masked_probs.min(dim=1)
+                    calculated_uncertainties = minimums
+                else:  # "last_step" is default
+                    seq_len = token_masks.size(1)
+                    reverse_mask = torch.flip(token_masks, dims=[1])
+                    last_indices = (seq_len - 1) - torch.argmax(reverse_mask.float(), dim=1)
+                    calculated_uncertainties = torch.gather(uncertainty_probs, 1, last_indices.unsqueeze(-1)).squeeze(-1)
+                
+                final_uncertainties = torch.where(has_separator, calculated_uncertainties, default_uncertainty)
+                all_uncertainties.extend(final_uncertainties.cpu().tolist())
+
+                del inputs, outputs, token_masks, uncertainty_probs
+                torch.cuda.empty_cache()
+
+            except torch.cuda.OutOfMemoryError:
+                logger.error(f"[UncertaintyServer] CUDA OOM in batch, falling back to single processing.")
+                torch.cuda.empty_cache()
+                for single_conv in batch_conversations:
+                    try:
+                        single_inputs = tokenizer([single_conv], return_tensors="pt", padding=True, truncation=True, max_length=7000).to(uncertainty_device)
+                        outputs = model(input_ids=single_inputs.input_ids, attention_mask=single_inputs.attention_mask)
+                        token_mask = (single_inputs.input_ids[0] == step_sep_id)
+                        
+                        if not token_mask.any():
+                            all_uncertainties.append(0.5)
+                            continue
+
+                        uncertainty_probs = torch.softmax(outputs.logits, dim=-1)[0, :, 1]
+                        
+                        if args.uncertainty_method == "product":
+                            score = uncertainty_probs[token_mask].clamp(min=1e-8).prod().item()
+                        elif args.uncertainty_method == "average":
+                            score = uncertainty_probs[token_mask].mean().item()
+                        elif args.uncertainty_method == "minimum":
+                            score = uncertainty_probs[token_mask].min().item()
+                        else: # "last_step"
+                            last_idx = torch.where(token_mask)[0][-1]
+                            score = uncertainty_probs[last_idx].item()
+                        
+                        all_uncertainties.append(score)
+
+                        del single_inputs, outputs
+                        torch.cuda.empty_cache()
+                    except Exception as e:
+                        logger.error(f"[UncertaintyServer] Error processing single sample in fallback: {e}")
+                        all_uncertainties.append(0.5)
+        
+        return all_uncertainties
 
     while True:
         try:
@@ -524,7 +569,9 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
         conversation_strs = []
         for prompt, gen_text in zip(prompts, generated_texts):
             match = prompt_pattern.match(prompt)
-            if not match: continue
+            if not match:
+                logger.error(f"Prompt did not match expected format. Cannot score. Prompt: {prompt[:200]}")
+                continue
             system_msg, user_msg, partial_solution = match.groups()
             full_assistant_response = ((partial_solution or "").strip() + '\n\n' + gen_text.strip()).strip()
             steps = [s.strip() for s in full_assistant_response.split('\n\n') if s.strip()]
@@ -532,31 +579,65 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
             messages = [{"role": "system", "content": system_msg.strip()}, {"role": "user", "content": user_msg.strip()}, {"role": "assistant", "content": assistant_content}]
             conversation_strs.append(tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False))
 
-        if not conversation_strs: return [0.0] * len(prompts)
+        if not conversation_strs:
+            return [0.0] * len(prompts)
 
-        inputs = tokenizer(conversation_strs, return_tensors="pt", padding=True, truncation=True, max_length=7000).to(value_device)
-        base_model_output = model.model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask, use_cache=False)
-        logits = model.score(base_model_output.last_hidden_state)
-        
-        # --- OPTIMIZED/VECTORIZED LOGIC ---
-        probabilities = torch.softmax(logits, dim=-1)
+        batch_size = 8
+        all_rewards = []
         step_sep_id = tokenizer.encode("<extra_0>", add_special_tokens=False)[0]
-        token_masks = (inputs.input_ids == step_sep_id)
+
+        for i in range(0, len(conversation_strs), batch_size):
+            batch_conversations = conversation_strs[i:i + batch_size]
+            try:
+                inputs = tokenizer(batch_conversations, return_tensors="pt", padding=True, truncation=True, max_length=7000).to(value_device)
+                base_model_output = model.model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask, use_cache=False)
+                logits = model.score(base_model_output.last_hidden_state)
+                
+                probabilities = torch.softmax(logits, dim=-1)
+                token_masks = (inputs.input_ids == step_sep_id)
+                scores = probabilities[:, :, 1]
+                
+                seq_len = token_masks.size(1)
+                reverse_mask = torch.flip(token_masks, dims=[1])
+                last_indices = (seq_len - 1) - torch.argmax(reverse_mask.float(), dim=1)
+                
+                last_step_scores = torch.gather(scores, 1, last_indices.unsqueeze(-1)).squeeze(-1)
+                has_separator = token_masks.any(dim=1)
+                
+                batch_rewards_tensor = torch.where(has_separator, last_step_scores, torch.tensor(0.0, device=value_device))
+                all_rewards.extend(batch_rewards_tensor.cpu().tolist())
+
+                del inputs, base_model_output, logits, probabilities
+                torch.cuda.empty_cache()
+
+            except torch.cuda.OutOfMemoryError:
+                logger.error(f"[ValueServer] CUDA OOM in batch, falling back to single processing.")
+                torch.cuda.empty_cache()
+                for single_conv in batch_conversations:
+                    try:
+                        single_inputs = tokenizer([single_conv], return_tensors="pt", padding=True, truncation=True, max_length=7000).to(value_device)
+                        base_model_output = model.model(input_ids=single_inputs.input_ids, attention_mask=single_inputs.attention_mask, use_cache=False)
+                        logits = model.score(base_model_output.last_hidden_state)
+                        
+                        probabilities = torch.softmax(logits, dim=-1)
+                        token_mask = (single_inputs.input_ids[0] == step_sep_id)
+                        
+                        if token_mask.any():
+                            scores = probabilities[0, :, 1]
+                            last_idx = torch.where(token_mask)[0][-1]
+                            score = scores[last_idx].item()
+                            all_rewards.append(score)
+                        else:
+                            all_rewards.append(0.0)
+
+                        del single_inputs, base_model_output, logits, probabilities
+                        torch.cuda.empty_cache()
+                    except Exception as e:
+                        logger.error(f"[ValueServer] Error processing single sample in fallback: {e}")
+                        all_rewards.append(0.0)
         
-        scores = probabilities[:, :, 1]
-        
-        seq_len = token_masks.size(1)
-        reverse_mask = torch.flip(token_masks, dims=[1])
-        last_indices = (seq_len - 1) - torch.argmax(reverse_mask.float(), dim=1)
-        
-        last_step_scores = torch.gather(scores, 1, last_indices.unsqueeze(-1)).squeeze(-1)
-        
-        has_separator = token_masks.any(dim=1)
-        
-        batch_rewards_tensor = torch.where(has_separator, last_step_scores, torch.tensor(0.0, device=value_device))
-        
-        return batch_rewards_tensor.cpu().tolist()
-        # --- END OPTIMIZED LOGIC ---
+        return all_rewards
+
 
     while True:
         try:
@@ -701,4 +782,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
