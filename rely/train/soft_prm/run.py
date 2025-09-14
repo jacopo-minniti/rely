@@ -53,7 +53,7 @@ def main():
     # --- 3. Configure Training Arguments ---
     print("Configuring training arguments...")
     training_args = PRMConfig(
-        output_dir="./outputs/out",
+        output_dir="./cache/trained_models",
         hub_model_id="jacopo-minniti/Qwen2.5-Math-7B-PUM-soft-classification",
         max_length=4096,
         train_on_last_step_only=False,
