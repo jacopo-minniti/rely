@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List, Optional, Union
 from multiprocessing import Process, Queue
 import multiprocessing as mp
+from collections import Counter
 
 import torch
 import textwrap
@@ -27,16 +28,12 @@ logger = logging.getLogger(__name__)
 
 def _model_server(model_path, device, task_queue, result_queues, model_type, config):
     """
-    Generic server for running inference on a model.
-    Loads the correct model class based on model_type and uses the Scorer.
-    Now uses per-worker result queues to avoid race conditions.
+    Generic server for running inference on a model in batches.
     """
     if model_type == "value":
-        # The value model (PRM) is a custom model loaded with AutoModel.
         model_class = AutoModel
         scoring_method = config.value_scoring_method
     elif model_type == "uncertainty":
-        # The uncertainty model (PUM) is a token classification model.
         model_class = AutoModelForTokenClassification
         scoring_method = config.uncertainty_scoring_method
     else:
@@ -53,13 +50,16 @@ def _model_server(model_path, device, task_queue, result_queues, model_type, con
     logger.info(f"{model_type.capitalize()} model server started on {device} with '{scoring_method}' scoring.")
 
     while True:
-        request_id, rank, text = task_queue.get()
-        if text is None:
+        request = task_queue.get()
+        if request is None: # Sentinel to stop
             break
         
-        score = scorer.score(text)
-        # Send result to the specific worker's result queue
-        result_queues[rank].put((request_id, score))
+        request_id, rank, texts = request
+        if texts is None:
+            break
+        
+        scores = scorer.score_batch(texts)
+        result_queues[rank].put((request_id, scores))
 
 def run_uats(
     user_questions: List[str],
@@ -77,7 +77,6 @@ def run_uats(
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
     
-    # Set multiprocessing start method to 'spawn' to avoid CUDA issues
     if mp.get_start_method(allow_none=True) != 'spawn':
         mp.set_start_method('spawn', force=True)
     
@@ -99,19 +98,15 @@ def run_uats(
     else:
         answers_list = correct_answers
 
-    # Create a task queue for questions and result queue
     question_task_queue = Queue()
     question_result_queue = Queue()
     
-    # Add all questions to the task queue
     for i, (question, correct_answer) in enumerate(zip(user_questions, answers_list)):
         question_task_queue.put((i, question, correct_answer))
     
-    # Add sentinel values to signal workers to stop
     for _ in range(num_workers):
         question_task_queue.put(None)
     
-    # Start worker processes
     worker_processes = []
     for rank in range(num_workers):
         worker_process = Process(
@@ -132,7 +127,6 @@ def run_uats(
         worker_process.start()
         worker_processes.append(worker_process)
     
-    # Collect results
     results_dict = {}
     for _ in range(len(user_questions)):
         question_idx, final_branches_dicts, all_branches_dicts, tokens_used = question_result_queue.get()
@@ -141,16 +135,13 @@ def run_uats(
         results_dict[question_idx] = final_branches
         logger.info(f"Completed question {question_idx+1}/{len(user_questions)} using {tokens_used} tokens")
     
-    # Wait for all workers to finish
     for worker_process in worker_processes:
         worker_process.join()
     
-    # Convert results dictionary to ordered list
     all_results = [results_dict[i] for i in range(len(user_questions))]
 
-    # Shutdown servers
-    uncertainty_task_queue.put((None, None, None))
-    value_task_queue.put((None, None, None))
+    uncertainty_task_queue.put(None)
+    value_task_queue.put(None)
     uncertainty_server.join()
     value_server.join()
 
@@ -172,7 +163,6 @@ def _question_worker(
     """Worker process that processes questions from the queue."""
     logger.info(f"Worker {rank} started")
     
-    # Create tokenizer and GuidedTreeSearch once per worker
     tokenizer = AutoTokenizer.from_pretrained(config.model_name)
     gts = GuidedTreeSearch(
         tokenizer=tokenizer,
@@ -186,7 +176,7 @@ def _question_worker(
     
     while True:
         task = question_task_queue.get()
-        if task is None:  # Sentinel value to stop worker
+        if task is None:
             logger.info(f"Worker {rank} stopping")
             break
         
@@ -194,24 +184,20 @@ def _question_worker(
         start_time = time.time()
         logger.info(f"Worker {rank} processing question {question_idx+1}: {question[:100]}...")
         
-        # Run tree search directly in this worker process
         final_branches, all_branches, tokens_used = gts.search(question, system_prompt)
         
-        # Convert to dicts for serialization
         final_branches_dicts = [b.to_dict() for b in final_branches]
         all_branches_dicts = [b.to_dict() for b in all_branches]
 
-        # Save results if save_dir is provided
-        if save_dir is not None:            
+        if save_dir is not None:
+            
             question_save_dir = Path(save_dir) / f"question_{question_idx}"
-            logger.info(f"Worker {rank} saving branches to {question_save_dir}")
-            save_branches(
+            logger.info(f"Worker {rank} saving results to {question_save_dir}")
+            save_results(
                 final_branches,
                 all_branches,
                 question_save_dir,
-                max_branch_tokens=config.budget,
                 user_question=question,
-                system_prompt=system_prompt,
                 correct_answer=correct_answer,
                 total_tokens_generated=tokens_used,
             )
@@ -219,97 +205,61 @@ def _question_worker(
         elapsed_time = time.time() - start_time
         logger.info(f"Worker {rank} completed question {question_idx+1} in {elapsed_time:.2f} seconds")
         
-        # Send results back
         question_result_queue.put((question_idx, final_branches_dicts, all_branches_dicts, tokens_used))
 
 
-def save_branches(
-    branches: List[Branch],
+def save_results(
+    final_beams: List[Branch],
     all_branches: List[Branch],
     output_dir: Union[str, Path],
-    max_branch_tokens: int,
     user_question: Optional[str] = None,
-    system_prompt: Optional[str] = None,
     correct_answer: Optional[str] = None,
     total_tokens_generated: Optional[int] = None,
 ) -> None:
-    """Save the *active* branches at the end of the search to disk."""
+    """Save the final results and search tree visualization to disk."""
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    if not branches:
-        return
-
-    final_branches = branches
-    
-    logger.debug(f"Saving {len(final_branches)} final branches")
-    
-    if final_branches:
-        step_counts = [b.step_count for b in final_branches]
-        logger.info(f"Selected branches: max_step={max(step_counts)}, min_step={min(step_counts)}")
-
-    summary_data = {
-        "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S"),
-        "user_question": user_question,
-        "system_prompt": system_prompt,
-        "total_tokens_generated": total_tokens_generated,
-        "total_branches": len(final_branches),
-        "branches": [],
-    }
-    
-    all_answers = []
-    correct_count = 0
-
-    for i, branch in enumerate(final_branches):
-        filepath = output_path / f"branch_{i}.txt"
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(f"Step count: {branch.step_count}\n")
-            f.write(f"Score: {branch.score:.4f}\n")
-            f.write(f"Uncertainty: {branch.uncertainty}\n")
-            f.write(f"Value: {branch.value:.4f}\n")
-            f.write(f"Total tokens: {branch.total_tokens}\n")
-            f.write("\n--- Branch Text ---\n")
-            f.write(branch.text)
-
-        if not branch.final_answer:
-            branch.final_answer = extract_final_answer(branch.text)
-
-        extracted_answer = branch.final_answer or "Not found"
-        normalized_answer = normalize_answer(extracted_answer)
-        all_answers.append(normalized_answer)
-
-        if correct_answer and normalized_answer != "Not found" and normalize_answer(correct_answer) == normalized_answer:
-            correct_count += 1
-
-        summary_data["branches"].append(
-            {
-                "branch_id": i,
-                "step_count": branch.step_count,
-                "score": branch.score,
-                "uncertainty": branch.uncertainty,
-                "value": branch.value,
-                "total_tokens": branch.total_tokens,
-                "extracted_answer": extracted_answer,
-            }
-        )
-
-    if correct_answer is not None:
-        hard_label = 1 if correct_count > 0 else 0
-        soft_label = correct_count / len(all_answers) if all_answers else 0.0
+    solutions = []
+    for i, node in enumerate(final_beams):
+        if not node.final_answer:
+            node.final_answer = extract_final_answer(node.text) or ""
         
-        summary_data["correct_answer"] = correct_answer
-        summary_data["all_answers"] = all_answers
-        summary_data["hard_label"] = hard_label
-        summary_data["soft_label"] = soft_label
-        summary_data["correct_count"] = correct_count
-        summary_data["total_answers"] = len(all_answers)
+        termination_reason = "answer_found" if node.final_answer else "budget_reached"
+        
+        solution_data = {
+            "beam_index": i + 1,
+            "value": node.value,
+            "final_answer": node.final_answer or "Not found",
+            "depth": node.step_count,
+            "termination_reason": termination_reason,
+            "solution_path": node.text,
+        }
+        solutions.append(solution_data)
 
-    summary_filepath = output_path / "results.json"
+    ground_truth = normalize_answer(correct_answer)
+    answers = [normalize_answer(s['final_answer']) for s in solutions if s['final_answer'] != "Not found"]
+    majority_vote = Counter(answers).most_common(1)[0][0] if answers else "N/A"
+    accuracy = "N/A"
+    if ground_truth and answers:
+        correct_answers_count = sum(1 for ans in answers if ans == ground_truth)
+        accuracy = f"{correct_answers_count / len(answers):.2%}" if answers else "0.00%"
+
+    summary = {
+        "question": user_question,
+        "ground_truth": ground_truth,
+        "majority_vote": majority_vote,
+        "accuracy": accuracy,
+        "solutions": solutions,
+        "total_tokens": total_tokens_generated
+    }
+
+    summary_filepath = output_path / "summary.json"
     with open(summary_filepath, "w", encoding="utf-8") as f:
-        json.dump(summary_data, f, indent=2, ensure_ascii=False)
+        json.dump(summary, f, indent=4)
 
-    logger.info(f"Saved {len(final_branches)} branches and summary to {output_path}")
+    logger.info(f"Saved summary to {summary_filepath}")
 
     try:
         _generate_tree_image(all_branches, output_path, correct_answer=correct_answer)
@@ -330,7 +280,7 @@ def _generate_tree_image(
     
     try:
         import matplotlib
-        matplotlib.use('Agg')  # Use non-interactive backend for multiprocessing
+        matplotlib.use('Agg')
     except ImportError:
         logger.warning("Matplotlib not available, skipping tree visualization")
         return
@@ -356,10 +306,12 @@ def _generate_tree_image(
                 steps = branch.text.split('\n\n')
                 latest_step = steps[-1].strip() if steps else branch.text.strip()
         
-        # Sanitize for matplotlib mathtext: replace $ with \$
-        latest_step = latest_step.replace('$', r'\$')
+        latest_step = latest_step.replace('
 
-        latest_step = re.sub(r'\boxed{(.*?)}', r'\1', latest_step)
+, r'\
+
+)
+        latest_step = re.sub(r'boxed{(.*?)}', r'\1', latest_step)
         latest_step = (latest_step[:25] + '...') if len(latest_step) > 25 else latest_step
         
         wrapped_text = textwrap.fill(latest_step, width=30)
@@ -381,8 +333,11 @@ def _generate_tree_image(
     for branch in branches:
         if branch.is_final and branch.final_answer:
             final_answer_text = re.sub(r'boxed{(.*?)}', r'\1', branch.final_answer)
-            # Sanitize final answer text as well
-            final_answer_text = final_answer_text.replace('$', r'\$')
+            final_answer_text = final_answer_text.replace('
+
+, r'\
+
+)
             final_node_id = f"final_{branch.id}"
             
             is_correct = False
@@ -427,3 +382,4 @@ def _generate_tree_image(
         logger.warning(f"Could not save tree image: {e}")
     finally:
         plt.close()
+

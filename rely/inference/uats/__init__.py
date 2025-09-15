@@ -5,7 +5,7 @@ from .guided_tree_search import GuidedTreeSearch
 from .uncertainty_model import UATSUncertaintyModel
 from .value_model import UATSValueModel
 from .utils import (
-    save_branches,
+    save_results,
     run_uats,
 )
 
@@ -15,6 +15,6 @@ __all__ = [
     "GuidedTreeSearch",
     "UATSUncertaintyModel",
     "UATSValueModel",
-    "save_branches",
+    "save_results",
     "run_uats",
 ] 
