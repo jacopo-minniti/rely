@@ -32,10 +32,12 @@ def process_json_file(path):
         majority_vote = data.get('majority_vote')
         is_majority_correct = False
         if ground_truth is not None and majority_vote is not None:
-            normalized_gt = normalize_answer(str(ground_truth))
-            normalized_mv = normalize_answer(str(majority_vote))
-            if (normalized_gt == normalized_mv or ground_truth == majority_vote) and normalized_gt != "":
-                is_majority_correct = True
+            # Skip if majority_vote is "N/A" or empty string
+            if majority_vote != "N/A" and str(majority_vote).strip():
+                normalized_gt = normalize_answer(str(ground_truth))
+                normalized_mv = normalize_answer(str(majority_vote))
+                if (normalized_gt == normalized_mv or ground_truth == majority_vote) and normalized_gt != "":
+                    is_majority_correct = True
 
         # --- 2. Best of N Calculation ---
         best_of_n_applicable = False
@@ -57,7 +59,8 @@ def process_json_file(path):
                         answer_key = 'answer'
                     elif 'final_answer' in sol:
                         answer_key = 'final_answer'
-                if answer_key is not None:
+                # Only consider solutions with non-empty answers
+                if answer_key is not None and sol.get(answer_key) and str(sol[answer_key]).strip():
                     try:
                         current_value = float(sol['value'])
                         if current_value > max_value:
@@ -79,7 +82,7 @@ def process_json_file(path):
 
     except Exception:
         # For any file reading/parsing error, count as incorrect
-        return False, 0.0, False, False, 0
+        return False, False, False, 0
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process JSON files and compute evaluation statistics.')
@@ -128,6 +131,8 @@ if __name__ == '__main__':
     # Calculate statistics
     majority_percent_correct = (majority_correct_count / total_files) * 100 if total_files > 0 else 0.0
     
+    # Best-of-N is only applicable when solutions have meaningful value scores
+    # For self-consistency, this will be 0 since all solutions have value=1.0
     if best_of_n_applicable_count > 0:
         best_of_n_percent_correct = (best_of_n_correct_count / best_of_n_applicable_count) * 100
     else:
@@ -138,6 +143,9 @@ if __name__ == '__main__':
 
     # Print results in requested format
     print(f"Majority vote is correct: {majority_percent_correct:.2f}%")
-    print(f"Best of N is correct: {best_of_n_percent_correct:.2f}%")
+    if best_of_n_applicable_count > 0:
+        print(f"Best of N is correct: {best_of_n_percent_correct:.2f}% (applicable to {best_of_n_applicable_count}/{total_files} files)")
+    else:
+        print(f"Best of N is correct: N/A (not applicable - all solutions have uniform values)")
     print(f"Mean Token used: {mean_tokens:.2f}")
     print(f"95 percentile used: {percentile_95_tokens:.2f}")

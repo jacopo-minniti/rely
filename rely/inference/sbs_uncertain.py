@@ -344,11 +344,9 @@ class StepBeamSearch:
         if not beams_needing_answers:
             return
             
-        logger.info(f"[Rank {self.worker_rank}] Forcing final answers for {len(beams_needing_answers)} beams")
-        
+        logger.info(f"[Rank {self.worker_rank}] Forcing final answers for {len(beams_needing_answers)} beams")        
         force_prompts = [self.create_prompt(question, beam.full_text) + "\n\n# Final Answer\n\\boxed{"
- for beam in beams_needing_answers]
-        
+                         for beam in beams_needing_answers]
         forced_outputs = [""] * len(force_prompts)
         with ThreadPoolExecutor(max_workers=len(force_prompts)) as executor:
             def make_forced_request(prompt):
@@ -372,8 +370,7 @@ class StepBeamSearch:
         
         for i, beam in enumerate(beams_needing_answers):
             if forced_outputs[i]:
-                full_forced_text = "\n\n# Final Answer\n\\boxed{"
- + forced_outputs[i]
+                full_forced_text = "\n\n# Final Answer\n\\boxed{" + forced_outputs[i]
                 beam.text += full_forced_text
                 beam.full_text += full_forced_text
                 beam.is_terminal = True
