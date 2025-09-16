@@ -9,7 +9,7 @@ from .uats import (
     UATSConfig,
     Branch,
     GuidedTreeSearch,
-    save_branches,
+    save_results,
     run_uats
 )
 
@@ -41,7 +41,7 @@ __all__ = [
     "Branch",
     "GuidedTreeSearch", 
     "run_uats",
-    "save_branches",
+    "save_results",
     # Budget Forcing exports
     "BudgetForcingConfig",
     "BudgetForcingResult",

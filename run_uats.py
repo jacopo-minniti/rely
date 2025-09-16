@@ -83,7 +83,7 @@ if __name__ == "__main__":
     for example in dataset:
         question_text = example["problem"]
         # Remove asy blocks, which are not useful for the model
-        cleaned_question = re.sub(r'\[asy\](.*?)\[/asy\]', '', question_text, flags=re.DOTALL).strip()
+        cleaned_question = re.sub(r'[[asy]](.*?)[[/asy]]', '', question_text, flags=re.DOTALL).strip()
         questions.append(cleaned_question)
         correct_answers.append(example["answer"])
 

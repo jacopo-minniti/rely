@@ -163,12 +163,12 @@ class SelfConsistencyInference:
         # Save results if base_path is provided (following SBS pattern)
         saved_files = []
         if base_path:
-            saved_files = _save_results(solutions, base_path, user_question, ground_truth, total_tokens)
+            saved_files = save_self_consistency_result(solutions, base_path, user_question, ground_truth, total_tokens)
 
         return {"question": user_question, "ground_truth": ground_truth, "solutions": solutions, "total_tokens": total_tokens}
 
 
-def _create_summary(solutions: List[Dict[str, Any]], question: str, ground_truth: Optional[str], total_tokens: int = 0) -> Dict[str, Any]:
+def create_self_consistency_summary(solutions: List[Dict[str, Any]], question: str, ground_truth: Optional[str], total_tokens: int = 0) -> Dict[str, Any]:
     """Create summary in exact same format as SBS."""
     normalized_ground_truth = normalize_answer(ground_truth) if ground_truth else ""
     
@@ -195,7 +195,7 @@ def _create_summary(solutions: List[Dict[str, Any]], question: str, ground_truth
     }
 
 
-def _save_results(final_solutions: List[Dict[str, Any]], base_path: str, question: str, ground_truth: Optional[str], total_tokens: int = 0) -> List[str]:
+def save_self_consistency_result(final_solutions: List[Dict[str, Any]], base_path: str, question: str, ground_truth: Optional[str], total_tokens: int = 0) -> List[str]:
     """Save results in exact same format as SBS."""
     import os
     saved_files = []
@@ -203,10 +203,39 @@ def _save_results(final_solutions: List[Dict[str, Any]], base_path: str, questio
 
     summary_path = os.path.join(base_path, "summary.json")
     with open(summary_path, 'w', encoding='utf-8') as f:
-        json.dump(_create_summary(final_solutions, question, ground_truth, total_tokens), f, indent=4)
+        json.dump(create_self_consistency_summary(final_solutions, question, ground_truth, total_tokens), f, indent=4)
     saved_files.append(summary_path)
     
     return saved_files
+
+
+def run_self_consistency(
+    user_questions: List[str],
+    config: Optional[SelfConsistencyConfig] = None,
+    ground_truths: Optional[List[str]] = None,
+    output_dir: Optional[str] = None,
+    system_prompt: str = MATH_SYSTEM_PROMPT,
+) -> List[Dict[str, Any]]:
+    """Run self-consistency for a list of questions."""
+    if config is None:
+        config = SelfConsistencyConfig()
+
+    inference = SelfConsistencyInference(config)
+    results = []
+
+    if ground_truths is None:
+        ground_truths = [None] * len(user_questions)
+
+    for i, (question, ground_truth) in enumerate(tqdm(zip(user_questions, ground_truths), total=len(user_questions), desc="Running Self-Consistency")):
+        base_path = os.path.join(output_dir, f"q_{i:04d}") if output_dir else None
+        result = inference.run_inference(
+            user_question=question,
+            ground_truth=ground_truth,
+            base_path=base_path,
+            system_prompt=system_prompt,
+        )
+        results.append(result)
+    return results
 
 
 def run_self_consistency_on_dataset(args):
