@@ -1,10 +1,8 @@
 import json
 import logging
 import os
-import random
 import re
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Union
 from multiprocessing import Process, Queue
@@ -91,8 +89,6 @@ def run_uats(
     uncertainty_server.start()
     value_server.start()
 
-    all_results = []
-    
     if correct_answers is None:
         answers_list: List[Optional[str]] = [None] * len(user_questions)
     else:
@@ -190,7 +186,6 @@ def _question_worker(
         all_branches_dicts = [b.to_dict() for b in all_branches]
 
         if save_dir is not None:
-            
             question_save_dir = Path(save_dir) / f"question_{question_idx}"
             logger.info(f"Worker {rank} saving results to {question_save_dir}")
             save_results(
@@ -209,7 +204,7 @@ def _question_worker(
 
 
 def save_results(
-    final_beams: List[Branch],
+    final_branches: List[Branch],
     all_branches: List[Branch],
     output_dir: Union[str, Path],
     user_question: Optional[str] = None,
@@ -222,7 +217,7 @@ def save_results(
     output_path.mkdir(parents=True, exist_ok=True)
 
     solutions = []
-    for i, node in enumerate(final_beams):
+    for i, node in enumerate(final_branches):
         if not node.final_answer:
             node.final_answer = extract_final_answer(node.text) or ""
         
@@ -306,11 +301,6 @@ def _generate_tree_image(
                 steps = branch.text.split('\n\n')
                 latest_step = steps[-1].strip() if steps else branch.text.strip()
         
-        latest_step = latest_step.replace('
-
-, r'\
-
-)
         latest_step = re.sub(r'boxed{(.*?)}', r'\1', latest_step)
         latest_step = (latest_step[:25] + '...') if len(latest_step) > 25 else latest_step
         
@@ -333,11 +323,6 @@ def _generate_tree_image(
     for branch in branches:
         if branch.is_final and branch.final_answer:
             final_answer_text = re.sub(r'boxed{(.*?)}', r'\1', branch.final_answer)
-            final_answer_text = final_answer_text.replace('
-
-, r'\
-
-)
             final_node_id = f"final_{branch.id}"
             
             is_correct = False
@@ -349,8 +334,13 @@ def _generate_tree_image(
             G.add_node(final_node_id, label=final_answer_text, is_final_answer=True, is_correct=is_correct)
             G.add_edge(branch.id, final_node_id)
     
-    pos = nx.nx_agraph.graphviz_layout(G, prog="dot")
-    
+    try:
+        pos = nx.nx_agraph.graphviz_layout(G, prog="dot")
+    except (ImportError, NameError):
+        logger.warning("pygraphviz not found, using spring_layout for tree visualization. "
+                       "For a better layout, please install pygraphviz.")
+        pos = nx.spring_layout(G)
+
     plt.figure(figsize=(20, 15))
     
     root_nodes = [node for node, data in G.nodes(data=True) if data.get('is_root')]
@@ -365,7 +355,7 @@ def _generate_tree_image(
     nx.draw_networkx_nodes(G, pos, nodelist=correct_final_nodes, node_shape="o", node_color="lightgreen", node_size=3500)
     nx.draw_networkx_nodes(G, pos, nodelist=incorrect_final_nodes, node_shape="o", node_color="lightcoral", node_size=3500)
     
-    nx.draw_networkx_edges(G, pos, arrows=True, arrowstyle="-|>", arrowsize=15, edge_color='gray', width=1.5)
+    nx.draw_networkx_edges(G, pos, arrows=True, arrowstyle="-| জৈ", arrowsize=15, edge_color='gray', width=1.5)
     
     node_labels = nx.get_node_attributes(G, 'label')
     nx.draw_networkx_labels(
@@ -382,4 +372,3 @@ def _generate_tree_image(
         logger.warning(f"Could not save tree image: {e}")
     finally:
         plt.close()
-
