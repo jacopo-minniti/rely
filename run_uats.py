@@ -40,7 +40,6 @@ if __name__ == "__main__":
     parser.add_argument("--top_p", type=float, default=0.95, help="Generation top_p.")
     parser.add_argument("--uncertainty_scoring_method", type=str, default="last_step", choices=["product", "average", "minimum", "last_step"], help="Scoring method for uncertainty.")
     parser.add_argument("--value_scoring_method", type=str, default="product", choices=["product", "average", "minimum", "last_step"], help="Scoring method for value.")
-    parser.add_argument("--greedy_search", action="store_true", help="If set, select candidates only from the latest generated nodes (SBS-style).")
     parser.add_argument("--num_workers", type=int, default=5, help="Number of parallel workers to process questions.")
     
     # Device arguments
@@ -69,7 +68,6 @@ if __name__ == "__main__":
         device=args.device,
         uncertainty_device=args.uncertainty_device,
         value_device=args.value_device,
-        greedy_search=args.greedy_search
     )
 
     NUM_SAMPLES = 100

@@ -30,11 +30,6 @@ from .self_consistency import (
     save_self_consistency_result
 )
 
-from ...scripts.sbs_old import (
-    SBSConfig,
-    StepBeamSearch
-)
-
 __all__ = [
     # UATS exports
     "UATSConfig",
