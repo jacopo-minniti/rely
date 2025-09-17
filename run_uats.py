@@ -69,20 +69,16 @@ if __name__ == "__main__":
         uncertainty_device=args.uncertainty_device,
         value_device=args.value_device,
     )
-
-    NUM_SAMPLES = 100
     
     dataset = load_dataset("nlile/hendrycks-MATH-benchmark", split='test')
-    dataset = dataset.shuffle(seed=42).select(range(NUM_SAMPLES))
+    dataset = dataset.shuffle(seed=42)
 
     questions = []
     correct_answers = []
 
     for example in dataset:
         question_text = example["problem"]
-        # Remove asy blocks, which are not useful for the model
-        cleaned_question = re.sub(r'[[asy]](.*?)[[/asy]]', '', question_text, flags=re.DOTALL).strip()
-        questions.append(cleaned_question)
+        questions.append(question_text)
         correct_answers.append(example["answer"])
 
     run_uats(
@@ -92,14 +88,3 @@ if __name__ == "__main__":
         save_dir=args.output_dir,
         num_workers=args.num_workers
     )
-
-'''
-CUDA_VISIBLE_DEVICES="1" vllm serve Qwen/Qwen2.5-1.5B-Instruct \
-    --tensor-parallel-size 1 \
-    --pipeline-parallel-size 1 \
-    --gpu-memory-utilization 0.90 \
-    --max-model-len 5000 \
-    --dtype bfloat16 \
-    --enable-prefix-caching \
-    --port 8000
-'''
