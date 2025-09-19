@@ -692,10 +692,9 @@ def run_sbs_on_dataset(args: argparse.Namespace):
         logger.info(f"Processing dataset slice from {args.idx_start} to {args.idx_end}. Total items: {len(dataset)}")
 
     # --- Check for already processed questions and exclude them ---
-    results_dir = "results/sbs_uncertain_max_4_20"
-    if os.path.exists(results_dir):
+    if os.path.exists(args.output_dir):
         processed_indices = set()
-        for folder_name in os.listdir(results_dir):
+        for folder_name in os.listdir(args.output_dir):
             if folder_name.startswith("q_"):
                 try:
                     idx = int(folder_name.split("_")[1])
@@ -706,7 +705,6 @@ def run_sbs_on_dataset(args: argparse.Namespace):
         original_count = len(dataset)
         dataset = [item for item in dataset if item['original_index'] not in processed_indices]
         logger.info(f"Excluded {original_count - len(dataset)} already processed questions. Remaining: {len(dataset)}")
-    # --- End of exclusion block ---
 
     num_workers = args.num_workers
     value_task_queue = Queue()
