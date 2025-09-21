@@ -57,23 +57,24 @@ sbs_data = [
     {'B1': 4, 'B3': 16, 'tokens generated': 13902, 'accuracy': .5780},
     {'B1': 4, 'B3': 20, 'tokens generated': 17436, 'accuracy': .5592},
     {'B1': 4, 'B3': 32, 'tokens generated': 25418, 'accuracy': .4920},
-    # {'B1': 5, 'B3': 16, 'tokens generated': 6474, 'accuracy': .2360},
-    # {'B1': 5, 'B3': 20, 'tokens generated': 7317, 'accuracy': .1840},
+    {'B1': 5, 'B3': 16, 'tokens generated': 14372, 'accuracy': .5935},
+    {'B1': 5, 'B3': 20, 'tokens generated': 27770, 'accuracy': .5940},
     {'B1': 5, 'B3': 32, 'tokens generated': 27778, 'accuracy': .5947},
 ]
 
 sbs_uncertain_data = [
     {'B1': 2, 'B3': 4, 'tokens generated': 3015, 'accuracy': .5740},
     {'B1': 2, 'B3': 8, 'tokens generated': 6088, 'accuracy': .6500},
-    {'B1': 2, 'B3': 16, 'tokens generated': 13285, 'accuracy': .6686},
-    {'B1': 2, 'B3': 32, 'tokens generated': 28649, 'accuracy': .6867},
+    {'B1': 2, 'B3': 16, 'tokens generated': 12965, 'accuracy': .6720},
+    {'B1': 2, 'B3': 20, 'tokens generated': 17127, 'accuracy': .6844},
+    {'B1': 2, 'B3': 32, 'tokens generated': 28390, 'accuracy': .6837},
     {'B1': 4, 'B3': 8, 'tokens generated': 6673, 'accuracy': .6500},
-    {'B1': 4, 'B3': 16, 'tokens generated': 13806, 'accuracy': .6773},
-    {'B1': 4, 'B3': 20, 'tokens generated': 17623, 'accuracy': .6678},
-    {'B1': 4, 'B3': 32, 'tokens generated': 26984, 'accuracy': .6979},
-    {'B1': 5, 'B3': 16, 'tokens generated': 13744, 'accuracy': .7067},
-    {'B1': 5, 'B3': 20, 'tokens generated': 17697, 'accuracy': .6786},
-    {'B1': 5, 'B3': 32, 'tokens generated': 27523, 'accuracy': .7170},
+    {'B1': 4, 'B3': 16, 'tokens generated': 13773, 'accuracy': .6800},
+    {'B1': 4, 'B3': 20, 'tokens generated': 17537, 'accuracy': .6700},
+    {'B1': 4, 'B3': 32, 'tokens generated': 28277, 'accuracy': .6992},
+    {'B1': 5, 'B3': 16, 'tokens generated': 14256, 'accuracy': .6874},
+    {'B1': 5, 'B3': 20, 'tokens generated': 17555, 'accuracy': .6755},
+    {'B1': 5, 'B3': 32, 'tokens generated': 26931, 'accuracy': .7042},
 ]
 
 # --- 3. Plotting Configuration ---

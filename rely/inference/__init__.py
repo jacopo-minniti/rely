@@ -50,9 +50,6 @@ __all__ = [
     "SelfConsistencyInference",
     "run_self_consistency",
     "save_self_consistency_result",
-    # SBS exports
-    "SBSConfig",
-    "StepBeamSearch"
 ]
 
 __version__ = "1.0.0" 

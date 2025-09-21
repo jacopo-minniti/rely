@@ -49,32 +49,20 @@ def is_pareto_dominant(data):
 
 # --- 2. Data Input ---
 data = [
-    {'B1': 2, 'B3': 4, 'tokens generated': 2687, 'accuracy': .5300},
-    {'B1': 2, 'B3': 8, 'tokens generated': 5855, 'accuracy': .5760},
-    {'B1': 2, 'B3': 16, 'tokens generated': 12954, 'accuracy': .5760},
-    {'B1': 2, 'B3': 32, 'tokens generated': 28849, 'accuracy': .5640},
-    {'B1': 4, 'B3': 8, 'tokens generated': 6403, 'accuracy': .5440},
-    {'B1': 4, 'B3': 16, 'tokens generated': 13902, 'accuracy': .5780},
-    {'B1': 4, 'B3': 20, 'tokens generated': 17436, 'accuracy': .5592},
-    {'B1': 4, 'B3': 32, 'tokens generated': 25418, 'accuracy': .4920},
-    # {'B1': 5, 'B3': 16, 'tokens generated': 6474, 'accuracy': .2360},
-    # {'B1': 5, 'B3': 20, 'tokens generated': 7317, 'accuracy': .1840},
-    {'B1': 5, 'B3': 32, 'tokens generated': 27778, 'accuracy': .5947},
+    {'B1': 2, 'B3': 4, 'tokens generated': 3015, 'accuracy': .5740},
+    {'B1': 2, 'B3': 8, 'tokens generated': 6088, 'accuracy': .6500},
+    {'B1': 2, 'B3': 16, 'tokens generated': 12965, 'accuracy': .6720},
+    {'B1': 2, 'B3': 20, 'tokens generated': 17127, 'accuracy': .6844},
+    {'B1': 2, 'B3': 32, 'tokens generated': 28390, 'accuracy': .6837},
+    {'B1': 4, 'B3': 8, 'tokens generated': 6673, 'accuracy': .6500},
+    {'B1': 4, 'B3': 16, 'tokens generated': 13773, 'accuracy': .6800},
+    {'B1': 4, 'B3': 20, 'tokens generated': 17537, 'accuracy': .6700},
+    {'B1': 4, 'B3': 32, 'tokens generated': 28277, 'accuracy': .6992},
+    {'B1': 5, 'B3': 16, 'tokens generated': 14256, 'accuracy': .6874},
+    {'B1': 5, 'B3': 20, 'tokens generated': 17555, 'accuracy': .6755},
+    {'B1': 5, 'B3': 32, 'tokens generated': 26931, 'accuracy': .7042},
 ]
 
-# data = [
-#     {'B1': 2, 'B3': 4, 'tokens generated': 3015, 'accuracy': .5740},
-#     {'B1': 2, 'B3': 8, 'tokens generated': 6057, 'accuracy': .6540},
-#     {'B1': 2, 'B3': 16, 'tokens generated': 13138, 'accuracy': .6691},
-#     {'B1': 2, 'B3': 32, 'tokens generated': 28476, 'accuracy': .6991},
-#     {'B1': 4, 'B3': 8, 'tokens generated': 6630, 'accuracy': .6585},
-#     {'B1': 4, 'B3': 16, 'tokens generated': 14297, 'accuracy': .6852},
-#     {'B1': 4, 'B3': 20, 'tokens generated': 17791, 'accuracy': .6531},
-#     {'B1': 4, 'B3': 32, 'tokens generated': 27889, 'accuracy': .7000},
-#     {'B1': 5, 'B3': 16, 'tokens generated': 13934, 'accuracy': .6685},
-#     {'B1': 5, 'B3': 20, 'tokens generated': 17454, 'accuracy': .6860},
-#     {'B1': 5, 'B3': 32, 'tokens generated': 27548, 'accuracy': .6988},
-# ]
 
 # Extract unique B1 values for color normalization and colorbar ticks
 b1_values = sorted(set(d['B1'] for d in data)) if data else [0]
@@ -136,7 +124,7 @@ ax.legend(handles=legend_elements, title='B3 (Total Branching Factor)',
 
 # Adjust layout to prevent labels from overlapping
 plt.tight_layout(rect=(0, 0, 0.85, 1)) # Adjust rect to make space for legends
-plt.savefig("sbs-scaling.png", dpi=300)
+plt.savefig("sbs-uncertain-scaling.png", dpi=300)
 plt.show()
 
 # --- 7. Create Pareto-Dominant Plot ---
