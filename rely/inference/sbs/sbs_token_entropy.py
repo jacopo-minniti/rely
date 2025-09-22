@@ -172,21 +172,37 @@ class StepBeamSearch:
             for i in range(remainder):
                 sample_distribution[sorted_indices[i % num_beams]] += 1
         
-        zero_indices = [i for i, s in enumerate(sample_distribution) if s == 0]
-        if zero_indices:
-            for i in zero_indices:
-                donatable_beams = sorted([(s, j) for j, s in enumerate(sample_distribution) if s > 1], reverse=True)
-                if donatable_beams:
-                    max_index = donatable_beams[0][1]
-                    sample_distribution[max_index] -= 1
-                    sample_distribution[i] += 1
-                else:
-                    break
-        
+        while any(s == 0 for s in sample_distribution):
+            # Find the richest donor beam (must have > 1 sample)
+            donor_idx = -1
+            max_samples = 1
+            for i, s in enumerate(sample_distribution):
+                if s > max_samples:
+                    max_samples = s
+                    donor_idx = i
+            
+            # If no donor has > 1 sample, we cannot donate, so stop.
+            if donor_idx == -1:
+                break
+
+            # Find the first beam with 0 samples to give it a sample
+            try:
+                receiver_idx = sample_distribution.index(0)
+            except ValueError:
+                # Should not happen due to the while loop condition, but as a safeguard
+                break
+                
+            # Transfer one sample from the richest donor to the needy receiver
+            sample_distribution[donor_idx] -= 1
+            sample_distribution[receiver_idx] += 1
+
         if self.config.verbose:
             logger.info(f"[Rank {self.worker_rank}] Normalized uncertainty scores: {[f'{s:.3f}' for s in normalized_scores]}")
+            # Add this logging to confirm the final distribution
+            logger.info(f"[Rank {self.worker_rank}] Final sample distribution: {sample_distribution}")
 
         return sample_distribution
+
 
     def _make_api_request_with_samples(self, prompt: str, n_samples: int) -> List[Dict[str, Any]]:
         if n_samples <= 0:
