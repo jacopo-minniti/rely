@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
 from openai import OpenAI
-from transformers import AutoModel, AutoTokenizer, AutoModelForTokenClassification
+from transformers import AutoModel, AutoTokenizer
 from tqdm import tqdm
 import argparse
 from datasets import load_dataset
@@ -131,31 +131,19 @@ class StepBeamSearch:
         
         entropies = []
         
-        # Handle the logprobs structure from vLLM
         if hasattr(log_probs_data, 'top_logprobs') and log_probs_data.top_logprobs:
-            # Each element in top_logprobs is a dict of {token: log_prob}
             for token_log_probs_dict in log_probs_data.top_logprobs:
                 if token_log_probs_dict:
-                    # Get top-k log probabilities from the dictionary
                     top_k_log_probs = list(token_log_probs_dict.values())[:self.config.entropy_k]
                     
-                    # Convert log probs to probs and calculate entropy
                     if top_k_log_probs:
                         probs = [math.exp(log_p) for log_p in top_k_log_probs]
-                        # Normalize probabilities (they should already be normalized from vLLM but just in case)
                         total_prob = sum(probs)
                         if total_prob > 0:
                             probs = [p / total_prob for p in probs]
-                            # Calculate entropy: -sum(p * log(p))
                             entropy = -sum(p * math.log(p) for p in probs if p > 0)
                             entropies.append(entropy)
-        elif hasattr(log_probs_data, 'token_logprobs') and log_probs_data.token_logprobs:
-            # Fallback: use individual token logprobs if available
-            for token_log_prob in log_probs_data.token_logprobs:
-                if token_log_prob is not None:
-                    # Single token entropy is 0 (no uncertainty)
-                    entropies.append(0.0)
-        
+                            
         return sum(entropies) / len(entropies) if entropies else 0.5
 
     def _calculate_sample_distribution(self, uncertainty_scores: List[float]) -> List[int]:
@@ -167,7 +155,6 @@ class StepBeamSearch:
 
         total_uncertainty = sum(uncertainty_scores)
         if total_uncertainty == 0:
-            # Fallback to even distribution if all uncertainties are zero
             samples_per_beam = total_samples // num_beams
             remainder = total_samples % num_beams
             distribution = [samples_per_beam] * num_beams
@@ -175,11 +162,9 @@ class StepBeamSearch:
                 distribution[i] += 1
             return distribution
 
-        # Proportional allocation
         normalized_scores = [score / total_uncertainty for score in uncertainty_scores]
         sample_distribution = [int(norm_score * total_samples) for norm_score in normalized_scores]
 
-        # Distribute remainder to most uncertain beams to stay within budget
         total_assigned = sum(sample_distribution)
         remainder = total_samples - total_assigned
         if remainder > 0:
@@ -187,24 +172,15 @@ class StepBeamSearch:
             for i in range(remainder):
                 sample_distribution[sorted_indices[i % num_beams]] += 1
         
-        # "Robin Hood" redistribution: take from the richest, give to the poorest
         zero_indices = [i for i, s in enumerate(sample_distribution) if s == 0]
         if zero_indices:
             for i in zero_indices:
-                # Find the current richest beam that can afford to give one sample
-                # This needs to be re-evaluated in each iteration as the max might change
                 donatable_beams = sorted([(s, j) for j, s in enumerate(sample_distribution) if s > 1], reverse=True)
-                
                 if donatable_beams:
-                    # Index of the richest beam
                     max_index = donatable_beams[0][1]
-                    
-                    # Redistribute
                     sample_distribution[max_index] -= 1
                     sample_distribution[i] += 1
                 else:
-                    # This occurs if n_samples < num_beams, where no beam has more than 1 sample.
-                    # Cannot redistribute without violating budget or the "min 1" rule.
                     break
         
         if self.config.verbose:
@@ -223,7 +199,7 @@ class StepBeamSearch:
                 temperature=self.config.temperature,
                 stop=["\n\n"],
                 n=n_samples,
-                logprobs=self.config.entropy_k,  # Always request top-k log probabilities
+                logprobs=self.config.entropy_k,
             )
             results = []
             for choice in completion.choices:
@@ -241,27 +217,23 @@ class StepBeamSearch:
         if not self.active_beams:
             return []
 
-        # Determine sample distribution based on uncertainty (from step 2 onwards)
-        if len(self.active_beams) > 1 and hasattr(self.active_beams[0], 'uncertainty'):
-            # Use uncertainty scores from previous step to distribute samples
-            uncertainty_scores = [beam.uncertainty for beam in self.active_beams]
-            sample_distribution = self._calculate_sample_distribution(uncertainty_scores)
-            
-            if self.config.verbose:
-                logger.info(f"[Rank {self.worker_rank}] Using uncertainty-based distribution: {sample_distribution}")
-                logger.info(f"[Rank {self.worker_rank}] Based on uncertainties: {[f'{s:.3f}' for s in uncertainty_scores]}")
-        else:
-            # First step: equal distribution
+        # Use uncertainty from previous step to guide generation. For step 1, distribute equally.
+        is_first_step = all(beam.depth == 0 for beam in self.active_beams)
+        if is_first_step or len(self.active_beams) == 1:
             samples_per_beam = self.config.n_total_samples // len(self.active_beams)
             remainder = self.config.n_total_samples % len(self.active_beams)
-            
-            sample_distribution = [samples_per_beam] * len(self.active_beams)
-            for i in range(remainder):
-                sample_distribution[i] += 1
+            sample_distribution = [samples_per_beam + (1 if i < remainder else 0) for i in range(len(self.active_beams))]
+            if self.config.verbose:
+                logger.info(f"[Rank {self.worker_rank}] First step or single beam: Using equal distribution: {sample_distribution}")
+        else:
+            uncertainty_scores = [beam.uncertainty for beam in self.active_beams]
+            sample_distribution = self._calculate_sample_distribution(uncertainty_scores)
+            if self.config.verbose:
+                logger.info(f"[Rank {self.worker_rank}] Using uncertainty-based distribution: {sample_distribution}")
+                logger.info(f"[Rank {self.worker_rank}] Based on uncertainties from previous step: {[f'{s:.3f}' for s in uncertainty_scores]}")
 
         prompts = [self.create_prompt(question, node.full_text) for node in self.active_beams]
         
-        # Generate candidates with logprobs
         generated_outputs = [[] for _ in self.active_beams]
         with ThreadPoolExecutor(max_workers=len(self.active_beams)) as executor:
             future_to_index = {executor.submit(self._make_api_request_with_samples, prompt, n_samples): i 
@@ -274,7 +246,7 @@ class StepBeamSearch:
                 except Exception as exc:
                     logger.error(f"[Rank {self.worker_rank}] API request generated an exception: {exc}")
 
-        # Prepare for value scoring
+        # Prepare for value scoring and node creation
         value_request_prompts, value_request_texts, candidate_data = [], [], []
         for i, gen_results in enumerate(generated_outputs):
             parent_node = self.active_beams[i]
@@ -287,10 +259,9 @@ class StepBeamSearch:
                     'logprobs': gen_result['logprobs']
                 })
 
-        # Get value scores
         values = self._get_values_from_server(value_request_prompts, value_request_texts)
 
-        # Create candidate nodes with values
+        # Create candidate nodes, assign value and uncertainty, but DO NOT prune yet.
         all_candidates = []
         seen_full_texts = set()
         
@@ -303,6 +274,7 @@ class StepBeamSearch:
             child_node = parent_node.add_child(snippet)
             
             child_node.value = parent_node.value * new_step_value if self.config.value_method == 'product' else new_step_value
+            child_node.uncertainty = self._calculate_token_entropy(candidate_info['logprobs'])
             
             if ans := extract_final_answer(gen_text):
                 child_node.is_terminal, child_node.final_answer = True, ans
@@ -312,39 +284,25 @@ class StepBeamSearch:
                     continue
                 seen_full_texts.add(child_node.full_text)
             
-            # Store logprobs for later entropy calculation
-            child_node.logprobs = candidate_info['logprobs']
             all_candidates.append(child_node)
-
-        # Sort candidates by value and select top beam_width
-        all_candidates.sort(key=lambda x: x.value, reverse=True)
-        top_candidates = all_candidates[:self.current_beam_width]
-
-        # Calculate entropy for the selected top candidates
-        for candidate in top_candidates:
-            if hasattr(candidate, 'logprobs') and candidate.logprobs:
-                entropy = self._calculate_token_entropy(candidate.logprobs)
-            else:
-                entropy = 0.5  # Default uncertainty
-            candidate.uncertainty = entropy
-
-        if self.config.verbose:
-            logger.info(f"[Rank {self.worker_rank}] Generated {len(all_candidates)} candidates, selected top {len(top_candidates)}")
-            if top_candidates:
-                uncertainty_scores = [c.uncertainty for c in top_candidates]
-                logger.info(f"[Rank {self.worker_rank}] Uncertainty scores for selected: {[f'{s:.3f}' for s in uncertainty_scores]}")
-            
-        return top_candidates
+        
+        if self.config.verbose and all_candidates:
+            logger.info(f"Generated {len(all_candidates)} unique candidates this step to be evaluated.")
+        
+        # Return the entire pool of candidates, letting _update_beams handle the selection.
+        return all_candidates
 
     def _update_beams(self, candidates: List[SBSNode]) -> int:
+        # LOGIC IDENTICAL TO sbs_pum.py: Sort all candidates and select the best.
         if not candidates:
             self.active_beams, self.current_beam_width = [], 0
             return 0
         
-        # Candidates are already sorted by value and limited to beam_width
+        candidates.sort(key=lambda x: x.value, reverse=True)
         new_active_beams, newly_completed = [], 0
         
-        for cand in candidates:
+        # Select top `beam_width` candidates from the entire pool
+        for cand in candidates[:self.config.step_beam_width]:
             max_depth_reached = self.config.max_depth is not None and cand.depth >= self.config.max_depth
             if cand.is_terminal or max_depth_reached:
                 self.completed_beams.append(cand)
@@ -354,16 +312,6 @@ class StepBeamSearch:
                 
         self.active_beams = new_active_beams
         self.current_beam_width = len(self.active_beams)
-        
-        # For the next step, distribute samples based on uncertainty scores of current active beams
-        if self.active_beams and len(self.active_beams) > 1:
-            uncertainty_scores = [beam.uncertainty for beam in self.active_beams]
-            sample_distribution = self._calculate_sample_distribution(uncertainty_scores)
-            
-            if self.config.verbose:
-                logger.info(f"[Rank {self.worker_rank}] Next step sample distribution: {sample_distribution}")
-                logger.info(f"[Rank {self.worker_rank}] Based on uncertainties: {[f'{s:.3f}' for s in uncertainty_scores]}")
-        
         return newly_completed
 
     def _create_summary(self, solutions: List[Dict[str, Any]], question: str, ground_truth: Optional[str]) -> Dict[str, Any]:
@@ -445,7 +393,8 @@ class StepBeamSearch:
             
         self.active_beams = [self.root]
         self.completed_beams = []
-        self.current_beam_width = self.config.step_beam_width
+        # NOTE: self.current_beam_width is now used only for selection in _update_beams,
+        # but we use the config's width for consistency.
         
         step = 0
         while self.active_beams:
@@ -625,7 +574,6 @@ def run_sbs_on_dataset(args: argparse.Namespace):
         dataset = dataset[args.idx_start:args.idx_end]
         logger.info(f"Processing dataset slice from {args.idx_start} to {args.idx_end}. Total items: {len(dataset)}")
 
-    # --- Check for already processed questions and exclude them ---
     if os.path.exists(args.output_dir):
         processed_indices = set()
         for folder_name in os.listdir(args.output_dir):
@@ -648,7 +596,7 @@ def run_sbs_on_dataset(args: argparse.Namespace):
     value_server_proc = Process(target=_value_model_server, args=(args, value_task_queue, value_result_queues))
     value_server_proc.start()
     
-    time.sleep(15) # Allow time for model to load
+    time.sleep(15)
 
     total_samples = len(dataset)
     samples_per_worker = (total_samples + num_workers - 1) // num_workers
@@ -673,7 +621,7 @@ def run_sbs_on_dataset(args: argparse.Namespace):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run SBS using a vLLM server with entropy-weighted sampling.")
+    parser = argparse.ArgumentParser(description="Run SBS using a vLLM server with entropy-weighted sampling and PUM-style selection logic.")
     parser.add_argument("--dataset", type=str, required=True, help="Path to input JSONL dataset.")
     parser.add_argument("--output_dir", type=str, required=True, help="Directory to save results.")
     parser.add_argument("--inference_model", type=str, default="Qwen/Qwen2.5-1.5B-Instruct", help="Model name served by vLLM.")

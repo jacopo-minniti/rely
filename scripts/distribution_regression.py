@@ -2,10 +2,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 from collections import defaultdict
 from datasets import load_dataset
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score
 
 
-data = load_dataset("jacopo-minniti/MATH-PUM-qwen2.5-1.5B", "regression", split="test")
-scores = [d["labels"] for d in data]
+train_data = load_dataset("jacopo-minniti/MATH-PUM-qwen2.5-1.5B", "regression", split="train[:30%]")
+test_data = load_dataset("jacopo-minniti/MATH-PUM-qwen2.5-1.5B", "regression", split="test")
+scores = [d["labels"] for d in test_data]
 
 # --- Data Processing ---
 
@@ -113,3 +116,72 @@ if 0 in position_scores:
         above_threshold = sum(1 for score in first_pos_scores if score > threshold)
         percentage = (above_threshold / total_count) * 100
         print(f"  Scores > {threshold}: {above_threshold}/{total_count} ({percentage:.1f}%)")
+
+# --- Linear Regression Analysis ---
+
+# Prepare training data from train_data
+train_scores = [d["labels"] for d in train_data]
+
+# Process training data similarly to test data
+train_position_scores = defaultdict(list)
+for score_list in train_scores:
+    for i in range(len(score_list)):
+        score_value = score_list[i]
+        train_position_scores[i].append(score_value)
+
+# Get training positions and mean scores
+train_positions = sorted(train_position_scores.keys())
+train_mean_scores = [np.mean(train_position_scores[pos]) for pos in train_positions]
+
+# Prepare data for linear regression
+# X_train will be the position indices from training data
+X_train = np.array(train_positions).reshape(-1, 1)
+y_train = np.array(train_mean_scores)
+
+# X_test will be the position indices from test data (for prediction/evaluation)
+X_test = np.array(positions).reshape(-1, 1)
+y_test = np.array(mean_scores)
+
+# Create and fit the model on training data
+model = LinearRegression()
+model.fit(X_train, y_train)
+
+# Make predictions
+y_pred = model.predict(X_test)
+
+# Calculate R² score
+r2 = r2_score(y_test, y_pred)
+
+# Create regression plot
+plt.figure(figsize=(12, 8))
+plt.scatter(positions, mean_scores, color=main_color, label='Mean Uncertainty Scores', s=60, alpha=0.7)
+plt.plot(positions, y_pred, color='red', linewidth=3, label=f'Linear Regression (R² = {r2:.4f})')
+
+plt.xlabel("Step Position Index", fontsize=14, fontweight='bold')
+plt.ylabel("Mean Uncertainty Score", fontsize=14, fontweight='bold')
+plt.title("Linear Regression: Position vs Uncertainty Score", fontsize=16, fontweight='bold', pad=20)
+plt.legend(loc='best', frameon=True, fancybox=True, shadow=True)
+
+plt.grid(True, linestyle='--', alpha=0.3, color='gray')
+plt.gca().set_facecolor('#fafafa')
+plt.tight_layout()
+
+# Save the regression plot
+plt.savefig("/scratch/jacopo04/uncertainty_regression_analysis.png", dpi=300, bbox_inches='tight')
+
+print(f"\nLinear Regression Analysis:")
+print(f"  R² Score: {r2:.4f}")
+print(f"  Coefficient (slope): {model.coef_[0]:.6f}")
+print(f"  Intercept: {model.intercept_:.4f}")
+print(f"  Position explains {r2*100:.2f}% of variance in uncertainty scores")
+
+if r2 > 0.5:
+    print("  → Strong relationship: Position strongly predicts uncertainty")
+elif r2 > 0.3:
+    print("  → Moderate relationship: Position moderately predicts uncertainty")
+elif r2 > 0.1:
+    print("  → Weak relationship: Position weakly predicts uncertainty")
+else:
+    print("  → Very weak relationship: Position barely predicts uncertainty")
+
+plt.show()
