@@ -309,7 +309,7 @@ class StepBeamSearch:
         return all_candidates
 
     def _update_beams(self, candidates: List[SBSNode]) -> int:
-        # LOGIC IDENTICAL TO sbs_pum.py: Sort all candidates and select the best.
+        # LOGIC IDENTICAL TO sbs.py: Sort all candidates and select the best using dynamic beam width.
         if not candidates:
             self.active_beams, self.current_beam_width = [], 0
             return 0
@@ -317,8 +317,8 @@ class StepBeamSearch:
         candidates.sort(key=lambda x: x.value, reverse=True)
         new_active_beams, newly_completed = [], 0
         
-        # Select top `beam_width` candidates from the entire pool
-        for cand in candidates[:self.config.step_beam_width]:
+        # Select top `current_beam_width` candidates (dynamic/shrinking beam like Algorithm A)
+        for cand in candidates[:self.current_beam_width]:
             max_depth_reached = self.config.max_depth is not None and cand.depth >= self.config.max_depth
             if cand.is_terminal or max_depth_reached:
                 self.completed_beams.append(cand)
