@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
 from openai import OpenAI
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoModel, AutoTokenizer, AutoModelForTokenClassification
 from tqdm import tqdm
 import argparse
 from datasets import load_dataset
@@ -41,10 +41,12 @@ class SBSConfig:
     temperature: float = 0.6
     max_tokens: int = 512
     need_value_func: bool = True
+    need_uncertainty_func: bool = True
     remove_duplicate: bool = True
     verbose: bool = True
     generation_batch_size: int = 4
     value_method: str = "last_step"
+    uncertainty_method: str = "last_step"
 
 
 class SBSNode:
@@ -56,6 +58,7 @@ class SBSNode:
         self.depth = depth
         self.full_text: str = (parent.full_text if parent else "") + text
         self.value: float = -100.0
+        self.uncertainty: float = 0.5
         self.is_terminal = False
         self.final_answer = ""
 
@@ -67,12 +70,14 @@ class SBSNode:
 
 
 class StepBeamSearch:
-    """Step-level Beam Search implementation with entropy-weighted sampling."""
+    """Step-level Beam Search implementation with uncertainty-weighted sampling."""
     def __init__(self,
                  inference_model_name: str,
                  config: SBSConfig,
                  value_task_queue: Queue,
                  value_result_queue: Queue,
+                 uncertainty_task_queue: Queue,
+                 uncertainty_result_queue: Queue,
                  worker_rank: int):
         self.config = config
         if self.config.max_depth is None and self.config.budget is None:
@@ -83,6 +88,8 @@ class StepBeamSearch:
         
         self.value_task_queue = value_task_queue
         self.value_result_queue = value_result_queue
+        self.uncertainty_task_queue = uncertainty_task_queue
+        self.uncertainty_result_queue = uncertainty_result_queue
 
         self.client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_API_BASE)
         logger.info(f"[Rank {self.worker_rank}] Client initialized to connect to {OPENAI_API_BASE}")
@@ -122,28 +129,50 @@ class StepBeamSearch:
             self.value_result_queue.put(response)
             time.sleep(0.01)
 
-    def _calculate_sample_distribution(self, num_beams: int) -> List[int]:
-        """Calculate uniform distribution of samples across beams."""
-        total_samples = self.config.n_total_samples
-        samples_per_beam = total_samples // num_beams
-        remainder = total_samples % num_beams
+    def _get_uncertainties_from_server(self, prompts: List[str]) -> List[float]:
+        if not prompts:
+            return []
+        request_id = str(uuid.uuid4())
+        payload = {"request_id": request_id, "worker_rank": self.worker_rank, "prompts": prompts}
+        self.uncertainty_task_queue.put(payload)
         
-        distribution = [samples_per_beam] * num_beams
+        while True:
+            response = self.uncertainty_result_queue.get()
+            if response.get("request_id") == request_id:
+                return response["uncertainties"]
+            self.uncertainty_result_queue.put(response)
+            time.sleep(0.01)
+
+    def _calculate_sample_distribution(self, uncertainty_scores: List[float]) -> List[int]:
+        """
+        Calculate uniform sample distribution among active beams.
+        This is equivalent to the distribution used in sbs.py.
+        """
+        if not uncertainty_scores:
+            return []
+            
+        num_active_beams = len(uncertainty_scores)
+        total_samples_budget = self.config.n_total_samples
         
-        # Randomly distribute the remainder
+        # Distribute the total sample budget uniformly among active beams
+        base_samples = total_samples_budget // num_active_beams
+        remainder = total_samples_budget % num_active_beams
+        
+        # Create uniform distribution
+        sample_distribution = [base_samples] * num_active_beams
+        
+        # Randomly distribute remainder samples
         if remainder > 0:
-            indices = list(range(num_beams))
-            random.shuffle(indices)
-            for i in range(remainder):
-                distribution[indices[i]] += 1
-
+            indices_for_extra = random.sample(range(num_active_beams), remainder)
+            for idx in indices_for_extra:
+                sample_distribution[idx] += 1
+        
         if self.config.verbose:
-            logger.info(f"[Rank {self.worker_rank}] Uniform sample distribution: {distribution}")
+            logger.info(f"[Rank {self.worker_rank}] Sample distribution (uniform): {sample_distribution}")
 
-        return distribution
+        return sample_distribution
 
-
-    def _make_api_request_with_samples(self, prompt: str, n_samples: int) -> List[Dict[str, Any]]:
+    def _make_api_request_with_samples(self, prompt: str, n_samples: int) -> List[str]:
         if n_samples <= 0:
             return []
         try:
@@ -155,13 +184,10 @@ class StepBeamSearch:
                 stop=["\n\n"],
                 n=n_samples,
             )
-            results = []
-            for choice in completion.choices:
-                results.append({
-                    'text': choice.text,
-                })
-                self.total_generated_tokens += len(self.tokenizer.encode(choice.text, add_special_tokens=False))
-            return results
+            generations = [choice.text for choice in completion.choices]
+            for gen in generations:
+                self.total_generated_tokens += len(self.tokenizer.encode(gen, add_special_tokens=False))
+            return generations
         except Exception as e:
             logger.error(f"[Rank {self.worker_rank}] Error during API call: {e}")
             return []
@@ -170,11 +196,20 @@ class StepBeamSearch:
         if not self.active_beams:
             return []
 
-        # Use uniform distribution of samples across beams.
-        sample_distribution = self._calculate_sample_distribution(len(self.active_beams))
+        uncertainty_prompts = [self.create_prompt(question, beam.full_text) for beam in self.active_beams]
+        uncertainty_scores = self._get_uncertainties_from_server(uncertainty_prompts)
+        
+        for i, beam in enumerate(self.active_beams):
+            if i < len(uncertainty_scores):
+                beam.uncertainty = uncertainty_scores[i]
+        
+        sample_distribution = self._calculate_sample_distribution(uncertainty_scores)
+        
         if self.config.verbose:
-            logger.info(f"[Rank {self.worker_rank}] Using uniform distribution: {sample_distribution}")
+            logger.info(f"[Rank {self.worker_rank}] Uncertainty scores: {[f'{s:.3f}' for s in uncertainty_scores]}")
+            logger.info(f"[Rank {self.worker_rank}] Sample distribution: {sample_distribution}")
 
+        all_candidates, seen_full_texts = [], set()
         prompts = [self.create_prompt(question, node.full_text) for node in self.active_beams]
         
         generated_outputs = [[] for _ in self.active_beams]
@@ -189,52 +224,44 @@ class StepBeamSearch:
                 except Exception as exc:
                     logger.error(f"[Rank {self.worker_rank}] API request generated an exception: {exc}")
 
-        # Prepare for value scoring and node creation
-        value_request_prompts, value_request_texts, candidate_data = [], [], []
-        for i, gen_results in enumerate(generated_outputs):
+        value_request_prompts, value_request_texts, parent_nodes = [], [], []
+        for i, gen_texts in enumerate(generated_outputs):
             parent_node = self.active_beams[i]
-            for gen_result in gen_results:
+            for gen_text in gen_texts:
                 value_request_prompts.append(prompts[i])
-                value_request_texts.append(gen_result['text'])
-                candidate_data.append({
-                    'parent_node': parent_node,
-                    'text': gen_result['text']
-                })
+                value_request_texts.append(gen_text)
+                parent_nodes.append(parent_node)
 
         values = self._get_values_from_server(value_request_prompts, value_request_texts)
 
-        # Create candidate nodes, assign value and uncertainty, but DO NOT prune yet.
-        all_candidates = []
-        seen_full_texts = set()
-        
-        for i, candidate_info in enumerate(candidate_data):
-            parent_node = candidate_info['parent_node']
-            gen_text = candidate_info['text']
-            new_step_value = values[i] if i < len(values) else 0.0
-            
-            snippet = gen_text.rstrip() + '\n\n'
-            child_node = parent_node.add_child(snippet)
-            
-            child_node.value = parent_node.value * new_step_value if self.config.value_method == 'product' else new_step_value
-            
-            if ans := extract_final_answer(gen_text):
-                child_node.is_terminal, child_node.final_answer = True, ans
+        candidate_idx = 0
+        for i, gen_texts in enumerate(generated_outputs):
+            for gen_text in gen_texts:
+                parent_node = self.active_beams[i]
+                new_step_value = values[candidate_idx]
+                snippet = gen_text.rstrip() + '\n\n'
+                child_node = parent_node.add_child(snippet)
                 
-            if self.config.remove_duplicate:
-                if child_node.full_text in seen_full_texts:
-                    continue
-                seen_full_texts.add(child_node.full_text)
-            
-            all_candidates.append(child_node)
+                child_node.value = parent_node.value * new_step_value if self.config.value_method == 'product' else new_step_value
+                
+                if ans := extract_final_answer(gen_text):
+                    child_node.is_terminal, child_node.final_answer = True, ans
+                    
+                if self.config.remove_duplicate:
+                    if child_node.full_text in seen_full_texts:
+                        candidate_idx += 1
+                        continue
+                    seen_full_texts.add(child_node.full_text)
+                    
+                all_candidates.append(child_node)
+                candidate_idx += 1
         
         if self.config.verbose and all_candidates:
-            logger.info(f"Generated {len(all_candidates)} unique candidates this step to be evaluated.")
-        
-        # Return the entire pool of candidates, letting _update_beams handle the selection.
+            logger.info(f"Generated {len(all_candidates)} unique candidates this step.")
+            
         return all_candidates
 
     def _update_beams(self, candidates: List[SBSNode]) -> int:
-        # LOGIC IDENTICAL TO sbs_pum.py: Sort all candidates and select the best.
         if not candidates:
             self.active_beams, self.current_beam_width = [], 0
             return 0
@@ -242,8 +269,7 @@ class StepBeamSearch:
         candidates.sort(key=lambda x: x.value, reverse=True)
         new_active_beams, newly_completed = [], 0
         
-        # Select top `beam_width` candidates from the entire pool
-        for cand in candidates[:self.config.step_beam_width]:
+        for cand in candidates[:self.current_beam_width]:
             max_depth_reached = self.config.max_depth is not None and cand.depth >= self.config.max_depth
             if cand.is_terminal or max_depth_reached:
                 self.completed_beams.append(cand)
@@ -256,7 +282,7 @@ class StepBeamSearch:
         return newly_completed
 
     def _create_summary(self, solutions: List[Dict[str, Any]], question: str, ground_truth: Optional[str]) -> Dict[str, Any]:
-        ground_truth = normalize_answer(ground_truth) if ground_truth else None
+        ground_truth = normalize_answer(ground_truth)
         answers = [normalize_answer(s['final_answer']) for s in solutions if s['final_answer'] != "Not found"]
         majority_vote = Counter(answers).most_common(1)[0][0] if answers else "N/A"
         accuracy = "N/A"
@@ -277,7 +303,7 @@ class StepBeamSearch:
                 node.final_answer = extract_final_answer(node.full_text) or "Not found"
             
             solution_data = {
-                "beam_index": idx + 1, "value": node.value,
+                "beam_index": idx + 1, "value": node.value, "uncertainty": node.uncertainty,
                 "final_answer": node.final_answer, "depth": node.depth, "solution_path": node.full_text
             }
             solutions.append(solution_data)
@@ -334,8 +360,7 @@ class StepBeamSearch:
             
         self.active_beams = [self.root]
         self.completed_beams = []
-        # NOTE: self.current_beam_width is now used only for selection in _update_beams,
-        # but we use the config's width for consistency.
+        self.current_beam_width = self.config.step_beam_width
         
         step = 0
         while self.active_beams:
@@ -370,13 +395,137 @@ class StepBeamSearch:
         return {"question": question, "ground_truth": ground_truth, "solutions": solutions}
 
 
+def _uncertainty_model_server(args: argparse.Namespace, task_queue: Queue, result_queues: List[Queue]):
+    uncertainty_device = torch.device(f"cuda:{args.uncertainty_model_gpu}")
+    logger.info(f"[UncertaintyServer] Starting on device {uncertainty_device}")
+
+    tokenizer = AutoTokenizer.from_pretrained(args.uncertainty_model_path, trust_remote_code=True)
+    model = AutoModelForTokenClassification.from_pretrained(
+        args.uncertainty_model_path, dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
+    )
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
+    model.eval()
+    logger.info("[UncertaintyServer] Uncertainty model loaded.")
+
+    prompt_pattern = re.compile(r"<\|im_start\|>system\n(.*?)\|im_end\|>\n<\|im_start\|>user\n(.*?)\|im_end\|>\n<\|im_start\|>assistant\n(.*)", re.DOTALL)
+
+    @torch.no_grad()
+    def get_uncertainties(prompts: List[str]) -> List[float]:
+        conversation_strs = []
+        for prompt in prompts:
+            match = prompt_pattern.match(prompt)
+            if not match:
+                logger.error(f"Prompt did not match expected format. Cannot score. Prompt: {prompt[:200]}")
+                continue
+            system_msg, user_msg, partial_solution = match.groups()
+            steps = [s.strip() for s in (partial_solution or "").split('\n\n') if s.strip()]
+            formatted_content = "<extra_0>".join(steps) + "<extra_0>" if steps else "<extra_0>"
+            messages = [{"role": "system", "content": system_msg.strip()}, {"role": "user", "content": user_msg.strip()}, {"role": "assistant", "content": formatted_content}]
+            conversation_strs.append(tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False))
+
+        if not conversation_strs:
+            return [0.5] * len(prompts)
+
+        batch_size = 8
+        all_uncertainties = []
+        step_sep_id = tokenizer.encode("<extra_0>", add_special_tokens=False)[0]
+
+        for i in range(0, len(conversation_strs), batch_size):
+            batch_conversations = conversation_strs[i:i + batch_size]
+            inputs = tokenizer(batch_conversations, return_tensors="pt", padding=True, truncation=True, max_length=7000).to(uncertainty_device)
+
+            try:
+                outputs = model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask)
+                token_masks = (inputs.input_ids == step_sep_id)
+                
+                uncertainty_probs = torch.softmax(outputs.logits, dim=-1)[:, :, 1]
+                has_separator = token_masks.any(dim=1)
+                default_uncertainty = torch.tensor(0.5, device=uncertainty_device)
+                
+                calculated_uncertainties = torch.zeros_like(has_separator, dtype=torch.float)
+
+                if args.uncertainty_method == "product":
+                    clamped_probs = uncertainty_probs.clamp(min=1e-8)
+                    masked_probs = torch.where(token_masks, clamped_probs, 1.0)
+                    calculated_uncertainties = masked_probs.prod(dim=1)
+                elif args.uncertainty_method == "average":
+                    masked_probs = uncertainty_probs * token_masks.float()
+                    sums = masked_probs.sum(dim=1)
+                    counts = token_masks.sum(dim=1).clamp(min=1)
+                    calculated_uncertainties = sums / counts
+                elif args.uncertainty_method == "minimum":
+                    masked_probs = torch.where(token_masks, uncertainty_probs, 2.0)
+                    minimums, _ = masked_probs.min(dim=1)
+                    calculated_uncertainties = minimums
+                else:  # "last_step" is default
+                    seq_len = token_masks.size(1)
+                    reverse_mask = torch.flip(token_masks, dims=[1])
+                    last_indices = (seq_len - 1) - torch.argmax(reverse_mask.float(), dim=1)
+                    calculated_uncertainties = torch.gather(uncertainty_probs, 1, last_indices.unsqueeze(-1)).squeeze(-1)
+                
+                final_uncertainties = torch.where(has_separator, calculated_uncertainties, default_uncertainty)
+                all_uncertainties.extend(final_uncertainties.cpu().tolist())
+
+                del inputs, outputs, token_masks, uncertainty_probs
+                torch.cuda.empty_cache()
+
+            except torch.cuda.OutOfMemoryError:
+                logger.error(f"[UncertaintyServer] CUDA OOM in batch, falling back to single processing.")
+                torch.cuda.empty_cache()
+                for single_conv in batch_conversations:
+                    try:
+                        single_inputs = tokenizer([single_conv], return_tensors="pt", padding=True, truncation=True, max_length=7000).to(uncertainty_device)
+                        outputs = model(input_ids=single_inputs.input_ids, attention_mask=single_inputs.attention_mask)
+                        token_mask = (single_inputs.input_ids[0] == step_sep_id)
+                        
+                        if not token_mask.any():
+                            all_uncertainties.append(0.5)
+                            continue
+
+                        uncertainty_probs = torch.softmax(outputs.logits, dim=-1)[0, :, 1]
+                        
+                        if args.uncertainty_method == "product":
+                            score = uncertainty_probs[token_mask].clamp(min=1e-8).prod().item()
+                        elif args.uncertainty_method == "average":
+                            score = uncertainty_probs[token_mask].mean().item()
+                        elif args.uncertainty_method == "minimum":
+                            score = uncertainty_probs[token_mask].min().item()
+                        else: # "last_step"
+                            last_idx = torch.where(token_mask)[0][-1]
+                            score = uncertainty_probs[last_idx].item()
+                        
+                        all_uncertainties.append(score)
+
+                        del single_inputs, outputs
+                        torch.cuda.empty_cache()
+                    except Exception as e:
+                        logger.error(f"[UncertaintyServer] Error processing single sample in fallback: {e}")
+                        all_uncertainties.append(0.5)
+        
+        return all_uncertainties
+
+    while True:
+        try:
+            task = task_queue.get()
+            if task == "STOP": break
+            request_id, worker_rank = task["request_id"], task["worker_rank"]
+            uncertainties = get_uncertainties(task["prompts"])
+            result_queues[worker_rank].put({"request_id": request_id, "uncertainties": uncertainties})
+        except Exception as e:
+            logger.error(f"[UncertaintyServer] Error processing task: {e}", exc_info=True)
+    logger.info("[UncertaintyServer] Shutting down.")
+
+
 def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queues: List[Queue]):
     value_device = torch.device(f"cuda:{args.value_model_gpu}")
     logger.info(f"[ValueServer] Starting on device {value_device}")
 
     tokenizer = AutoTokenizer.from_pretrained(args.value_model_path, trust_remote_code=True)
     model = AutoModel.from_pretrained(
-        args.value_model_path, num_labels=2, device_map="auto", trust_remote_code=True
+        args.value_model_path, num_labels=2, dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
     )
 
     if tokenizer.pad_token is None:
@@ -461,6 +610,7 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
         
         return all_rewards
 
+
     while True:
         try:
             task = task_queue.get()
@@ -473,16 +623,17 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
     logger.info("[ValueServer] Shutting down.")
 
 
-def _sbs_worker(args: argparse.Namespace, dataset_slice: List[Dict[str, Any]], rank: int, value_task_queue: Queue, value_result_queue: Queue):
+def _sbs_worker(args: argparse.Namespace, dataset_slice: List[Dict[str, Any]], rank: int, value_task_queue: Queue, value_result_queue: Queue, uncertainty_task_queue: Queue, uncertainty_result_queue: Queue):
     logger.info(f"[Rank {rank}] Worker started.")
     sbs_config = SBSConfig(
         step_beam_width=args.beam_width, n_total_samples=args.n_samples, max_depth=args.max_depth,
         budget=args.budget, temperature=args.temperature, verbose=args.verbose,
-        value_method=args.value_method,
+        value_method=args.value_method, uncertainty_method=args.uncertainty_method,
     )
     sbs_instance = StepBeamSearch(
         inference_model_name=args.inference_model, config=sbs_config, value_task_queue=value_task_queue,
-        value_result_queue=value_result_queue, worker_rank=rank,
+        value_result_queue=value_result_queue, uncertainty_task_queue=uncertainty_task_queue,
+        uncertainty_result_queue=uncertainty_result_queue, worker_rank=rank,
     )
 
     for item in tqdm(dataset_slice, desc=f"Rank {rank} Processing"):
@@ -515,6 +666,7 @@ def run_sbs_on_dataset(args: argparse.Namespace):
         dataset = dataset[args.idx_start:args.idx_end]
         logger.info(f"Processing dataset slice from {args.idx_start} to {args.idx_end}. Total items: {len(dataset)}")
 
+    # --- Check for already processed questions and exclude them ---
     if os.path.exists(args.output_dir):
         processed_indices = set()
         for folder_name in os.listdir(args.output_dir):
@@ -532,12 +684,18 @@ def run_sbs_on_dataset(args: argparse.Namespace):
     num_workers = args.num_workers
     value_task_queue = Queue()
     value_result_queues = [Queue() for _ in range(num_workers)]
+    uncertainty_task_queue = Queue()
+    uncertainty_result_queues = [Queue() for _ in range(num_workers)]
     
     logger.info("Starting Value Model Server process...")
     value_server_proc = Process(target=_value_model_server, args=(args, value_task_queue, value_result_queues))
     value_server_proc.start()
     
-    time.sleep(15)
+    logger.info("Starting Uncertainty Model Server process...")
+    uncertainty_server_proc = Process(target=_uncertainty_model_server, args=(args, uncertainty_task_queue, uncertainty_result_queues))
+    uncertainty_server_proc.start()
+    
+    time.sleep(30) # Allow time for models to load
 
     total_samples = len(dataset)
     samples_per_worker = (total_samples + num_workers - 1) // num_workers
@@ -548,7 +706,7 @@ def run_sbs_on_dataset(args: argparse.Namespace):
         start_idx = i * samples_per_worker
         end_idx = min(start_idx + samples_per_worker, total_samples)
         if not (dataset_slice := dataset[start_idx:end_idx]): continue
-        proc = Process(target=_sbs_worker, args=(args, dataset_slice, i, value_task_queue, value_result_queues[i]))
+        proc = Process(target=_sbs_worker, args=(args, dataset_slice, i, value_task_queue, value_result_queues[i], uncertainty_task_queue, uncertainty_result_queues[i]))
         proc.start()
         worker_procs.append(proc)
         
@@ -557,28 +715,33 @@ def run_sbs_on_dataset(args: argparse.Namespace):
 
     logger.info("All SBS workers finished. Shutting down servers...")
     value_task_queue.put("STOP")
+    uncertainty_task_queue.put("STOP")
     value_server_proc.join()
+    uncertainty_server_proc.join()
     logger.info("All processes have completed.")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run SBS using a vLLM server with uniform sample distribution.")
+    parser = argparse.ArgumentParser(description="Run SBS using a vLLM server with uncertainty-weighted sampling.")
     parser.add_argument("--dataset", type=str, required=True, help="Path to input JSONL dataset.")
     parser.add_argument("--output_dir", type=str, required=True, help="Directory to save results.")
     parser.add_argument("--inference_model", type=str, default="Qwen/Qwen2.5-1.5B-Instruct", help="Model name served by vLLM.")
     parser.add_argument("--value_model_path", type=str, required=True, help="Path to pretrained value model.")
+    parser.add_argument("--uncertainty_model_path", type=str, default="jacopo-minniti/Qwen2.5-Math-7B-PUM-half_entropy", help="Path to pretrained uncertainty model.")
     
     parser.add_argument("--num_workers", type=int, default=4, help="Number of parallel client worker processes.")
     parser.add_argument("--value_model_gpu", type=int, default=0, help="GPU ID for the value model server.")
+    parser.add_argument("--uncertainty_model_gpu", type=int, default=0, help="GPU ID for the uncertainty model server.")
     
     parser.add_argument("--beam_width", type=int, default=4, help="Step-level beam width.")
-    parser.add_argument("--n_samples", type=int, default=12, help="Total samples per step, distributed uniformly.")
+    parser.add_argument("--n_samples", type=int, default=12, help="Total samples per step, distributed by uncertainty.")
     parser.add_argument("--max_depth", type=int, default=None, help="Maximum search depth.")
     parser.add_argument("--budget", type=int, default=None, help="Maximum total generated tokens.")
     parser.add_argument("--temperature", type=float, default=1.0, help="Generation temperature.")
     parser.add_argument("--verbose", action='store_true', help="Enable verbose logging.")
     
     parser.add_argument("--value_method", type=str, default="last_step", choices=["last_step", "product"], help="Method to calculate node value.")
+    parser.add_argument("--uncertainty_method", type=str, default="last_step", choices=["last_step", "product", "average", "minimum"], help="Method to aggregate uncertainty scores.")
 
     parser.add_argument("--idx_start", type=int, default=None, help="Start index of the dataset split.")
     parser.add_argument("--idx_end", type=int, default=None, help="End index of the dataset split.")
