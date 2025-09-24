@@ -54,8 +54,8 @@ class Completer:
             forcing_text = "\n\nI reasoned enough, the user wants a final answer.\n## Final Answer\n\\boxed{"
             modified_cot = cut_cot + forcing_text
             return format_prompt(question, system_prompt=self.config.system_prompt, cot=modified_cot)
-        else:
-            return format_prompt(question, system_prompt=self.config.system_prompt, cot=cut_cot)
+        
+        return format_prompt(question, system_prompt=self.config.system_prompt, cot=cut_cot)
 
     def generate(
         self,

@@ -59,7 +59,8 @@ from .text_utils import (
     normalize_answer,
     ensure_think_ending,
     MMLU_SYSTEM_PROMPT,
-    MATH_SYSTEM_PROMPT
+    MATH_SYSTEM_PROMPT,
+    prompt_pattern
 )
 
 __all__ = [
@@ -115,7 +116,8 @@ __all__ = [
     "MMLU_SYSTEM_PROMPT",
     "MATH_SYSTEM_PROMPT",
     "extract_final_answer",
-    "normalize_answer"
+    "normalize_answer",
+    "prompt_pattern"
 ]
 
 __version__ = "1.0.0" 

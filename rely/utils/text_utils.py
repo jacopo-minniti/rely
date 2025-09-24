@@ -20,6 +20,13 @@ Options:
 ## Your Example Answer
 [...Explanation...] The correct answer is (B)."""
 
+prompt_pattern = re.compile(
+    r"<\|im_start\|>system\n(.*?)"
+    r"<\|im_end\|>\n<\|im_start\|>user\n(.*?)"
+    r"<\|im_end\|>\n<\|im_start|>assistant\n(.*)",
+    re.DOTALL
+)
+
 def get_last_step_pos(text: str, tokenizer: AutoTokenizer) -> Tuple[int, str]:
     """
     Returns the token position after the last '\n\n' in the text.

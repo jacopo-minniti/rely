@@ -14,14 +14,13 @@ from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 
 import torch
-import torch.nn.functional as F
 from openai import OpenAI
 from transformers import AutoModel, AutoTokenizer, AutoModelForTokenClassification
 from tqdm import tqdm
 import argparse
 from datasets import load_dataset
 
-from rely.utils import MATH_SYSTEM_PROMPT, extract_final_answer, normalize_answer
+from rely.utils import MATH_SYSTEM_PROMPT, extract_final_answer, normalize_answer, prompt_pattern
 from rely.inference.sbs.strategies import SamplingStrategy, UniformStrategy, PumStrategy, TokenEntropyStrategy
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -368,8 +367,6 @@ def _uncertainty_model_server(args: argparse.Namespace, task_queue: Queue, resul
     model.eval()
     logger.info("[UncertaintyServer] Uncertainty model loaded.")
 
-    prompt_pattern = re.compile(r"<\|im_start\|>system\n(.*?)\|im_end\|>\n<\|im_start\|>user\n(.*?)\|im_end\|>\n<\|im_start\|>assistant\n(.*)", re.DOTALL)
-
     @torch.no_grad()
     def get_uncertainties(prompts: List[str]) -> List[float]:
         conversation_strs = []
@@ -484,8 +481,6 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
     tokenizer.padding_side = "left"
     model.eval()
     logger.info("[ValueServer] Value model loaded.")
-
-    prompt_pattern = re.compile(r"<\|im_start\|>system\n(.*?)\|im_end\|>\n<\|im_start\|>user\n(.*?)\|im_end\|>\n<\|im_start\|>assistant\n(.*)", re.DOTALL)
 
     @torch.no_grad()
     def get_values(prompts: List[str], generated_texts: List[str]) -> List[float]:
