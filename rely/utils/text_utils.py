@@ -23,7 +23,7 @@ Options:
 prompt_pattern = re.compile(
     r"<\|im_start\|>system\n(.*?)"
     r"<\|im_end\|>\n<\|im_start\|>user\n(.*?)"
-    r"<\|im_end\|>\n<\|im_start|>assistant\n(.*)",
+    r"<\|im_end\|>\n<\|im_start\|>assistant\n(.*)",
     re.DOTALL
 )
 
