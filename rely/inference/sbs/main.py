@@ -423,6 +423,9 @@ def _uncertainty_model_server(args: argparse.Namespace, task_queue: Queue, resul
                 final_uncertainties = torch.where(has_separator, calculated_uncertainties, default_uncertainty)
                 all_uncertainties.extend(final_uncertainties.cpu().tolist())
 
+                del inputs, outputs, token_masks, uncertainty_probs
+                torch.cuda.empty_cache()
+
             except torch.cuda.OutOfMemoryError:
                 logger.error(f"[UncertaintyServer] CUDA OOM in batch, falling back to single processing.")
                 torch.cuda.empty_cache()
@@ -449,6 +452,9 @@ def _uncertainty_model_server(args: argparse.Namespace, task_queue: Queue, resul
                             score = uncertainty_probs[last_idx].item()
                         
                         all_uncertainties.append(score)
+
+                        del single_inputs, outputs
+                        torch.cuda.empty_cache()
                     except Exception as e:
                         logger.error(f"[UncertaintyServer] Error processing single sample in fallback: {e}")
                         all_uncertainties.append(0.5)
