@@ -1,5 +1,5 @@
 # Expose main API for rely.complete
-from .completer import Completer, CompleterConfig
+from .completer_offline import Completer, CompleterConfig
 from .generate import generate_from_dataset
 
 __all__ = [

@@ -575,7 +575,7 @@ def _sbs_worker(args: argparse.Namespace, dataset_slice: List[Dict[str, Any]], r
         step_beam_width=args.beam_width, n_total_samples=args.n_samples, max_depth=args.max_depth,
         budget=args.budget, temperature=args.temperature, verbose=args.verbose,
         value_method=args.value_method, uncertainty_method=args.uncertainty_method,
-        entropy_k=args.entropy_k
+        entropy_k=args.entropy_k, remove_duplicate=not args.keep_duplicates
     )
     sbs_instance = StepBeamSearch(
         inference_model_name=args.inference_model, config=sbs_config, strategy=strategy,
@@ -699,6 +699,7 @@ def main():
     parser.add_argument("--idx_start", type=int, default=None, help="Start index of the dataset split.")
     parser.add_argument("--idx_end", type=int, default=None, help="End index of the dataset split.")
     parser.add_argument("--verbose", action='store_true', help="Enable verbose logging.")
+    parser.add_argument("--keep_duplicates", action='store_true', help="Keep duplicate nodes instead of deduplicating them.")
 
     # SBS parameters
     parser.add_argument("--beam_width", type=int, default=4, help="Step-level beam width.")
