@@ -150,6 +150,8 @@ class StepBeamSearch:
                 })
 
         values = self._get_values_from_server(value_request_prompts, value_request_texts)
+        
+        uncertainties = self.strategy.calculate_candidate_uncertainties(self, question, candidate_data)
 
         candidate_idx = 0
         for data in candidate_data:
@@ -163,9 +165,11 @@ class StepBeamSearch:
             
             child_node.value = parent_node.value * new_step_value if self.config.value_method == 'product' else new_step_value
             
-            # Let the strategy update the uncertainty if it needs to
-            gen_result['entropy_k'] = self.config.entropy_k
-            self.strategy.update_candidate_uncertainty(child_node, gen_result)
+            if uncertainties:
+                child_node.uncertainty = uncertainties[candidate_idx]
+            else:
+                gen_result['entropy_k'] = self.config.entropy_k
+                self.strategy.update_candidate_uncertainty(child_node, gen_result)
 
             if ans := extract_final_answer(gen_text):
                 child_node.is_terminal, child_node.final_answer = True, ans
@@ -189,7 +193,7 @@ class StepBeamSearch:
             self.active_beams, self.current_beam_width = [], 0
             return 0
         
-        candidates.sort(key=lambda x: x.value, reverse=True)
+        candidates.sort(key=lambda x: x.value + self.config.alpha * x.uncertainty, reverse=True)
         new_active_beams, newly_completed = [], 0
         
         for cand in candidates[:self.current_beam_width]:
@@ -327,7 +331,7 @@ def _sbs_worker(args: argparse.Namespace, dataset_slice: List[Dict[str, Any]], r
         step_beam_width=args.beam_width, n_total_samples=args.n_samples, max_depth=args.max_depth,
         budget=args.budget, temperature=args.temperature, verbose=args.verbose,
         value_method=args.value_method, uncertainty_method=args.uncertainty_method,
-        entropy_k=args.entropy_k, remove_duplicate=not args.keep_duplicates
+        entropy_k=args.entropy_k, remove_duplicate=not args.keep_duplicates, alpha=args.alpha
     )
     sbs_instance = StepBeamSearch(
         inference_model_name=args.inference_model, config=sbs_config, strategy=strategy,
@@ -460,6 +464,7 @@ def main():
     parser.add_argument("--budget", type=int, default=None, help="Maximum total generated tokens.")
     parser.add_argument("--temperature", type=float, default=1.0, help="Generation temperature.")
     parser.add_argument("--value_method", type=str, default="last_step", choices=["last_step", "product"], help="Method to calculate node value.")
+    parser.add_argument("--alpha", type=float, default=0.1, help="Weight for the uncertainty score in beam selection.")
 
     # Strategy-specific arguments
     parser.add_argument("--strategy", type=str, default="uniform", choices=["uniform", "pum", "token_entropy"], help="Sampling strategy to use.")
