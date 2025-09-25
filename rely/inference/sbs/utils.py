@@ -10,6 +10,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForTokenClassification, AutoModel
 
 from rely.utils import prompt_pattern
+from rely.train.soft_prm.model import SoftClassificationPRMModel
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,13 @@ def _uncertainty_model_server(args: argparse.Namespace, task_queue: Queue, resul
     logger.info(f"[UncertaintyServer] Starting on device {uncertainty_device}")
 
     tokenizer = AutoTokenizer.from_pretrained(args.uncertainty_model_path, trust_remote_code=True)
-    model = AutoModelForTokenClassification.from_pretrained(
+    # OLD AutoModelForTokenClassification model loading (commented out)
+    # model = AutoModelForTokenClassification.from_pretrained(
+    #     args.uncertainty_model_path, dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
+    # )
+    
+    # NEW custom SoftClassificationPRMModel loading
+    model = SoftClassificationPRMModel.from_pretrained(
         args.uncertainty_model_path, dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
     )
 
@@ -91,7 +98,11 @@ def _uncertainty_model_server(args: argparse.Namespace, task_queue: Queue, resul
                 outputs = model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask)
                 token_masks = (inputs.input_ids == step_sep_id)
                 
-                uncertainty_probs = torch.softmax(outputs.logits, dim=-1)[:, :, 1]
+                # OLD AutoModelForTokenClassification logic (commented out)
+                # uncertainty_probs = torch.softmax(outputs.logits, dim=-1)[:, :, 1]
+                
+                # NEW custom SoftClassificationPRMModel logic - direct sigmoid probabilities
+                uncertainty_probs = outputs.logits
                 has_separator = token_masks.any(dim=1)
                 default_uncertainty = torch.tensor(0.5, device=uncertainty_device)
                 
@@ -135,7 +146,11 @@ def _uncertainty_model_server(args: argparse.Namespace, task_queue: Queue, resul
                             all_uncertainties.append(0.5)
                             continue
 
-                        uncertainty_probs = torch.softmax(outputs.logits, dim=-1)[0, :, 1]
+                        # OLD AutoModelForTokenClassification logic (commented out)
+                        # uncertainty_probs = torch.softmax(outputs.logits, dim=-1)[0, :, 1]
+                        
+                        # NEW custom SoftClassificationPRMModel logic - direct sigmoid probabilities
+                        uncertainty_probs = outputs.logits[0, :]
                         
                         if args.uncertainty_method == "product":
                             score = uncertainty_probs[token_mask].clamp(min=1e-8).prod().item()
