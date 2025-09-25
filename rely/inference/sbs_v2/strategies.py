@@ -76,9 +76,7 @@ class PumStrategy(SamplingStrategy):
         for data in candidate_data:
             parent_node = data['parent_node']
             gen_text = data['generation_result']['text']
-            snippet = gen_text.rstrip() + '
-
-'
+            snippet = gen_text.rstrip() + '\n\n'
             new_full_text = parent_node.full_text + snippet
             prompts_for_uncertainty.append(sbs_instance.create_prompt(question, new_full_text))
         

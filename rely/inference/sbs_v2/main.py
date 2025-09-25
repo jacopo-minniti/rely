@@ -18,8 +18,8 @@ import argparse
 from datasets import load_dataset
 
 from rely.utils import MATH_SYSTEM_PROMPT, extract_final_answer, normalize_answer, prompt_pattern
-from rely.inference.sbs.strategies import SamplingStrategy, UniformStrategy, PumStrategy, TokenEntropyStrategy
-from rely.inference.sbs.utils import SBSConfig, SBSNode, _uncertainty_model_server, _value_model_server
+from rely.inference.sbs_v2.strategies import SamplingStrategy, UniformStrategy, PumStrategy, TokenEntropyStrategy
+from rely.inference.sbs_v2.utils import SBSConfig, SBSNode, _uncertainty_model_server, _value_model_server
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -193,7 +193,8 @@ class StepBeamSearch:
             self.active_beams, self.current_beam_width = [], 0
             return 0
         
-        candidates.sort(key=lambda x: x.value + self.config.alpha * x.uncertainty, reverse=True)
+        # CHANGED THIS TO "-"
+        candidates.sort(key=lambda x: x.value - self.config.alpha * x.uncertainty, reverse=True)
         new_active_beams, newly_completed = [], 0
         
         for cand in candidates[:self.current_beam_width]:
