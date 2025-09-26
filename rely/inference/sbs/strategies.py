@@ -117,58 +117,30 @@ class PumStrategy(SamplingStrategy):
 
         return sample_distribution
 
-class PumPerValueStrategy(SamplingStrategy):
+
+class PumPerValueStrategy(PumStrategy):
     """Distributes samples based on PUM uncertainty multiplied by beam value."""
-    def __init__(self, uncertainty_task_queue, uncertainty_result_queue):
-        self.uncertainty_task_queue = uncertainty_task_queue
-        self.uncertainty_result_queue = uncertainty_result_queue
-
-    def _get_uncertainties_from_server(self, sbs_instance, prompts: List[str]) -> List[float]:
-        if not prompts:
-            return []
-        request_id = str(uuid.uuid4())
-        payload = {"request_id": request_id, "worker_rank": sbs_instance.worker_rank, "prompts": prompts}
-        self.uncertainty_task_queue.put(payload)
-        
-        while True:
-            response = self.uncertainty_result_queue.get()
-            if response.get("request_id") == request_id:
-                return response["uncertainties"]
-            self.uncertainty_result_queue.put(response)
-            time.sleep(0.01)
-
     def distribute_samples(self, sbs_instance: 'StepBeamSearch', question: str) -> List[int]:
         if not sbs_instance.active_beams:
             return []
 
         # 1. Get uncertainties
         uncertainty_prompts = [sbs_instance.create_prompt(question, beam.full_text) for beam in sbs_instance.active_beams]
-        pum_uncertainty_scores = self._get_uncertainties_from_server(sbs_instance, uncertainty_prompts)
+        uncertainty_scores = self._get_uncertainties_from_server(sbs_instance, uncertainty_prompts)
         
-        # 2. Combine with value scores
-        combined_scores = []
-        beam_values = []
         for i, beam in enumerate(sbs_instance.active_beams):
-            if i < len(pum_uncertainty_scores):
-                beam.uncertainty = pum_uncertainty_scores[i] # Store raw PUM score
-                combined_score = pum_uncertainty_scores[i] * beam.value
-                combined_scores.append(combined_score)
-                beam_values.append(beam.value)
+            if i < len(uncertainty_scores):
+                beam.uncertainty = uncertainty_scores[i]
 
-        num_beams = len(sbs_instance.active_beams)
+        # New part: multiply by value
+        value_scores = [beam.value for beam in sbs_instance.active_beams]
+        distribution_scores = [pum * val for pum, val in zip(uncertainty_scores, value_scores)]
+
+        # 2. Calculate distribution (logic from sbs_pum.py)
+        num_beams = len(distribution_scores)
         total_samples = sbs_instance.config.n_total_samples
 
-        if not combined_scores:
-            # Fallback to even distribution
-            samples_per_beam = total_samples // num_beams
-            remainder = total_samples % num_beams
-            distribution = [samples_per_beam] * num_beams
-            for i in range(remainder):
-                distribution[i] += 1
-            return distribution
-
-        # 3. Calculate distribution
-        total_score = sum(combined_scores)
+        total_score = sum(distribution_scores)
         if total_score == 0:
             # Fallback to even distribution
             samples_per_beam = total_samples // num_beams
@@ -178,15 +150,15 @@ class PumPerValueStrategy(SamplingStrategy):
                 distribution[i] += 1
             return distribution
 
-        normalized_scores = [score / total_score for score in combined_scores]
+        normalized_scores = [score / total_score for score in distribution_scores]
         sample_distribution = [int(norm_score * total_samples) for norm_score in normalized_scores]
 
         total_assigned = sum(sample_distribution)
         remainder = total_samples - total_assigned
         if remainder > 0:
-            sorted_indices = sorted(range(len(combined_scores)), key=lambda k: combined_scores[k], reverse=True)
+            sorted_indices = sorted(range(num_beams), key=lambda k: distribution_scores[k], reverse=True)
             for i in range(remainder):
-                sample_distribution[sorted_indices[i % len(combined_scores)]] += 1
+                sample_distribution[sorted_indices[i % num_beams]] += 1
         
         zero_indices = [i for i, s in enumerate(sample_distribution) if s == 0]
         if zero_indices:
@@ -200,9 +172,9 @@ class PumPerValueStrategy(SamplingStrategy):
                     break
         
         if sbs_instance.config.verbose:
-            logger.info(f"[Rank {sbs_instance.worker_rank}] PUM Uncertainty scores: {[f'{s:.3f}' for s in pum_uncertainty_scores]}")
-            logger.info(f"[Rank {sbs_instance.worker_rank}] Beam values: {[f'{v:.3f}' for v in beam_values]}")
-            logger.info(f"[Rank {sbs_instance.worker_rank}] Combined scores (pum*value): {[f'{s:.3f}' for s in combined_scores]}")
+            logger.info(f"[Rank {sbs_instance.worker_rank}] Uncertainty scores: {[f'{s:.3f}' for s in uncertainty_scores]}")
+            logger.info(f"[Rank {sbs_instance.worker_rank}] Value scores: {[f'{s:.3f}' for s in value_scores]}")
+            logger.info(f"[Rank {sbs_instance.worker_rank}] Distribution scores: {[f'{s:.3f}' for s in distribution_scores]}")
             logger.info(f"[Rank {sbs_instance.worker_rank}] Sample distribution: {sample_distribution}")
 
         return sample_distribution
