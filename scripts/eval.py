@@ -13,8 +13,7 @@ def process_json_file(path):
     
     Returns:
         A tuple containing:
-        - is_majority_correct (bool): True if the majority vote is correct.
-        - sample_accuracy (float): The accuracy value from the JSON.
+        - is_majority_correct (bool or None): True if correct, False if incorrect, None if should be skipped.
         - best_of_n_applicable (bool): True if 'best of n' logic could be applied.
         - is_best_of_n_correct (bool): True if the 'best of n' answer is correct.
         - total_tokens (int): The total tokens from the file.
@@ -30,10 +29,16 @@ def process_json_file(path):
 
         # --- 1. Majority Vote Calculation (Original Logic) ---
         majority_vote = data.get('majority_vote')
+        accuracy = data.get('accuracy')
+        
+        # Skip entries where accuracy or majority_vote is "N/A"
+        if accuracy == "N/A" or majority_vote == "N/A":
+            return None, False, False, total_tokens
+            
         is_majority_correct = False
         if ground_truth is not None and majority_vote is not None:
-            # Skip if majority_vote is "N/A" or empty string
-            if majority_vote != "N/A" and str(majority_vote).strip():
+            # Skip if majority_vote is empty string
+            if str(majority_vote).strip():
                 normalized_gt = normalize_answer(str(ground_truth))
                 normalized_mv = normalize_answer(str(majority_vote))
                 if (normalized_gt == normalized_mv or ground_truth == majority_vote) and normalized_gt != "":
@@ -112,8 +117,13 @@ if __name__ == '__main__':
     token_counts = []
 
     for path in sorted(json_files):
-        total_files += 1
         is_majority_correct, best_of_n_applicable, is_best_of_n_correct, total_tokens = process_json_file(path)
+        
+        # Skip entries that should not be considered (accuracy or majority_vote is "N/A")
+        if is_majority_correct is None:
+            continue
+            
+        total_files += 1
         
         # Accumulate majority vote stats
         if is_majority_correct:

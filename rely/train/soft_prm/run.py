@@ -34,12 +34,12 @@ def main():
     print("Loading dataset...")
     train_dataset = load_dataset(
         "jacopo-minniti/MATH-PUM-qwen2.5-1.5B", 
-        name="regression_variance", 
+        name="cep", 
         split="train"
     )
     eval_dataset = load_dataset(
         "jacopo-minniti/MATH-PUM-qwen2.5-1.5B",
-        name="regression_variance",
+        name="cep",
         split="test"
     )
     
@@ -54,12 +54,12 @@ def main():
     print("Configuring training arguments...")
     training_args = PRMConfig(
         output_dir="./cache/trained_models",
-        hub_model_id="jacopo-minniti/Qwen2.5-Math-1.5B-PUM-variance",
+        hub_model_id="jacopo-minniti/Qwen2.5-Math-1.5B-PUM-cep",
         max_length=4096,
         train_on_last_step_only=False,
         step_separator=step_separator_token,
-        num_train_epochs=2, 
-        learning_rate=5e-5,
+        num_train_epochs=3, 
+        learning_rate=1e-4,
         lr_scheduler_type="cosine",
         warmup_ratio=0.15,
         weight_decay=0.1,

@@ -48,8 +48,8 @@ def upload_as_configuration(repo_id, config_name="v2", token=None):
         print(f"✅ Repository {repo_id} is ready")
         
         # Load the data
-        train_data = load_jsonl("v1_mmlu_train.jsonl")
-        test_data = load_jsonl("v1_mmlu_test.jsonl")
+        train_data = load_jsonl("data/math_cep_train.jsonl")
+        test_data = load_jsonl("data/math_cep_test.jsonl")
         
         # Create datasets
         train_dataset = Dataset.from_list(train_data)
@@ -77,9 +77,9 @@ def main():
     parser.add_argument("repo_id", help="Repository ID (username/dataset-name)")
     parser.add_argument("--method", choices=["files", "config"], default="files",
                        help="Upload method: 'files' for separate files, 'config' for configuration")
-    parser.add_argument("--config-name", default="v2", help="Configuration name (for config method)")
+    parser.add_argument("--config-name", default="cep", help="Configuration name (for config method)")
     parser.add_argument("--files", nargs="+", 
-                       default=["data/math_variance_train.jsonl", "data/math_variance_test.jsonl"],
+                       default=["data/math_cep_train.jsonl", "data/math_cep_test.jsonl"],
                        help="Files to upload (for files method)")
     parser.add_argument("--token", help="Hugging Face token (optional if logged in)")
     

@@ -63,6 +63,9 @@ def _uncertainty_model_server(args: argparse.Namespace, task_queue: Queue, resul
     model = SoftClassificationPRMModel.from_pretrained(
         args.uncertainty_model_path, dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
     )
+    
+    # Ensure all model parameters are in bfloat16 to avoid dtype mismatch
+    model = model.to(dtype=torch.bfloat16)
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
