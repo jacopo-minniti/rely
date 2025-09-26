@@ -18,7 +18,7 @@ import argparse
 from datasets import load_dataset
 
 from rely.utils import MATH_SYSTEM_PROMPT, extract_final_answer, normalize_answer, prompt_pattern
-from rely.inference.sbs.strategies import SamplingStrategy, UniformStrategy, PumStrategy, TokenEntropyStrategy
+from rely.inference.sbs.strategies import SamplingStrategy, UniformStrategy, PumStrategy, TokenEntropyStrategy, PumPerValueStrategy
 from rely.inference.sbs.utils import SBSConfig, SBSNode, _uncertainty_model_server, _value_model_server
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -385,7 +385,7 @@ def run_sbs_on_dataset(args: argparse.Namespace):
     procs = []
     uncertainty_task_queue, uncertainty_result_queues = None, None
     
-    if args.strategy == 'pum':
+    if args.strategy in ['pum', 'pum_per_value']:
         uncertainty_task_queue = Queue()
         uncertainty_result_queues = [Queue() for _ in range(num_workers)]
         logger.info("Starting Uncertainty Model Server process...")
@@ -413,6 +413,8 @@ def run_sbs_on_dataset(args: argparse.Namespace):
         # Instantiate strategy for each worker
         if args.strategy == 'pum':
             strategy = PumStrategy(uncertainty_task_queue, uncertainty_result_queues[i])
+        elif args.strategy == 'pum_per_value':
+            strategy = PumPerValueStrategy(uncertainty_task_queue, uncertainty_result_queues[i])
         elif args.strategy == 'token_entropy':
             strategy = TokenEntropyStrategy()
         else: # uniform
@@ -462,7 +464,7 @@ def main():
     parser.add_argument("--value_method", type=str, default="last_step", choices=["last_step", "product"], help="Method to calculate node value.")
 
     # Strategy-specific arguments
-    parser.add_argument("--strategy", type=str, default="uniform", choices=["uniform", "pum", "token_entropy"], help="Sampling strategy to use.")
+    parser.add_argument("--strategy", type=str, default="uniform", choices=["uniform", "pum", "token_entropy", "pum_per_value"], help="Sampling strategy to use.")
     
     # PUM-specific
     pum_group = parser.add_argument_group('PUM Strategy Arguments')
@@ -476,9 +478,9 @@ def main():
     
     args = parser.parse_args()
 
-    if args.strategy == 'pum':
+    if args.strategy in ['pum', 'pum_per_value']:
         if not args.uncertainty_model_path or args.uncertainty_model_gpu is None:
-            parser.error("--uncertainty_model_path and --uncertainty_model_gpu are required for --strategy='pum'")
+            parser.error("--uncertainty_model_path and --uncertainty_model_gpu are required for the selected strategy.")
 
     os.makedirs(args.output_dir, exist_ok=True)
     run_sbs_on_dataset(args)
