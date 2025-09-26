@@ -117,8 +117,26 @@ class PumStrategy(SamplingStrategy):
 
         return sample_distribution
 
-class PumPerValueStrategy(PumStrategy):
+class PumPerValueStrategy(SamplingStrategy):
     """Distributes samples based on PUM uncertainty multiplied by beam value."""
+    def __init__(self, uncertainty_task_queue, uncertainty_result_queue):
+        self.uncertainty_task_queue = uncertainty_task_queue
+        self.uncertainty_result_queue = uncertainty_result_queue
+
+    def _get_uncertainties_from_server(self, sbs_instance, prompts: List[str]) -> List[float]:
+        if not prompts:
+            return []
+        request_id = str(uuid.uuid4())
+        payload = {"request_id": request_id, "worker_rank": sbs_instance.worker_rank, "prompts": prompts}
+        self.uncertainty_task_queue.put(payload)
+        
+        while True:
+            response = self.uncertainty_result_queue.get()
+            if response.get("request_id") == request_id:
+                return response["uncertainties"]
+            self.uncertainty_result_queue.put(response)
+            time.sleep(0.01)
+
     def distribute_samples(self, sbs_instance: 'StepBeamSearch', question: str) -> List[int]:
         if not sbs_instance.active_beams:
             return []
