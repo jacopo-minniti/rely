@@ -34,12 +34,12 @@ def main():
     print("Loading dataset...")
     train_dataset = load_dataset(
         "jacopo-minniti/MATH-PUM-qwen2.5-1.5B", 
-        name="cep", 
+        name="cwe", 
         split="train"
     )
     eval_dataset = load_dataset(
         "jacopo-minniti/MATH-PUM-qwen2.5-1.5B",
-        name="cep",
+        name="cwe",
         split="test"
     )
     
@@ -53,8 +53,8 @@ def main():
     # --- 3. Configure Training Arguments ---
     print("Configuring training arguments...")
     training_args = PRMConfig(
-        output_dir="./cache/trained_models",
-        hub_model_id="jacopo-minniti/Qwen2.5-Math-1.5B-PUM-cep",
+        output_dir="./.cache/cwe_model",
+        hub_model_id="jacopo-minniti/Qwen2.5-Math-1.5B-PUM-cwe",
         max_length=4096,
         train_on_last_step_only=False,
         step_separator=step_separator_token,
@@ -97,9 +97,9 @@ def main():
     print("Training finished!")
 
     # --- 6. Push to Hub ---
-    print("Pushing final model to the Hub...")
-    trainer.push_to_hub("Qwen2.5-Math-1.5B-PUM-variance", token="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")
-    print("Script finished successfully.")
+    # print("Pushing final model to the Hub...")
+    # trainer.push_to_hub("Qwen2.5-Math-1.5B-PUM-cwe", token="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")
+    # print("Script finished successfully.")
 
 
 if __name__ == "__main__":

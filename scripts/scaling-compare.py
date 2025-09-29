@@ -49,33 +49,44 @@ def is_pareto_dominant(data):
 
 # --- 2. Data Input ---
 sbs_data = [
-    {'B1': 2, 'B3': 4, 'tokens generated': 2687, 'accuracy': .5300},
-    {'B1': 2, 'B3': 8, 'tokens generated': 5855, 'accuracy': .5760},
-    {'B1': 2, 'B3': 16, 'tokens generated': 12954, 'accuracy': .5760},
-    {'B1': 2, 'B3': 32, 'tokens generated': 28849, 'accuracy': .5640},
-    {'B1': 4, 'B3': 8, 'tokens generated': 6403, 'accuracy': .5440},
-    {'B1': 4, 'B3': 16, 'tokens generated': 13902, 'accuracy': .5780},
-    {'B1': 4, 'B3': 20, 'tokens generated': 17436, 'accuracy': .5592},
-    {'B1': 4, 'B3': 32, 'tokens generated': 25418, 'accuracy': .4920},
-    {'B1': 5, 'B3': 16, 'tokens generated': 14372, 'accuracy': .5935},
-    {'B1': 5, 'B3': 20, 'tokens generated': 27770, 'accuracy': .5940},
-    {'B1': 5, 'B3': 32, 'tokens generated': 27778, 'accuracy': .5947},
+    {'B1': 2, 'B3': 16, 'tokens generated': 13191, 'accuracy': 0.6801},
+    {'B1': 2, 'B3': 20, 'tokens generated': 16771, 'accuracy': 0.6850},
+    {'B1': 2, 'B3': 32, 'tokens generated': 27663, 'accuracy': 0.7140},
+    {'B1': 2, 'B3': 4,  'tokens generated': 2749,  'accuracy': 0.5892},
+    {'B1': 2, 'B3': 8,  'tokens generated': 6065,  'accuracy': 0.6351},
+    {'B1': 4, 'B3': 16, 'tokens generated': 14721, 'accuracy': 0.7068},
+    {'B1': 4, 'B3': 32, 'tokens generated': 28778, 'accuracy': 0.7100},
+    {'B1': 4, 'B3': 8,  'tokens generated': 5969,  'accuracy': 0.6620},
+    {'B1': 5, 'B3': 20, 'tokens generated': 17420, 'accuracy': 0.7152},
+    {'B1': 5, 'B3': 32, 'tokens generated': 27236, 'accuracy': 0.7240},
 ]
 
+# SBS-PUMxValue
+# sbs_uncertain_data = [
+#     {'B1': 2, 'B3': 16, 'tokens generated': 13516, 'accuracy': 0.6828},
+#     {'B1': 2, 'B3': 32, 'tokens generated': 26956, 'accuracy': 0.7115},
+#     {'B1': 2, 'B3': 4,  'tokens generated': 2759,  'accuracy': 0.6052},
+#     {'B1': 2, 'B3': 8,  'tokens generated': 6028,  'accuracy': 0.6620},
+#     {'B1': 4, 'B3': 16, 'tokens generated': 13920, 'accuracy': 0.6949},
+#     {'B1': 4, 'B3': 20, 'tokens generated': 17973, 'accuracy': 0.6915},
+#     {'B1': 4, 'B3': 32, 'tokens generated': 26680, 'accuracy': 0.7075},
+#     {'B1': 4, 'B3': 8,  'tokens generated': 6420,  'accuracy': 0.6774},
+#     {'B1': 5, 'B3': 20,  'tokens generated': 19583,  'accuracy': .7143},
+#     {'B1': 5, 'B3': 32, 'tokens generated': 29741, 'accuracy': 0.7246},
+# ]
+
+# SBS-Variance
 sbs_uncertain_data = [
-    {'B1': 2, 'B3': 4, 'tokens generated': 3015, 'accuracy': .5740},
-    {'B1': 2, 'B3': 8, 'tokens generated': 6088, 'accuracy': .6500},
-    {'B1': 2, 'B3': 16, 'tokens generated': 12965, 'accuracy': .6720},
-    {'B1': 2, 'B3': 20, 'tokens generated': 17127, 'accuracy': .6844},
-    {'B1': 2, 'B3': 32, 'tokens generated': 28390, 'accuracy': .6837},
-    {'B1': 4, 'B3': 8, 'tokens generated': 6673, 'accuracy': .6500},
-    {'B1': 4, 'B3': 16, 'tokens generated': 13773, 'accuracy': .6800},
-    {'B1': 4, 'B3': 20, 'tokens generated': 17537, 'accuracy': .6700},
-    {'B1': 4, 'B3': 32, 'tokens generated': 28277, 'accuracy': .6992},
-    {'B1': 5, 'B3': 16, 'tokens generated': 14256, 'accuracy': .6874},
-    {'B1': 5, 'B3': 20, 'tokens generated': 17555, 'accuracy': .6755},
-    {'B1': 5, 'B3': 32, 'tokens generated': 26931, 'accuracy': .7042},
+    {'B1': 2, 'B3': 4,  'tokens generated': 2855,  'accuracy': 0.6020},
+    {'B1': 2, 'B3': 8,  'tokens generated': 6002,  'accuracy': 0.6560},
+    {'B1': 2, 'B3': 20, 'tokens generated': 15279, 'accuracy': 0.7030},
+    {'B1': 4, 'B3': 8,  'tokens generated': 5912,  'accuracy': 0.6653},
+    {'B1': 4, 'B3': 16, 'tokens generated': 13159, 'accuracy': 0.6938},
+    {'B1': 5, 'B3': 20, 'tokens generated': 16917, 'accuracy': 0.6959},
+    {'B1': 5, 'B3': 32, 'tokens generated': 27898, 'accuracy': 0.7256},
 ]
+
+
 
 # --- 3. Plotting Configuration ---
 # Colors and markers for the two datasets
