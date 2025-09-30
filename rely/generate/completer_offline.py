@@ -68,7 +68,7 @@ class Completer:
             return len(steps)
 
 
-    def split_attempt(self, item: dict, cot_percentage: float = 1.0, used_steps: Optional[set] = None) -> str:
+    def split_attempt(self, item: dict, used_steps: Optional[set] = None) -> str:
         if self.config.forking_strategy == "entropy":
             return item.get("cut_cot", "")
         else:
@@ -80,20 +80,18 @@ class Completer:
                 return attempt
             
             max_step = len(steps) - 1
-            # Calculate the maximum step based on cot_percentage
-            max_sampled_step = int(max_step * cot_percentage)
             
             # Ensure different samples when used_steps is provided
             if used_steps is not None:
-                available_steps = [i for i in range(max_sampled_step + 1) if i not in used_steps]
+                available_steps = [i for i in range(max_step + 1) if i not in used_steps]
                 if not available_steps:
                     # If all steps have been used, fall back to random selection
-                    sampled_step = random.randint(0, max_sampled_step) if max_sampled_step > 0 else 0
+                    sampled_step = random.randint(0, max_step) if max_step > 0 else 0
                 else:
                     sampled_step = random.choice(available_steps)
                 used_steps.add(sampled_step)
             else:
-                sampled_step = random.randint(0, max_sampled_step) if max_sampled_step > 0 else 0
+                sampled_step = random.randint(0, max_step) if max_step > 0 else 0
                 
             cut_steps = steps[:sampled_step + 1]
 
@@ -106,17 +104,17 @@ class Completer:
         n_completions_per_item: int = 100,
         max_new_tokens: int = 512,
         temperature: float = 1.0,
-        cot_percentage: float = 1.0,  # Max percentage of CoT to sample from (0.0 to 1.0)
+        every_n_steps: int = 1,  # Sample every n steps (1 means every step)
     ):
         """
-        Generate completions from the dataset, sampling every step of the CoT.
+        Generate completions from the dataset, sampling every n steps of the CoT.
         
         Args:
             output_file: Path to save the generated completions.
             n_completions_per_item: Number of completions to generate for each CoT step.
             max_new_tokens: Maximum number of new tokens to generate.
             temperature: Sampling temperature for generation.
-            cot_percentage: Maximum percentage of CoT steps to sample from (0.0 to 1.0).
+            every_n_steps: Sample every n steps (1 means every step, 5 means steps 0, 4, 9, etc.).
         """
         node_size = 1
         node_rank = 0
@@ -149,7 +147,7 @@ class Completer:
                         n_completions_per_item,
                         max_new_tokens,
                         temperature,
-                        cot_percentage,
+                        every_n_steps,
                         model,
                         dp_size,
                         tp_size,
@@ -186,7 +184,7 @@ class Completer:
                 n_completions_per_item,
                 max_new_tokens,
                 temperature,
-                cot_percentage,
+                every_n_steps,
                 model,
                 dp_size,
                 tp_size,
@@ -202,7 +200,7 @@ class Completer:
             logging.info(f"Processing complete! Output written to {output_file}")
 
 
-    def _worker(self, output_file, n_completions_per_item, max_new_tokens, temperature, cot_percentage, model, dp_size, tp_size, gpu_memory_utilization, max_num_seqs, global_dp_rank, local_dp_rank, master_addr, master_port):
+    def _worker(self, output_file, n_completions_per_item, max_new_tokens, temperature, every_n_steps, model, dp_size, tp_size, gpu_memory_utilization, max_num_seqs, global_dp_rank, local_dp_rank, master_addr, master_port):
         logging.info(f"Starting worker: global_rank={global_dp_rank}, local_rank={local_dp_rank}")
         os.environ["VLLM_DP_RANK"] = str(global_dp_rank)
         os.environ["VLLM_DP_RANK_LOCAL"] = str(local_dp_rank)
@@ -267,11 +265,8 @@ class Completer:
             if num_steps == 0:
                 continue
             
-            # Determine the maximum step to sample based on cot_percentage
-            max_step_to_sample = int((num_steps - 1) * cot_percentage)
-
-            # Create a prompt for each step prefix
-            for step_index in range(max_step_to_sample + 1):
+            # Create a prompt for every n steps
+            for step_index in range(0, num_steps, every_n_steps):
                 cut_cot = "\n\n".join(steps[:step_index + 1])
                 prompt = self._format_prompt_with_completion_type(question, cut_cot)
                 prompts_to_process.append(prompt)
