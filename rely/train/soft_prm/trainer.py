@@ -94,6 +94,8 @@ class SoftClassificationPRMTrainer(Trainer):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
+        loss (`str`, *optional*, defaults to `"bce"`):
+            The loss function to use. Can be either "bce" for Binary Cross-Entropy or "mse" for Mean Squared Error.
     """
 
     _tag_names = ["trl", "prm", "soft-classification"]
@@ -116,6 +118,7 @@ class SoftClassificationPRMTrainer(Trainer):
             None,
         ),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+        loss: str = "bce",
     ):
 
         if args.disable_dropout:
@@ -177,6 +180,12 @@ class SoftClassificationPRMTrainer(Trainer):
                         ),
                     )
 
+        # Validate loss parameter
+        if loss not in ["bce", "mse"]:
+            raise ValueError(f"loss must be either 'bce' or 'mse', got '{loss}'")
+        
+        self.loss_type = loss
+        
         super().__init__(
             model=model,
             args=args,
@@ -190,6 +199,10 @@ class SoftClassificationPRMTrainer(Trainer):
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
+
+        # Set the loss type on the model if it supports it
+        if hasattr(self.model, "set_loss_type"):
+            self.model.set_loss_type(self.loss_type)
 
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):

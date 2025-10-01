@@ -12,7 +12,7 @@ def main():
         model="Qwen/Qwen3-1.7B",
         tp_size=1,
         dp_size=4,
-        max_num_seqs=256,
+        max_num_seqs=1024,
         forking_strategy="newline",
         completion_type="long",
         dataset=input_dataset,

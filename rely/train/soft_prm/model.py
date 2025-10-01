@@ -34,6 +34,9 @@ class SoftClassificationPRMModel(PreTrainedModel):
         self.classification_head = nn.Linear(self.hidden_size, 1)
         self.classification_head = self.classification_head.float()
         
+        # Default loss type
+        self.loss_type = "bce"
+        
         self.post_init()
     
     @classmethod
@@ -54,11 +57,20 @@ class SoftClassificationPRMModel(PreTrainedModel):
             **kwargs
         )
         
+        # Initialize with default loss type
+        model.loss_type = "bce"
+        
         return model
     
     def resize_token_embeddings(self, new_num_tokens: int):
         if self.transformer:
             self.transformer.resize_token_embeddings(new_num_tokens)
+    
+    def set_loss_type(self, loss_type: str):
+        """Set the loss type for training."""
+        if loss_type not in ["bce", "mse"]:
+            raise ValueError(f"loss_type must be either 'bce' or 'mse', got '{loss_type}'")
+        self.loss_type = loss_type
     
     def _set_gradient_checkpointing(self, module, value=False):
         if module is self.transformer:
@@ -109,8 +121,6 @@ class SoftClassificationPRMModel(PreTrainedModel):
         if labels is not None:
             if labels.dtype != torch.float32:
                 labels = labels.float()
-                
-            loss_fct = nn.BCEWithLogitsLoss()
             
             active_loss = attention_mask.view(-1) == 1
             active_logits = logits.view(-1)[active_loss]
@@ -121,7 +131,17 @@ class SoftClassificationPRMModel(PreTrainedModel):
             if loss_mask.sum() > 0:
                 filtered_logits = active_logits[loss_mask]
                 filtered_labels = active_labels[loss_mask]
-                loss = loss_fct(filtered_logits, filtered_labels)
+                
+                if self.loss_type == "bce":
+                    loss_fct = nn.BCEWithLogitsLoss()
+                    loss = loss_fct(filtered_logits, filtered_labels)
+                elif self.loss_type == "mse":
+                    loss_fct = nn.MSELoss()
+                    # For MSE loss, we need to apply sigmoid to logits first to get probabilities
+                    filtered_probs = torch.sigmoid(filtered_logits)
+                    loss = loss_fct(filtered_probs, filtered_labels)
+                else:
+                    raise ValueError(f"Unsupported loss type: {self.loss_type}")
             else:
                 loss = torch.tensor(0.0, device=logits.device, requires_grad=True)
         

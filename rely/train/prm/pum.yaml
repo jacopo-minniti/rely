@@ -11,7 +11,7 @@ process_reward_model: true
 
 datasets:
   - path: jacopo-minniti/MATH-PUM-qwen2.5-1.5B # axolotl-ai-co/prm800k_phase_1
-    name: half_entropy
+    name: cwe_binary
     type: stepwise_supervised
     step_separator: "<extra_0>"
     train_on_last_step_only: false
@@ -19,7 +19,7 @@ datasets:
 
 test_datasets:
   - path: jacopo-minniti/MATH-PUM-qwen2.5-1.5B # axolotl-ai-co/prm800k_phase_1
-    name: half_entropy
+    name: cwe_binary
     type: stepwise_supervised
     step_separator: "<extra_0>"
     train_on_last_step_only: false

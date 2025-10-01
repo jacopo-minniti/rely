@@ -79,7 +79,7 @@ def main():
                        help="Upload method: 'files' for separate files, 'config' for configuration")
     parser.add_argument("--config-name", default="cwe", help="Configuration name (for config method)")
     parser.add_argument("--files", nargs="+", 
-                       default=["data/math_cwe_train.jsonl", "data/math_cwe_test.jsonl"],
+                       default=["data/math_cwe_binary_train.jsonl", "data/math_cwe_binary_test.jsonl"],
                        help="Files to upload (for files method)")
     parser.add_argument("--token", help="Hugging Face token (optional if logged in)")
     

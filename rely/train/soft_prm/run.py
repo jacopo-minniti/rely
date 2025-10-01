@@ -43,17 +43,26 @@ def main():
         split="test"
     )
     
-    # For testing, limit dataset size to avoid memory and timeout issues
-    print(f"Original train dataset size: {len(train_dataset)}")
-    print("Limiting dataset size for testing...")
+    # Preprocess train_dataset: remove items where all labels are 0.0 or all labels are 1.0
+    # print(f"Original train dataset size: {len(train_dataset)}")
+    # print("Filtering out samples with all 0.0 or all 1.0 labels...")
     
-    print(f"Limited train dataset size: {len(train_dataset)}")
-    print(f"Limited eval dataset size: {len(eval_dataset)}")
+    # def should_keep_sample(example):
+    #     labels = example['labels']
+    #     # Convert to set to check if all values are the same
+    #     unique_labels = set(labels)
+    #     # Keep sample if it has mixed labels (not all 0.0 and not all 1.0)
+    #     return not (unique_labels == {0.0} or unique_labels == {1.0})
+    
+    # train_dataset = train_dataset.filter(should_keep_sample)
+    
+    print(f"Filtered train dataset size: {len(train_dataset)}")
+    print(f"Eval dataset size: {len(eval_dataset)}")
 
     # --- 3. Configure Training Arguments ---
     print("Configuring training arguments...")
     training_args = PRMConfig(
-        output_dir="./.cache/cwe_model",
+        output_dir="./.cache/cwe_model_mse",
         hub_model_id="jacopo-minniti/Qwen2.5-Math-1.5B-PUM-cwe",
         max_length=4096,
         train_on_last_step_only=False,
@@ -89,6 +98,7 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
+        loss="mse",  # Can be "bce" (default) or "mse"
     )
 
     # --- 5. Start Training ---
