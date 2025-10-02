@@ -18,8 +18,8 @@ import argparse
 from datasets import load_dataset
 
 from rely.utils import MATH_SYSTEM_PROMPT, extract_final_answer, normalize_answer, prompt_pattern
-from rely.inference.sbs_v2.strategies import SamplingStrategy, UniformStrategy, PumStrategy, TokenEntropyStrategy
-from rely.inference.sbs_v2.utils import SBSConfig, SBSNode, _uncertainty_model_server, _value_model_server
+from rely.inference.sbs_cep.strategies import SamplingStrategy, UniformStrategy, PumStrategy, TokenEntropyStrategy, PumPerValueStrategy
+from rely.inference.sbs_cep.utils import SBSConfig, SBSNode, _uncertainty_model_server, _value_model_server
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -150,8 +150,6 @@ class StepBeamSearch:
                 })
 
         values = self._get_values_from_server(value_request_prompts, value_request_texts)
-        
-        uncertainties = self.strategy.calculate_candidate_uncertainties(self, question, candidate_data)
 
         candidate_idx = 0
         for data in candidate_data:
@@ -165,11 +163,9 @@ class StepBeamSearch:
             
             child_node.value = parent_node.value * new_step_value if self.config.value_method == 'product' else new_step_value
             
-            if uncertainties:
-                child_node.uncertainty = uncertainties[candidate_idx]
-            else:
-                gen_result['entropy_k'] = self.config.entropy_k
-                self.strategy.update_candidate_uncertainty(child_node, gen_result)
+            # Let the strategy update the uncertainty if it needs to
+            gen_result['entropy_k'] = self.config.entropy_k
+            self.strategy.update_candidate_uncertainty(child_node, gen_result)
 
             if ans := extract_final_answer(gen_text):
                 child_node.is_terminal, child_node.final_answer = True, ans
@@ -193,8 +189,7 @@ class StepBeamSearch:
             self.active_beams, self.current_beam_width = [], 0
             return 0
         
-        # CHANGED THIS TO "-"
-        candidates.sort(key=lambda x: x.value - self.config.alpha * x.uncertainty, reverse=True)
+        candidates.sort(key=lambda x: x.value, reverse=True)
         new_active_beams, newly_completed = [], 0
         
         for cand in candidates[:self.current_beam_width]:
@@ -332,7 +327,7 @@ def _sbs_worker(args: argparse.Namespace, dataset_slice: List[Dict[str, Any]], r
         step_beam_width=args.beam_width, n_total_samples=args.n_samples, max_depth=args.max_depth,
         budget=args.budget, temperature=args.temperature, verbose=args.verbose,
         value_method=args.value_method, uncertainty_method=args.uncertainty_method,
-        entropy_k=args.entropy_k, remove_duplicate=not args.keep_duplicates, alpha=args.alpha
+        entropy_k=args.entropy_k, remove_duplicate=not args.keep_duplicates
     )
     sbs_instance = StepBeamSearch(
         inference_model_name=args.inference_model, config=sbs_config, strategy=strategy,
@@ -390,7 +385,7 @@ def run_sbs_on_dataset(args: argparse.Namespace):
     procs = []
     uncertainty_task_queue, uncertainty_result_queues = None, None
     
-    if args.strategy == 'pum':
+    if args.strategy in ['pum', 'pum_per_value']:
         uncertainty_task_queue = Queue()
         uncertainty_result_queues = [Queue() for _ in range(num_workers)]
         logger.info("Starting Uncertainty Model Server process...")
@@ -418,6 +413,8 @@ def run_sbs_on_dataset(args: argparse.Namespace):
         # Instantiate strategy for each worker
         if args.strategy == 'pum':
             strategy = PumStrategy(uncertainty_task_queue, uncertainty_result_queues[i])
+        elif args.strategy == 'pum_per_value':
+            strategy = PumPerValueStrategy(uncertainty_task_queue, uncertainty_result_queues[i])
         elif args.strategy == 'token_entropy':
             strategy = TokenEntropyStrategy()
         else: # uniform
@@ -465,10 +462,9 @@ def main():
     parser.add_argument("--budget", type=int, default=None, help="Maximum total generated tokens.")
     parser.add_argument("--temperature", type=float, default=1.0, help="Generation temperature.")
     parser.add_argument("--value_method", type=str, default="last_step", choices=["last_step", "product"], help="Method to calculate node value.")
-    parser.add_argument("--alpha", type=float, default=0.1, help="Weight for the uncertainty score in beam selection.")
 
     # Strategy-specific arguments
-    parser.add_argument("--strategy", type=str, default="uniform", choices=["uniform", "pum", "token_entropy"], help="Sampling strategy to use.")
+    parser.add_argument("--strategy", type=str, default="uniform", choices=["uniform", "pum", "token_entropy", "pum_per_value"], help="Sampling strategy to use.")
     
     # PUM-specific
     pum_group = parser.add_argument_group('PUM Strategy Arguments')
@@ -482,9 +478,9 @@ def main():
     
     args = parser.parse_args()
 
-    if args.strategy == 'pum':
+    if args.strategy in ['pum', 'pum_per_value']:
         if not args.uncertainty_model_path or args.uncertainty_model_gpu is None:
-            parser.error("--uncertainty_model_path and --uncertainty_model_gpu are required for --strategy='pum'")
+            parser.error("--uncertainty_model_path and --uncertainty_model_gpu are required for the selected strategy.")
 
     os.makedirs(args.output_dir, exist_ok=True)
     run_sbs_on_dataset(args)

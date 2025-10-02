@@ -34,12 +34,12 @@ def main():
     print("Loading dataset...")
     train_dataset = load_dataset(
         "jacopo-minniti/MATH-PUM-qwen2.5-1.5B", 
-        name="cwe", 
+        name="cep", 
         split="train"
     )
     eval_dataset = load_dataset(
         "jacopo-minniti/MATH-PUM-qwen2.5-1.5B",
-        name="cwe",
+        name="cep",
         split="test"
     )
     
@@ -62,8 +62,8 @@ def main():
     # --- 3. Configure Training Arguments ---
     print("Configuring training arguments...")
     training_args = PRMConfig(
-        output_dir="./.cache/cwe_model_mse",
-        hub_model_id="jacopo-minniti/Qwen2.5-Math-1.5B-PUM-cwe",
+        output_dir="./.cache/cep_model",
+        hub_model_id="jacopo-minniti/Qwen2.5-Math-1.5B-PUM-cep",
         max_length=4096,
         train_on_last_step_only=False,
         step_separator=step_separator_token,

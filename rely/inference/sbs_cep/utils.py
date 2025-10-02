@@ -10,6 +10,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForTokenClassification, AutoModel
 
 from rely.utils import prompt_pattern
+from rely.train.soft_prm.model import SoftClassificationPRMModel
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,6 @@ class SBSConfig:
     value_method: str = "last_step"
     uncertainty_method: str = "last_step" # For PUM
     entropy_k: int = 20 # For TokenEntropy
-    alpha: float = 0.1 # For uncertainty weighting
 
 class SBSNode:
     """Node in the Step-level Beam Search tree"""
@@ -54,9 +54,18 @@ def _uncertainty_model_server(args: argparse.Namespace, task_queue: Queue, resul
     logger.info(f"[UncertaintyServer] Starting on device {uncertainty_device}")
 
     tokenizer = AutoTokenizer.from_pretrained(args.uncertainty_model_path, trust_remote_code=True)
-    model = AutoModelForTokenClassification.from_pretrained(
+    # OLD AutoModelForTokenClassification model loading (commented out)
+    # model = AutoModelForTokenClassification.from_pretrained(
+    #     args.uncertainty_model_path, dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
+    # )
+    
+    # NEW custom SoftClassificationPRMModel loading
+    model = SoftClassificationPRMModel.from_pretrained(
         args.uncertainty_model_path, dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
     )
+    
+    # Ensure all model parameters are in bfloat16 to avoid dtype mismatch
+    model = model.to(dtype=torch.bfloat16)
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -92,7 +101,11 @@ def _uncertainty_model_server(args: argparse.Namespace, task_queue: Queue, resul
                 outputs = model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask)
                 token_masks = (inputs.input_ids == step_sep_id)
                 
-                uncertainty_probs = torch.softmax(outputs.logits, dim=-1)[:, :, 1]
+                # OLD AutoModelForTokenClassification logic (commented out)
+                # uncertainty_probs = torch.softmax(outputs.logits, dim=-1)[:, :, 1]
+                
+                # NEW custom SoftClassificationPRMModel logic - direct sigmoid probabilities
+                uncertainty_probs = outputs.logits
                 has_separator = token_masks.any(dim=1)
                 default_uncertainty = torch.tensor(0.5, device=uncertainty_device)
                 
@@ -136,7 +149,11 @@ def _uncertainty_model_server(args: argparse.Namespace, task_queue: Queue, resul
                             all_uncertainties.append(0.5)
                             continue
 
-                        uncertainty_probs = torch.softmax(outputs.logits, dim=-1)[0, :, 1]
+                        # OLD AutoModelForTokenClassification logic (commented out)
+                        # uncertainty_probs = torch.softmax(outputs.logits, dim=-1)[0, :, 1]
+                        
+                        # NEW custom SoftClassificationPRMModel logic - direct sigmoid probabilities
+                        uncertainty_probs = outputs.logits[0, :]
                         
                         if args.uncertainty_method == "product":
                             score = uncertainty_probs[token_mask].clamp(min=1e-8).prod().item()
@@ -175,9 +192,13 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
     logger.info(f"[ValueServer] Starting on device {value_device}")
 
     tokenizer = AutoTokenizer.from_pretrained(args.value_model_path, trust_remote_code=True)
-    model = AutoModel.from_pretrained(
-        args.value_model_path, num_labels=2, dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
+    # NEW custom SoftClassificationPRMModel loading
+    model = SoftClassificationPRMModel.from_pretrained(
+        args.value_model_path, dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
     )
+    
+    # Ensure all model parameters are in bfloat16 to avoid dtype mismatch
+    model = model.to(dtype=torch.bfloat16)
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -211,22 +232,30 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
             batch_conversations = conversation_strs[i:i + batch_size]
             try:
                 inputs = tokenizer(batch_conversations, return_tensors="pt", padding=True, truncation=True, max_length=7000).to(value_device)
-                base_model_output = model.model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask, use_cache=False)
-                logits = model.score(base_model_output.last_hidden_state)
-                
-                probabilities = torch.softmax(logits, dim=-1)
+                outputs = model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask)
                 token_masks = (inputs.input_ids == step_sep_id)
-                scores = probabilities[:, :, 1]
                 
+                # NEW custom SoftClassificationPRMModel logic - direct sigmoid probabilities
+                value_probs = outputs.logits
+                has_separator = token_masks.any(dim=1)
+                default_value = torch.tensor(1.0, device=value_device)
+                
+                calculated_values = torch.zeros_like(has_separator, dtype=torch.float)
+
+                # Use "last_step" method (same as uncertainty model default)
                 seq_len = token_masks.size(1)
                 reverse_mask = torch.flip(token_masks, dims=[1])
                 last_indices = (seq_len - 1) - torch.argmax(reverse_mask.float(), dim=1)
+                calculated_values = torch.gather(value_probs, 1, last_indices.unsqueeze(-1)).squeeze(-1)
                 
-                last_step_scores = torch.gather(scores, 1, last_indices.unsqueeze(-1)).squeeze(-1)
-                has_separator = token_masks.any(dim=1)
-                
-                batch_rewards_tensor = torch.where(has_separator, last_step_scores, torch.tensor(0.0, device=value_device))
-                all_rewards.extend(batch_rewards_tensor.cpu().tolist())
+                # TEMPORARY CHANGE: Invert value scores (1 - score) - EASY ROLLBACK
+                inverted_scores = 1.0 - calculated_values
+                final_values = torch.where(has_separator, inverted_scores, default_value)
+                # END TEMPORARY CHANGE
+                all_rewards.extend(final_values.cpu().tolist())
+
+                del inputs, outputs, token_masks, value_probs
+                torch.cuda.empty_cache()
 
             except torch.cuda.OutOfMemoryError:
                 logger.error(f"[ValueServer] CUDA OOM in batch, falling back to single processing.")
@@ -234,19 +263,29 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
                 for single_conv in batch_conversations:
                     try:
                         single_inputs = tokenizer([single_conv], return_tensors="pt", padding=True, truncation=True, max_length=7000).to(value_device)
-                        base_model_output = model.model(input_ids=single_inputs.input_ids, attention_mask=single_inputs.attention_mask, use_cache=False)
-                        logits = model.score(base_model_output.last_hidden_state)
-                        
-                        probabilities = torch.softmax(logits, dim=-1)
+                        outputs = model(input_ids=single_inputs.input_ids, attention_mask=single_inputs.attention_mask)
                         token_mask = (single_inputs.input_ids[0] == step_sep_id)
                         
-                        if token_mask.any():
-                            scores = probabilities[0, :, 1]
-                            last_idx = torch.where(token_mask)[0][-1]
-                            score = scores[last_idx].item()
-                            all_rewards.append(score)
-                        else:
-                            all_rewards.append(0.0)
+                        if not token_mask.any():
+                            # TEMPORARY CHANGE: Use 1.0 as default for inverted scores - EASY ROLLBACK
+                            all_rewards.append(1.0)
+                            # END TEMPORARY CHANGE
+                            continue
+
+                        # NEW custom SoftClassificationPRMModel logic - direct sigmoid probabilities
+                        value_probs = outputs.logits[0, :]
+                        
+                        # Use "last_step" method
+                        last_idx = torch.where(token_mask)[0][-1]
+                        score = value_probs[last_idx].item()
+                        
+                        # TEMPORARY CHANGE: Invert value scores (1 - score) - EASY ROLLBACK
+                        inverted_score = 1.0 - score
+                        all_rewards.append(inverted_score)
+                        # END TEMPORARY CHANGE
+
+                        del single_inputs, outputs
+                        torch.cuda.empty_cache()
                     except Exception as e:
                         logger.error(f"[ValueServer] Error processing single sample in fallback: {e}")
                         all_rewards.append(0.0)

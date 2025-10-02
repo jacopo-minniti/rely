@@ -79,7 +79,7 @@ def main():
                        help="Upload method: 'files' for separate files, 'config' for configuration")
     parser.add_argument("--config-name", default="cwe", help="Configuration name (for config method)")
     parser.add_argument("--files", nargs="+", 
-                       default=["data/math_cwe_binary_train.jsonl", "data/math_cwe_binary_test.jsonl"],
+                       default=["data/math_cep_train.jsonl", "data/math_cep_test.jsonl"],
                        help="Files to upload (for files method)")
     parser.add_argument("--token", help="Hugging Face token (optional if logged in)")
     
@@ -95,5 +95,5 @@ def main():
         upload_as_configuration(args.repo_id, args.config_name, args.token)
 
 if __name__ == "__main__":
-    # python upload_dataset.py jacopo-minniti/MATH-PUM-qwen2.5-1.5B --method files 
+    # python rely/scripts/upload_dataset.py jacopo-minniti/MATH-PUM-qwen2.5-1.5B --method files 
     main()
