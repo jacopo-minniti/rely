@@ -49,42 +49,54 @@ def is_pareto_dominant(data):
 
 # --- 2. Data Input ---
 sbs_data = [
-    {'B1': 2, 'B3': 16, 'tokens generated': 13191, 'accuracy': 0.6801},
-    {'B1': 2, 'B3': 20, 'tokens generated': 16771, 'accuracy': 0.6850},
-    {'B1': 2, 'B3': 32, 'tokens generated': 27663, 'accuracy': 0.7140},
-    {'B1': 2, 'B3': 4,  'tokens generated': 2749,  'accuracy': 0.5892},
-    {'B1': 2, 'B3': 8,  'tokens generated': 6065,  'accuracy': 0.6351},
-    {'B1': 4, 'B3': 16, 'tokens generated': 14721, 'accuracy': 0.7068},
-    {'B1': 4, 'B3': 32, 'tokens generated': 28778, 'accuracy': 0.7100},
-    {'B1': 4, 'B3': 8,  'tokens generated': 5969,  'accuracy': 0.6620},
-    {'B1': 5, 'B3': 20, 'tokens generated': 17420, 'accuracy': 0.7152},
-    {'B1': 5, 'B3': 32, 'tokens generated': 27236, 'accuracy': 0.7240},
+    {'B1': 2, 'B3': 4, 'tokens generated': 2749, 'accuracy': 0.5772},
+    {'B1': 2, 'B3': 8, 'tokens generated': 6065, 'accuracy': 0.6250},
+    {'B1': 2, 'B3': 16, 'tokens generated': 13191, 'accuracy': 0.6700},
+    {'B1': 2, 'B3': 20, 'tokens generated': 16771, 'accuracy': 0.6687},
+    {'B1': 4, 'B3': 8, 'tokens generated': 5969, 'accuracy': 0.6520},
+    {'B1': 4, 'B3': 16, 'tokens generated': 14721, 'accuracy': 0.7028},
+    {'B1': 4, 'B3': 32, 'tokens generated': 29802, 'accuracy': 0.7059},
+    {'B1': 5, 'B3': 20, 'tokens generated': 17420, 'accuracy': 0.7051},
+    {'B1': 5, 'B3': 32, 'tokens generated': 27236, 'accuracy': 0.6991}
 ]
 
 # SBS-PUMxValue
-# sbs_uncertain_data = [
-#     {'B1': 2, 'B3': 16, 'tokens generated': 13516, 'accuracy': 0.6828},
-#     {'B1': 2, 'B3': 32, 'tokens generated': 26956, 'accuracy': 0.7115},
-#     {'B1': 2, 'B3': 4,  'tokens generated': 2759,  'accuracy': 0.6052},
-#     {'B1': 2, 'B3': 8,  'tokens generated': 6028,  'accuracy': 0.6620},
-#     {'B1': 4, 'B3': 16, 'tokens generated': 13920, 'accuracy': 0.6949},
-#     {'B1': 4, 'B3': 20, 'tokens generated': 17973, 'accuracy': 0.6915},
-#     {'B1': 4, 'B3': 32, 'tokens generated': 26680, 'accuracy': 0.7075},
-#     {'B1': 4, 'B3': 8,  'tokens generated': 6420,  'accuracy': 0.6774},
-#     {'B1': 5, 'B3': 20,  'tokens generated': 19583,  'accuracy': .7143},
-#     {'B1': 5, 'B3': 32, 'tokens generated': 29741, 'accuracy': 0.7246},
-# ]
+sbs_uncertain_data = [
+    {'B1': 2, 'B3': 16, 'tokens generated': 13516, 'accuracy': 0.6828},
+    {'B1': 2, 'B3': 32, 'tokens generated': 26956, 'accuracy': 0.7115},
+    {'B1': 2, 'B3': 4,  'tokens generated': 2759,  'accuracy': 0.6052},
+    {'B1': 2, 'B3': 8,  'tokens generated': 6028,  'accuracy': 0.6620},
+    {'B1': 4, 'B3': 16, 'tokens generated': 13920, 'accuracy': 0.6949},
+    {'B1': 4, 'B3': 20, 'tokens generated': 17973, 'accuracy': 0.6915},
+    {'B1': 4, 'B3': 32, 'tokens generated': 26680, 'accuracy': 0.7075},
+    {'B1': 4, 'B3': 8,  'tokens generated': 6420,  'accuracy': 0.6774},
+    {'B1': 5, 'B3': 20,  'tokens generated': 19583,  'accuracy': .7143},
+    {'B1': 5, 'B3': 32, 'tokens generated': 29741, 'accuracy': 0.7246},
+]
 
 # SBS-Variance
-sbs_uncertain_data = [
-    {'B1': 2, 'B3': 4,  'tokens generated': 2855,  'accuracy': 0.6020},
-    {'B1': 2, 'B3': 8,  'tokens generated': 6002,  'accuracy': 0.6560},
-    {'B1': 2, 'B3': 20, 'tokens generated': 15279, 'accuracy': 0.7030},
-    {'B1': 4, 'B3': 8,  'tokens generated': 5912,  'accuracy': 0.6653},
-    {'B1': 4, 'B3': 16, 'tokens generated': 13159, 'accuracy': 0.6938},
-    {'B1': 5, 'B3': 20, 'tokens generated': 16917, 'accuracy': 0.6959},
-    {'B1': 5, 'B3': 32, 'tokens generated': 27898, 'accuracy': 0.7256},
-]
+# sbs_uncertain_data = [
+#     {'B1': 2, 'B3': 4,  'tokens generated': 2855,  'accuracy': 0.6020},
+#     {'B1': 2, 'B3': 8,  'tokens generated': 6002,  'accuracy': 0.6560},
+#     {'B1': 2, 'B3': 20, 'tokens generated': 15279, 'accuracy': 0.7030},
+#     {'B1': 4, 'B3': 8,  'tokens generated': 5912,  'accuracy': 0.6653},
+#     {'B1': 4, 'B3': 16, 'tokens generated': 13159, 'accuracy': 0.6938},
+#     {'B1': 5, 'B3': 20, 'tokens generated': 16917, 'accuracy': 0.6959},
+#     {'B1': 5, 'B3': 32, 'tokens generated': 27898, 'accuracy': 0.7256},
+# ]
+
+# SBS-CWE
+# sbs_uncertain_data = [
+#     {'B1': 2, 'B3': 4, 'tokens generated': 3130, 'accuracy': 0.5940},
+#     {'B1': 2, 'B3': 8, 'tokens generated': 6437, 'accuracy': 0.6513},
+#     {'B1': 2, 'B3': 16, 'tokens generated': 13523, 'accuracy': 0.6599},
+#     {'B1': 2, 'B3': 20, 'tokens generated': 16961, 'accuracy': 0.6694},
+#     {'B1': 4, 'B3': 8, 'tokens generated': 7152, 'accuracy': 0.6500},
+#     {'B1': 4, 'B3': 16, 'tokens generated': 14548, 'accuracy': 0.6942},
+#     {'B1': 4, 'B3': 32, 'tokens generated': 30926, 'accuracy': 0.7069},
+#     {'B1': 5, 'B3': 20, 'tokens generated': 19738, 'accuracy': 0.6874},
+#     {'B1': 5, 'B3': 32, 'tokens generated': 30851, 'accuracy': 0.7218}
+# ]
 
 
 
