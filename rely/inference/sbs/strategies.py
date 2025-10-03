@@ -317,17 +317,17 @@ class UCBStrategy(SamplingStrategy):
             
         return samples_per_beam
 
-    def calculate_ucb_scores(self, sbs_instance: 'StepBeamSearch', question: str) -> None:
-        """Calculate UCB scores for all active beams: value + c * uncertainty."""
-        if not sbs_instance.active_beams:
+    def calculate_ucb_scores(self, sbs_instance: 'StepBeamSearch', question: str, nodes: List['SBSNode']) -> None:
+        """Calculate UCB scores for the given nodes: value + c * uncertainty."""
+        if not nodes:
             return
 
         # Get uncertainties from PUM model
-        uncertainty_prompts = [sbs_instance.create_prompt(question, beam.full_text) for beam in sbs_instance.active_beams]
+        uncertainty_prompts = [sbs_instance.create_prompt(question, beam.full_text) for beam in nodes]
         uncertainty_scores = self._get_uncertainties_from_server(sbs_instance, uncertainty_prompts)
         
-        # Update beams with UCB scores
-        for i, beam in enumerate(sbs_instance.active_beams):
+        # Update nodes with UCB scores
+        for i, beam in enumerate(nodes):
             if i < len(uncertainty_scores):
                 beam.uncertainty = uncertainty_scores[i]
                 # UCB score: value + c * uncertainty
@@ -339,7 +339,7 @@ class UCBStrategy(SamplingStrategy):
 
         if sbs_instance.config.verbose:
             logger.info(f"[Rank {sbs_instance.worker_rank}] UCB scores calculated:")
-            for i, beam in enumerate(sbs_instance.active_beams):
+            for i, beam in enumerate(nodes):
                 logger.info(f"  Beam {i}: value={beam.value:.3f}, uncertainty={beam.uncertainty:.3f}, ucb_score={beam.ucb_score:.3f}")
     
     def get_ucb_parameter(self) -> float:

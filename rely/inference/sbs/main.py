@@ -308,7 +308,7 @@ class StepBeamSearch:
             
             # Calculate UCB scores if using UCB strategy
             if isinstance(self.strategy, UCBStrategy):
-                self.strategy.calculate_ucb_scores(self, question)
+                self.strategy.calculate_ucb_scores(self, question, candidates)
                 
             self._update_beams(candidates)
 
