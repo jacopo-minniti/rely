@@ -18,7 +18,7 @@ import argparse
 from datasets import load_dataset
 
 from rely.utils import MATH_SYSTEM_PROMPT, extract_final_answer, normalize_answer, prompt_pattern
-from rely.inference.sbs.strategies import SamplingStrategy, UniformStrategy, PumStrategy, TokenEntropyStrategy, PumPerValueStrategy
+from rely.inference.sbs.strategies import SamplingStrategy, UniformStrategy, PumStrategy, TokenEntropyStrategy, PumPerValueStrategy, UCBStrategy
 from rely.inference.sbs.utils import SBSConfig, SBSNode, _uncertainty_model_server, _value_model_server
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -189,7 +189,11 @@ class StepBeamSearch:
             self.active_beams, self.current_beam_width = [], 0
             return 0
         
-        candidates.sort(key=lambda x: x.value, reverse=True)
+        # Use UCB scores for sorting if UCB strategy is being used
+        if isinstance(self.strategy, UCBStrategy):
+            candidates.sort(key=lambda x: getattr(x, 'ucb_score', x.value), reverse=True)
+        else:
+            candidates.sort(key=lambda x: x.value, reverse=True)
         new_active_beams, newly_completed = [], 0
         
         for cand in candidates[:self.current_beam_width]:
@@ -301,11 +305,19 @@ class StepBeamSearch:
             if not candidates:
                 logger.warning(f"[Rank {self.worker_rank}] No new candidates generated. Stopping search.")
                 break
+            
+            # Calculate UCB scores if using UCB strategy
+            if isinstance(self.strategy, UCBStrategy):
+                self.strategy.calculate_ucb_scores(self, question)
                 
             self._update_beams(candidates)
 
         self.completed_beams.extend(self.active_beams)
-        final_beams = sorted(self.completed_beams, key=lambda x: x.value, reverse=True)[:self.config.step_beam_width]
+        # Sort final beams using UCB scores if UCB strategy is being used
+        if isinstance(self.strategy, UCBStrategy):
+            final_beams = sorted(self.completed_beams, key=lambda x: getattr(x, 'ucb_score', x.value), reverse=True)[:self.config.step_beam_width]
+        else:
+            final_beams = sorted(self.completed_beams, key=lambda x: x.value, reverse=True)[:self.config.step_beam_width]
         
         solutions = []
         if base_path:
@@ -385,7 +397,7 @@ def run_sbs_on_dataset(args: argparse.Namespace):
     procs = []
     uncertainty_task_queue, uncertainty_result_queues = None, None
     
-    if args.strategy in ['pum', 'pum_per_value']:
+    if args.strategy in ['pum', 'pum_per_value', 'ucb']:
         uncertainty_task_queue = Queue()
         uncertainty_result_queues = [Queue() for _ in range(num_workers)]
         logger.info("Starting Uncertainty Model Server process...")
@@ -412,9 +424,14 @@ def run_sbs_on_dataset(args: argparse.Namespace):
         
         # Instantiate strategy for each worker
         if args.strategy == 'pum':
+            assert uncertainty_task_queue is not None and uncertainty_result_queues is not None
             strategy = PumStrategy(uncertainty_task_queue, uncertainty_result_queues[i])
         elif args.strategy == 'pum_per_value':
+            assert uncertainty_task_queue is not None and uncertainty_result_queues is not None
             strategy = PumPerValueStrategy(uncertainty_task_queue, uncertainty_result_queues[i])
+        elif args.strategy == 'ucb':
+            assert uncertainty_task_queue is not None and uncertainty_result_queues is not None
+            strategy = UCBStrategy(uncertainty_task_queue, uncertainty_result_queues[i], c=args.ucb_c)
         elif args.strategy == 'token_entropy':
             strategy = TokenEntropyStrategy()
         else: # uniform
@@ -464,7 +481,7 @@ def main():
     parser.add_argument("--value_method", type=str, default="last_step", choices=["last_step", "product"], help="Method to calculate node value.")
 
     # Strategy-specific arguments
-    parser.add_argument("--strategy", type=str, default="uniform", choices=["uniform", "pum", "token_entropy", "pum_per_value"], help="Sampling strategy to use.")
+    parser.add_argument("--strategy", type=str, default="uniform", choices=["uniform", "pum", "token_entropy", "pum_per_value", "ucb"], help="Sampling strategy to use.")
     
     # PUM-specific
     pum_group = parser.add_argument_group('PUM Strategy Arguments')
@@ -476,9 +493,13 @@ def main():
     entropy_group = parser.add_argument_group('Token Entropy Strategy Arguments')
     entropy_group.add_argument("--entropy_k", type=int, default=20, help="Top-k tokens to consider for entropy calculation.")
     
+    # UCB-specific
+    ucb_group = parser.add_argument_group('UCB Strategy Arguments')
+    ucb_group.add_argument("--ucb_c", type=float, default=1.0, help="UCB exploration parameter c (default: 1.0).")
+    
     args = parser.parse_args()
 
-    if args.strategy in ['pum', 'pum_per_value']:
+    if args.strategy in ['pum', 'pum_per_value', 'ucb']:
         if not args.uncertainty_model_path or args.uncertainty_model_gpu is None:
             parser.error("--uncertainty_model_path and --uncertainty_model_gpu are required for the selected strategy.")
 

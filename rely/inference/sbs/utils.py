@@ -40,6 +40,7 @@ class SBSNode:
         self.full_text: str = (parent.full_text if parent else "") + text
         self.value: float = -100.0
         self.uncertainty: float = 0.5
+        self.ucb_score: float = -100.0  # UCB score for UCB strategy
         self.is_terminal = False
         self.final_answer = ""
 

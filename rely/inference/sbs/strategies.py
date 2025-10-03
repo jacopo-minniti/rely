@@ -5,7 +5,11 @@ import random
 import math
 import uuid
 import time
-from typing import List, Dict, Any
+from typing import List, Dict, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from rely.inference.sbs.main import StepBeamSearch
+    from rely.inference.sbs.utils import SBSNode
 
 logger = logging.getLogger(__name__)
 
@@ -268,3 +272,76 @@ class TokenEntropyStrategy(SamplingStrategy):
             logger.info(f"[Rank {sbs_instance.worker_rank}] Sample distribution: {sample_distribution}")
 
         return sample_distribution
+
+
+class UCBStrategy(SamplingStrategy):
+    """UCB-like strategy: Uses uniform sampling but scores beams with value + c * uncertainty."""
+    def __init__(self, uncertainty_task_queue, uncertainty_result_queue, c=1.0):
+        self.uncertainty_task_queue = uncertainty_task_queue
+        self.uncertainty_result_queue = uncertainty_result_queue
+        self.c = c  # UCB exploration parameter
+
+    def _get_uncertainties_from_server(self, sbs_instance, prompts: List[str]) -> List[float]:
+        if not prompts:
+            return []
+        request_id = str(uuid.uuid4())
+        payload = {"request_id": request_id, "worker_rank": sbs_instance.worker_rank, "prompts": prompts}
+        self.uncertainty_task_queue.put(payload)
+        
+        while True:
+            response = self.uncertainty_result_queue.get()
+            if response.get("request_id") == request_id:
+                return response["uncertainties"]
+            self.uncertainty_result_queue.put(response)
+            time.sleep(0.01)
+
+    def distribute_samples(self, sbs_instance: 'StepBeamSearch', question: str) -> List[int]:
+        """Uniform distribution - same as UniformStrategy."""
+        num_active_beams = len(sbs_instance.active_beams)
+        if num_active_beams == 0:
+            return []
+        
+        total_samples_budget = sbs_instance.config.n_total_samples
+        
+        base_samples = total_samples_budget // num_active_beams
+        remainder = total_samples_budget % num_active_beams
+        
+        samples_per_beam = [base_samples] * num_active_beams
+        if remainder > 0:
+            indices_for_extra = random.sample(range(num_active_beams), remainder)
+            for idx in indices_for_extra:
+                samples_per_beam[idx] += 1
+        
+        if sbs_instance.config.verbose:
+            logger.info(f"[Rank {sbs_instance.worker_rank}] Sample distribution (UCB uniform): {samples_per_beam}")
+            
+        return samples_per_beam
+
+    def calculate_ucb_scores(self, sbs_instance: 'StepBeamSearch', question: str) -> None:
+        """Calculate UCB scores for all active beams: value + c * uncertainty."""
+        if not sbs_instance.active_beams:
+            return
+
+        # Get uncertainties from PUM model
+        uncertainty_prompts = [sbs_instance.create_prompt(question, beam.full_text) for beam in sbs_instance.active_beams]
+        uncertainty_scores = self._get_uncertainties_from_server(sbs_instance, uncertainty_prompts)
+        
+        # Update beams with UCB scores
+        for i, beam in enumerate(sbs_instance.active_beams):
+            if i < len(uncertainty_scores):
+                beam.uncertainty = uncertainty_scores[i]
+                # UCB score: value + c * uncertainty
+                ucb_score = beam.value + self.c * uncertainty_scores[i]
+                beam.ucb_score = ucb_score
+            else:
+                beam.uncertainty = 0.5
+                beam.ucb_score = beam.value + self.c * 0.5
+
+        if sbs_instance.config.verbose:
+            logger.info(f"[Rank {sbs_instance.worker_rank}] UCB scores calculated:")
+            for i, beam in enumerate(sbs_instance.active_beams):
+                logger.info(f"  Beam {i}: value={beam.value:.3f}, uncertainty={beam.uncertainty:.3f}, ucb_score={beam.ucb_score:.3f}")
+    
+    def get_ucb_parameter(self) -> float:
+        """Get the UCB exploration parameter."""
+        return self.c
