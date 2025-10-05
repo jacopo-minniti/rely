@@ -9,7 +9,7 @@ def main():
     completions_file = "math_completions_100.jsonl"  # Intermediate completions file
     
     completer_config = CompleterConfig(
-        model="Qwen/Qwen3-1.7B",
+        model="Qwen/Qwen2.5-1.5B",
         tp_size=1,
         dp_size=4,
         max_num_seqs=1024,
@@ -25,7 +25,6 @@ def main():
         n_completions_per_item=8,
         max_new_tokens=4096,
         temperature=1.0,
-        cot_percentage=1.0
     )
 
 if __name__ == "__main__":

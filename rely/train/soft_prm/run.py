@@ -6,6 +6,7 @@ from accelerate.utils import DummyOptim, DummyScheduler
 from trainer import SoftClassificationPRMTrainer
 from model import SoftClassificationPRMModel
 from trl import PRMConfig
+import random
 
 def main():
     # --- 1. Load Model and Tokenizer ---
@@ -34,27 +35,36 @@ def main():
     print("Loading dataset...")
     train_dataset = load_dataset(
         "jacopo-minniti/MATH-PUM-qwen2.5-1.5B", 
-        name="cep", 
+        name="cwe", 
         split="train"
     )
     eval_dataset = load_dataset(
         "jacopo-minniti/MATH-PUM-qwen2.5-1.5B",
-        name="cep",
+        name="cwe",
         split="test"
     )
     
-    # Preprocess train_dataset: remove items where all labels are 0.0 or all labels are 1.0
-    # print(f"Original train dataset size: {len(train_dataset)}")
-    # print("Filtering out samples with all 0.0 or all 1.0 labels...")
-    
-    # def should_keep_sample(example):
-    #     labels = example['labels']
-    #     # Convert to set to check if all values are the same
-    #     unique_labels = set(labels)
-    #     # Keep sample if it has mixed labels (not all 0.0 and not all 1.0)
-    #     return not (unique_labels == {0.0} or unique_labels == {1.0})
-    
-    # train_dataset = train_dataset.filter(should_keep_sample)
+    print(f"Original train dataset size: {len(train_dataset)}")
+    print("Downsampling all-0.0 label trajectories...")
+
+    # Split into all-0.0 and rest
+    all_zero_indices = []
+    rest_indices = []
+    for i, example in enumerate(train_dataset):
+        labels = example['labels']
+        if set(labels) == {0.0} or set(labels) == {0}:
+            all_zero_indices.append(i)
+        else:
+            rest_indices.append(i)
+
+    # Downsample all-0.0 to match the number of rest (or use all if fewer available)
+    random.seed(42)
+    sample_size = min(len(all_zero_indices), len(rest_indices))
+    downsampled_zero_indices = random.sample(all_zero_indices, sample_size)
+
+    # Combine and sort indices for reproducibility
+    final_indices = sorted(downsampled_zero_indices + rest_indices)
+    train_dataset = train_dataset.select(final_indices)
     
     print(f"Filtered train dataset size: {len(train_dataset)}")
     print(f"Eval dataset size: {len(eval_dataset)}")
@@ -62,8 +72,8 @@ def main():
     # --- 3. Configure Training Arguments ---
     print("Configuring training arguments...")
     training_args = PRMConfig(
-        output_dir="./.cache/cep_model",
-        hub_model_id="jacopo-minniti/Qwen2.5-Math-1.5B-PUM-cep",
+        output_dir="./.cache/cwe_downsample_model",
+        hub_model_id="jacopo-minniti/Qwen2.5-Math-1.5B-PUM-cwe",
         max_length=4096,
         train_on_last_step_only=False,
         step_separator=step_separator_token,

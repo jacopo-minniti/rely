@@ -203,10 +203,14 @@ class Completer:
     def _worker(self, output_file, n_completions_per_item, max_new_tokens, temperature, every_n_steps, model, dp_size, tp_size, gpu_memory_utilization, max_num_seqs, global_dp_rank, local_dp_rank, master_addr, master_port):
         logging.info(f"Starting worker: global_rank={global_dp_rank}, local_rank={local_dp_rank}")
         os.environ["VLLM_DP_RANK"] = str(global_dp_rank)
-        os.environ["VLLM_DP_RANK_LOCAL"] = str(local_dp_rank)
         os.environ["VLLM_DP_SIZE"] = str(dp_size)
         os.environ["VLLM_DP_MASTER_IP"] = master_addr
         os.environ["VLLM_DP_MASTER_PORT"] = str(master_port)
+        
+        # Set CUDA_VISIBLE_DEVICES for proper GPU assignment per DP rank
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(
+            str(i) for i in range(global_dp_rank * tp_size, (global_dp_rank + 1) * tp_size)
+        )
 
         all_data = load_dataset(
             self.config.dataset,
@@ -221,11 +225,9 @@ class Completer:
         chunk_size = total_items // dp_size
         remainder = total_items % dp_size
 
-        def get_start_index(rank):
-            return rank * chunk_size + min(rank, remainder)
-            
-        start_idx = get_start_index(global_dp_rank)
-        end_idx = get_start_index(global_dp_rank + 1)
+        # Calculate data chunk for this DP rank
+        start_idx = global_dp_rank * chunk_size + min(global_dp_rank, remainder)
+        end_idx = (global_dp_rank + 1) * chunk_size + min(global_dp_rank + 1, remainder)
         data_chunk = all_data[start_idx:end_idx]
 
         if not data_chunk:
