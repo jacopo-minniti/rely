@@ -6,13 +6,13 @@ def main():
     """    
 
     input_dataset = "data/math_generations_qwen2.5.jsonl"  # Input dataset path
-    completions_file = "math_completions_100.jsonl"  # Intermediate completions file
+    completions_file = "math_completions_v2.jsonl"  # Intermediate completions file
     
     completer_config = CompleterConfig(
         model="Qwen/Qwen2.5-1.5B",
         tp_size=1,
         dp_size=4,
-        max_num_seqs=1024,
+        max_num_seqs=512,
         forking_strategy="newline",
         completion_type="long",
         dataset=input_dataset,
