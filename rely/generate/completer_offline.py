@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO)
 
 
 class CompleterConfig(BaseModel):
-    model: str = "unsloth/Qwen3-1.7B-unsloth-bnb-4bit"
+    model: str = "unsloth/Qwen3-1.7B-unsloth-bnb-4bit"  # Change this to your local model path
     tp_size: int = 1
     dp_size: int = 8
     max_num_seqs: int = 512

@@ -35,12 +35,12 @@ def main():
     print("Loading dataset...")
     train_dataset = load_dataset(
         "jacopo-minniti/MATH-PUM-qwen2.5-1.5B", 
-        name="cwe", 
+        name="variance_v2", 
         split="train"
     )
     eval_dataset = load_dataset(
         "jacopo-minniti/MATH-PUM-qwen2.5-1.5B",
-        name="cwe",
+        name="variance_v2",
         split="test"
     )
     
@@ -72,8 +72,8 @@ def main():
     # --- 3. Configure Training Arguments ---
     print("Configuring training arguments...")
     training_args = PRMConfig(
-        output_dir="./.cache/cwe_downsample_model",
-        hub_model_id="jacopo-minniti/Qwen2.5-Math-1.5B-PUM-cwe",
+        output_dir="./.cache/variance_downsample_model",
+        hub_model_id="jacopo-minniti/Qwen2.5-Math-1.5B-PUM-variance",
         max_length=4096,
         train_on_last_step_only=False,
         step_separator=step_separator_token,
@@ -108,7 +108,7 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
-        loss="mse",  # Can be "bce" (default) or "mse"
+        loss="bce",  # Can be "bce" (default) or "mse"
     )
 
     # --- 5. Start Training ---

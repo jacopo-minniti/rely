@@ -9,7 +9,7 @@ def main():
     completions_file = "math_completions_v2.jsonl"  # Intermediate completions file
     
     completer_config = CompleterConfig(
-        model="Qwen/Qwen2.5-1.5B",
+        model="Qwen/Qwen2.5-1.5B-Instruct",
         tp_size=1,
         dp_size=4,
         max_num_seqs=512,

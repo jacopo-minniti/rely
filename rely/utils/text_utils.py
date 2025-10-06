@@ -139,59 +139,52 @@ def extract_final_answer(text: str) -> Optional[str]:
     return content.strip()
 
 
+import re
+
 def normalize_answer(answer: str) -> str:
     """
-    Normalizes a mathematical answer for robust comparison.
+    Normalizes a mathematical answer for robust comparison using safe string methods.
+    This version does NOT evaluate mathematical expressions.
     """
     if not answer:
         return ""
 
-    # General pre-processing
+    # 1. Initial text cleaning and equation handling
     normalized = str(answer).lower().strip()
-
-    # LaTeX-specific normalization
-    # Remove \left and \right, they don't change the mathematical meaning
-    normalized = re.sub(r'\\left|\\right', '', normalized)
-    
-    # Replace \text{...} and similar with just the content inside
-    normalized = re.sub(r'\\text\s*\{([^}]*)\}', r'\1', normalized)
-
-    # Remove other LaTeX commands that don't affect the value
-    normalized = re.sub(r'\\(mathrm|mathbf|boldsymbol|label|tag|tiny|large|huge|small|normalsize)\s*\{[^}]*\}', '', normalized)
-
-    # Replace \frac{a}{b} with a/b
-    normalized = re.sub(r'\\frac\{([^}]+)\}\{([^}]+)\}', r'(\1)/(\2)', normalized)
-
-    # Replace all that comes before a "=" sign
     if '=' in normalized:
         normalized = normalized.split('=')[-1].strip()
-    
-    # Handle percentages
-    normalized = re.sub(r'\\%', '%', normalized)
-    if '%' in normalized:
-        # Evaluate percentage expressions
-        normalized = re.sub(r'([\d\.]+)\s*%', lambda m: str(float(m.group(1)) / 100.0), normalized)
 
-    # Remove extra backslashes, but keep single ones for LaTeX commands
-    normalized = re.sub(r'\\\\+', r'\\', normalized)
-    
-    # Remove enclosing LaTeX delimiters like $, $$, \[, \], \(, \)
+    # 2. Remove LaTeX delimiters first
     normalized = re.sub(r'^(\$|\\\[|\\\(|\\\$)|(\$|\\\]|\\\)|\$$)$', '', normalized).strip()
 
-    # General numeric and symbolic normalization
+    # 3. Handle LaTeX commands non-destructively
+    # Remove sizing commands
+    normalized = re.sub(r'\\left|\\right', '', normalized)
+    # Keep the content of text-styling commands (FIXED)
+    normalized = re.sub(r'\\(text|mathrm|mathbf|boldsymbol)\s*\{([^}]*)\}', r'\2', normalized)
+    # Convert fractions, adding parentheses for safety
+    normalized = re.sub(r'\\frac\{([^}]+)\}\{([^}]+)\}', r'(\1)/(\2)', normalized)
+    # Convert LaTeX percent symbol
+    normalized = re.sub(r'\\%', '%', normalized)
+
+    # 4. Handle numerical conversions
+    # Convert percentages to decimals
+    if '%' in normalized:
+        normalized = re.sub(r'(\d*\.?\d+)\s*%', lambda m: str(float(m.group(1)) / 100.0), normalized)
     # Remove thousands separators
     normalized = re.sub(r',(?=\d)', '', normalized)
-    
-    # Remove all whitespace
-    normalized = re.sub(r'\s+', '', normalized)
-    
-    # Standardize exponents
-    normalized = normalized.replace('^', '**')
 
-    # Remove trailing zeros after a decimal point
+    # 5. Standardize spacing (SAFER METHOD)
+    # Replace multiple whitespace characters with a single space
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
+    # Remove spaces around common operators to standardize expressions like "2 + 1" to "2+1"
+    normalized = re.sub(r'\s*([+\-*/=()^])\s*', r'\1', normalized)
+    
+    # 6. Final cleanup for numeric answers
+    # Remove trailing zeros from decimals
     if '.' in normalized:
         normalized = normalized.rstrip('0').rstrip('.')
-        if normalized == "":
+        if normalized == "": # Handles cases like "0.0" -> ""
             normalized = "0"
-        
+            
     return normalized
