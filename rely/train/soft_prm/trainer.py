@@ -234,8 +234,21 @@ class SoftClassificationPRMTrainer(Trainer):
             `dict[str, list]`:
                 Tokenized sequences with "input_ids" and "labels".
         """
-        # Tokenize the prompt and completions
-        prompt_ids = tokenizer(features["prompt"], add_special_tokens=False)["input_ids"]
+        # Apply chat template to the prompt if tokenizer has one
+        if hasattr(tokenizer, 'chat_template') and tokenizer.chat_template is not None:
+            # Format prompt as a user message for instruct models
+            messages = [{"role": "user", "content": features["prompt"]}]
+            formatted_prompt = tokenizer.apply_chat_template(
+                messages, 
+                tokenize=False, 
+                add_generation_prompt=True
+            )
+            prompt_ids = tokenizer(formatted_prompt, add_special_tokens=False)["input_ids"]
+        else:
+            # Fallback to original behavior if no chat template
+            prompt_ids = tokenizer(features["prompt"], add_special_tokens=False)["input_ids"]
+        
+        # Tokenize the completions
         completions_ids = [
             tokenizer(completion, add_special_tokens=False)["input_ids"] for completion in features["completions"]
         ]

@@ -11,7 +11,7 @@ import random
 def main():
     # --- 1. Load Model and Tokenizer ---
     print("Loading model and tokenizer...")
-    model_name = "Qwen/Qwen2.5-Math-1.5B"
+    model_name = "Qwen/Qwen2.5-Math-1.5B-Instruct"
     
     # Load tokenizer first
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -52,7 +52,7 @@ def main():
     rest_indices = []
     for i, example in enumerate(train_dataset):
         labels = example['labels']
-        if set(labels) == {0.0} or set(labels) == {0}:
+        if sum(labels) < 0.01:
             all_zero_indices.append(i)
         else:
             rest_indices.append(i)
@@ -72,7 +72,7 @@ def main():
     # --- 3. Configure Training Arguments ---
     print("Configuring training arguments...")
     training_args = PRMConfig(
-        output_dir="./.cache/variance_downsample_model",
+        output_dir="./.cache/variance_v2",
         hub_model_id="jacopo-minniti/Qwen2.5-Math-1.5B-PUM-variance",
         max_length=4096,
         train_on_last_step_only=False,

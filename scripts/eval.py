@@ -85,9 +85,10 @@ def process_json_file(path):
 
         return is_majority_correct, best_of_n_applicable, is_best_of_n_correct, total_tokens
 
-    except Exception:
-        # For any file reading/parsing error, count as incorrect
-        return False, False, False, 0
+    except Exception as e:
+        # For any file reading/parsing error, print warning and skip file
+        print(f"Warning: Failed to process file {path}: {e}")
+        return None, False, False, 0
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process JSON files and compute evaluation statistics.')
@@ -139,23 +140,39 @@ if __name__ == '__main__':
         token_counts.append(total_tokens)
 
     # Calculate statistics
-    majority_percent_correct = (majority_correct_count / total_files) * 100 if total_files > 0 else 0.0
+    majority_percent_correct = (majority_correct_count / total_files) if total_files > 0 else 0.0
     
     # Best-of-N is only applicable when solutions have meaningful value scores
     # For self-consistency, this will be 0 since all solutions have value=1.0
     if best_of_n_applicable_count > 0:
-        best_of_n_percent_correct = (best_of_n_correct_count / best_of_n_applicable_count) * 100
+        best_of_n_percent_correct = (best_of_n_correct_count / best_of_n_applicable_count)
     else:
         best_of_n_percent_correct = 0.0
     
     mean_tokens = np.mean(token_counts) if token_counts else 0.0
     percentile_95_tokens = np.percentile(token_counts, 95) if token_counts else 0.0
 
-    # Print results in requested format
-    print(f"Majority vote is correct: {majority_percent_correct:.2f}%")
-    if best_of_n_applicable_count > 0:
-        print(f"Best of N is correct: {best_of_n_percent_correct:.2f}% (applicable to {best_of_n_applicable_count}/{total_files} files)")
-    else:
-        print(f"Best of N is correct: N/A (not applicable - all solutions have uniform values)")
-    print(f"Mean Token used: {mean_tokens:.2f}")
-    print(f"95 percentile used: {percentile_95_tokens:.2f}")
+    # Extract B1 and B3 from directory name (assuming format contains "max_B1_B3")
+    dir_name = os.path.basename(input_dir.rstrip('/'))
+    b1, b3 = 0, 0  # default values
+    if "max_" in dir_name:
+        parts = dir_name.split("max_")[1].split("_")
+        if len(parts) >= 2:
+            try:
+                b1 = int(parts[0])
+                b3 = int(parts[1])
+            except ValueError:
+                pass
+
+    # Print the number of samples evaluated
+    print(f"Number of samples evaluated: {total_files}")
+    
+    # Print results in dictionary format
+    result = {
+        "B1": b1,
+        "B3": b3,
+        "tokens generated": round(mean_tokens),
+        "bon": round(best_of_n_percent_correct, 4),
+        "maj": round(majority_percent_correct, 4)
+    }
+    print(json.dumps(result))
