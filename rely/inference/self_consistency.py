@@ -214,6 +214,7 @@ def run_self_consistency(
     ground_truths: Optional[List[str]] = None,
     output_dir: Optional[str] = None,
     system_prompt: str = MATH_SYSTEM_PROMPT,
+    start_idx: int = 0,
 ) -> List[Dict[str, Any]]:
     """Run self-consistency for a list of questions."""
     if config is None:
@@ -225,8 +226,46 @@ def run_self_consistency(
     if ground_truths is None:
         ground_truths = [None] * len(user_questions)
 
-    for i, (question, ground_truth) in enumerate(tqdm(zip(user_questions, ground_truths), total=len(user_questions), desc="Running Self-Consistency")):
-        base_path = os.path.join(output_dir, f"q_{i:04d}") if output_dir else None
+    # Combine questions, ground truths, and original indices
+    dataset = [
+        {"question": q, "ground_truth": gt, "original_index": i}
+        for i, (q, gt) in enumerate(zip(user_questions, ground_truths))
+    ]
+
+    # 1. Apply start_idx
+    if start_idx > 0:
+        dataset = dataset[start_idx:]
+        logger.info(f"Starting from index {start_idx}. Total items to consider: {len(dataset)}")
+
+    # 2. Exclude already processed questions if output_dir is provided
+    if output_dir and os.path.exists(output_dir):
+        processed_indices = set()
+        for folder_name in os.listdir(output_dir):
+            if folder_name.startswith("q_"):
+                try:
+                    idx = int(folder_name.split("_")[1])
+                    processed_indices.add(idx)
+                except (IndexError, ValueError):
+                    continue
+        
+        original_count = len(dataset)
+        dataset = [item for item in dataset if item['original_index'] not in processed_indices]
+        if original_count > len(dataset):
+            logger.info(f"Excluded {original_count - len(dataset)} already processed questions. Remaining: {len(dataset)}")
+
+    # Main loop
+    for item in tqdm(dataset, desc="Running Self-Consistency"):
+        question = item["question"]
+        ground_truth = item["ground_truth"]
+        original_index = item["original_index"]
+
+        base_path = os.path.join(output_dir, f"q_{original_index:04d}") if output_dir else None
+        
+        # Check again if the specific directory exists, as a safeguard
+        if base_path and os.path.exists(os.path.join(base_path, "summary.json")):
+            logger.info(f"Skipping item {original_index} as it is already completed.")
+            continue
+
         result = inference.run_inference(
             user_question=question,
             ground_truth=ground_truth,
@@ -238,6 +277,18 @@ def run_self_consistency(
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run self-consistency inference on a dataset.")
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-1.5B-Instruct", help="Name of the model to use.")
+    parser.add_argument("--num_samples", type=int, default=32, help="Number of samples to generate for each question.")
+    parser.add_argument("--max_new_tokens", type=int, default=300000, help="Maximum number of new tokens to generate.")
+    parser.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature.")
+    parser.add_argument("--output_dir", type=str, required=True, help="Directory to save the results.")
+    parser.add_argument("--start_idx", type=int, default=0, help="Index to start processing from in the dataset.")
+    
+    args = parser.parse_args()
+
     dataset = load_dataset("nlile/hendrycks-MATH-benchmark", split="test")
     questions, ground_truths = [], []
 
@@ -245,14 +296,18 @@ if __name__ == "__main__":
         questions.append(item["problem"])
         ground_truths.append(item["answer"])
 
+    # Create the config object from args
+    sc_config = SelfConsistencyConfig(
+        model_name=args.model_name,
+        num_samples=args.num_samples,
+        max_new_tokens=args.max_new_tokens,
+        temperature=args.temperature,
+    )
+
     run_self_consistency(
         user_questions=questions,
         ground_truths=ground_truths,
-        config=SelfConsistencyConfig(
-            model_name="Qwen/Qwen2.5-1.5B-Instruct",
-            num_samples=32,
-            max_new_tokens=200000,
-            temperature=1.0
-        ),
-        output_dir="results/n_32",
+        config=sc_config,
+        output_dir=args.output_dir,
+        start_idx=args.start_idx,
     )
