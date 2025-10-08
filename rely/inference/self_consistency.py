@@ -1,3 +1,4 @@
+import argparse
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Union
 import json
@@ -215,6 +216,7 @@ def run_self_consistency(
     output_dir: Optional[str] = None,
     system_prompt: str = MATH_SYSTEM_PROMPT,
     start_idx: int = 0,
+    end_idx: Optional[int] = None
 ) -> List[Dict[str, Any]]:
     """Run self-consistency for a list of questions."""
     if config is None:
@@ -227,15 +229,14 @@ def run_self_consistency(
         ground_truths = [None] * len(user_questions)
 
     # Combine questions, ground truths, and original indices
-    dataset = [
+    full_dataset = [
         {"question": q, "ground_truth": gt, "original_index": i}
         for i, (q, gt) in enumerate(zip(user_questions, ground_truths))
     ]
 
-    # 1. Apply start_idx
-    if start_idx > 0:
-        dataset = dataset[start_idx:]
-        logger.info(f"Starting from index {start_idx}. Total items to consider: {len(dataset)}")
+    # 1. Slice dataset based on start and end indices
+    dataset = full_dataset[start_idx:end_idx]
+    logger.info(f"Processing dataset slice from {start_idx} to {end_idx if end_idx is not None else len(full_dataset)}. Total items: {len(dataset)}")
 
     # 2. Exclude already processed questions if output_dir is provided
     if output_dir and os.path.exists(output_dir):
@@ -277,7 +278,6 @@ def run_self_consistency(
 
 
 if __name__ == "__main__":
-    import argparse
 
     parser = argparse.ArgumentParser(description="Run self-consistency inference on a dataset.")
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-1.5B-Instruct", help="Name of the model to use.")
@@ -286,6 +286,7 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature.")
     parser.add_argument("--output_dir", type=str, required=True, help="Directory to save the results.")
     parser.add_argument("--start_idx", type=int, default=0, help="Index to start processing from in the dataset.")
+    parser.add_argument("--end_idx", type=int, default=None, help="Index to end processing at in the dataset.")
     
     args = parser.parse_args()
 
@@ -310,4 +311,5 @@ if __name__ == "__main__":
         config=sc_config,
         output_dir=args.output_dir,
         start_idx=args.start_idx,
+        end_idx=args.end_idx,
     )
