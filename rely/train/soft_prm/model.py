@@ -24,7 +24,7 @@ class SoftClassificationPRMModel(PreTrainedModel):
         
         self.transformer = AutoModel.from_config(
             config,
-            dtype=getattr(config, 'torch_dtype', torch.bfloat16),
+            dtype=torch.bfloat16, # getattr(config, 'torch_dtype', torch.bfloat16),
             trust_remote_code=True,
             attn_implementation="flash_attention_2" if torch.cuda.is_available() else "eager"
         )
@@ -92,7 +92,8 @@ class SoftClassificationPRMModel(PreTrainedModel):
     def gradient_checkpointing_disable(self):
         if hasattr(self.transformer, 'gradient_checkpointing_disable'):
             self.transformer.gradient_checkpointing_disable()
-    
+
+
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -101,8 +102,10 @@ class SoftClassificationPRMModel(PreTrainedModel):
         **kwargs
     ) -> TokenClassifierOutput:
         """
-        Forward pass of the soft classification model.
+        Forward pass optimized for bfloat16 inference with a stable float32 loss calculation.
         """
+        # This part of the model runs in bfloat16, assuming the model
+        # was loaded with torch_dtype=torch.bfloat16
         outputs = self.transformer(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -111,20 +114,16 @@ class SoftClassificationPRMModel(PreTrainedModel):
         
         hidden_states = outputs.last_hidden_state
         
+        # Logits are produced and kept in bfloat16
         logits = self.classification_head(hidden_states)
         logits = logits.squeeze(-1)
         
-        if logits.dtype != torch.float32:
-            logits = logits.float()
-        
         loss = None
+        # The loss calculation block is entered only during training/evaluation with labels
         if labels is not None:
-            if labels.dtype != torch.float32:
-                labels = labels.float()
-            
+            # Filtering operations are performed in the native bfloat16 dtype
             active_loss = attention_mask.view(-1) == 1
             active_logits = logits.view(-1)[active_loss]
-            
             active_labels = labels.view(-1)[active_loss]
             loss_mask = active_labels != -100.0
             
@@ -132,24 +131,31 @@ class SoftClassificationPRMModel(PreTrainedModel):
                 filtered_logits = active_logits[loss_mask]
                 filtered_labels = active_labels[loss_mask]
                 
+                # --- MODIFICATION ---
+                # Inputs are explicitly cast to float32 ONLY for the loss function,
+                # ensuring numerical stability.
                 if self.loss_type == "bce":
                     loss_fct = nn.BCEWithLogitsLoss()
-                    loss = loss_fct(filtered_logits, filtered_labels)
+                    loss = loss_fct(filtered_logits.float(), filtered_labels.float())
                 elif self.loss_type == "mse":
                     loss_fct = nn.MSELoss()
-                    # For MSE loss, we need to apply sigmoid to logits first to get probabilities
-                    filtered_probs = torch.sigmoid(filtered_logits)
-                    loss = loss_fct(filtered_probs, filtered_labels)
+                    # For MSE, apply sigmoid to the upcasted float32 logits
+                    filtered_probs = torch.sigmoid(filtered_logits.float())
+                    loss = loss_fct(filtered_probs, filtered_labels.float())
                 else:
                     raise ValueError(f"Unsupported loss type: {self.loss_type}")
             else:
+                # If no labels are present, create a zero loss tensor
                 loss = torch.tensor(0.0, device=logits.device, requires_grad=True)
         
+        # --- MODIFICATION ---
+        # The final output (probabilities) is calculated from the original bfloat16 logits,
+        # ensuring the inference path is fully bfloat16.
         final_outputs = torch.sigmoid(logits)
         
         return TokenClassifierOutput(
-            loss=loss,
-            logits=final_outputs,
+            loss=loss, # Loss is a float32 scalar (which is fine and expected)
+            logits=final_outputs, # The returned logits (probabilities) are bfloat16
             hidden_states=outputs.hidden_states if hasattr(outputs, 'hidden_states') else None,
             attentions=outputs.attentions if hasattr(outputs, 'attentions') else None,
         )

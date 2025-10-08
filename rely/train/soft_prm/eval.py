@@ -1,6 +1,7 @@
 # eval.py (FIXED)
 
 import torch
+from torch.amp import autocast
 import numpy as np
 from datasets import load_dataset
 from transformers import AutoTokenizer
@@ -9,8 +10,8 @@ from tqdm import tqdm
 import argparse
 from pathlib import Path
 
-from model import SoftClassificationPRMModel
-from trainer import SoftClassificationPRMTrainer
+from rely.train import SoftClassificationPRMModel
+from rely.train import SoftClassificationPRMTrainer
 
 
 def load_model_and_tokenizer(checkpoint_path: str):
@@ -19,7 +20,7 @@ def load_model_and_tokenizer(checkpoint_path: str):
     
     # Load tokenizer from checkpoint
     tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
-    model = SoftClassificationPRMModel.from_pretrained(checkpoint_path)
+    model = SoftClassificationPRMModel.from_pretrained(checkpoint_path, dtype=torch.bfloat16)
     
     return model, tokenizer
 
@@ -60,24 +61,26 @@ def evaluate_model(model, tokenizer, dataset, device, max_length, step_separator
             try:
                 # Tokenize the example
                 tokenized = tokenize_example(example, tokenizer, step_separator, max_length)
-                
+
                 # Convert to tensors and move to device
                 input_ids = torch.tensor([tokenized["input_ids"]], device=device)
-                labels_tensor = torch.tensor([tokenized["labels"]], device=device, dtype=torch.float32)
-                
+                labels_tensor = torch.tensor([tokenized["labels"]], device=device, dtype=torch.bfloat16)
+
                 # ✅ FIX: Create attention mask with the correct integer dtype (torch.long).
                 # Transformer models expect an integer mask, not a float one.
                 attention_mask = (input_ids != tokenizer.pad_token_id).long()
+
 
                 # Forward pass
                 outputs = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask
                 )
-                
-                predictions = outputs.logits.float().cpu().numpy()[0]  # (seq_len,)
+
+                # Ensure consistent bfloat16 dtype throughout
+                predictions = outputs.logits.to(torch.bfloat16).cpu().numpy()[0]  # (seq_len,)
                 labels = labels_tensor.cpu().numpy()[0]  # (seq_len,)
-                
+
                 # Extract only the non-ignored labels and corresponding predictions
                 valid_mask = labels != -100.0
                 if valid_mask.sum() > 0:
@@ -114,7 +117,6 @@ def main():
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="Device to run evaluation on (e.g., 'cuda', 'cpu')."
     )
-    # ✅ NEW: Added arguments for tokenization to ensure they match training config
     parser.add_argument(
         "--max_length",
         type=int,
@@ -126,6 +128,11 @@ def main():
         type=str,
         default="<extra_0>",
         help="Step separator token. MUST match training."
+    )
+    parser.add_argument(
+        "--dataset_name",
+        type=str,
+        help="Name of the subset on HF."
     )
     
     args = parser.parse_args()
@@ -151,7 +158,7 @@ def main():
     print("Loading test dataset...")
     test_dataset = load_dataset(
         "jacopo-minniti/MATH-PUM-qwen2.5-1.5B", 
-        name="regression", 
+        name=args.dataset_name, 
         split="test"
     )
     print(f"Test dataset size: {len(test_dataset)}")
