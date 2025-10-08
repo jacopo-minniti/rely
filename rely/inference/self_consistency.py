@@ -2,10 +2,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Union
 import json
 import logging
-import re
 import os
-import argparse
-import traceback
 from pathlib import Path
 from collections import Counter
 
@@ -240,85 +237,22 @@ def run_self_consistency(
     return results
 
 
-def run_self_consistency_on_dataset(args):
-    """Main function that follows the exact SBS pattern for dataset processing."""
-    # Load and prepare dataset exactly like SBS
-    ds = load_dataset(args.dataset, split='test')
-    ds = ds.shuffle(seed=42)
-    dataset = []
-    for i, item in enumerate(ds):
-        item_dict = dict(item)
-        item_dict['original_index'] = i
-        dataset.append(item_dict)
-
-    if args.idx_start is not None and args.idx_end is not None:
-        dataset = dataset[args.idx_start:args.idx_end]
-        logger.info(f"Processing dataset slice from {args.idx_start} to {args.idx_end}. Total items: {len(dataset)}")
-
-    logger.info(f"Starting self-consistency inference on {len(dataset)} questions.")
-    
-    # Initialize self-consistency with config
-    config = SelfConsistencyConfig(
-        model_name=args.model_name,
-        num_samples=args.num_samples,
-        max_new_tokens=args.max_new_tokens,
-        temperature=args.temperature,
-        top_p=args.top_p,
-        tensor_parallel_size=args.tensor_parallel_size,
-        gpu_memory_utilization=args.gpu_memory_utilization
-    )
-    
-    inference = SelfConsistencyInference(config)
-
-    for item in tqdm(dataset, desc="Processing"):
-        original_index = None
-        output_path = None
-        try:
-            question = item['problem']
-            ground_truth = item.get('answer')
-            original_index = item['original_index']
-            output_path = os.path.join(args.output_dir, f"q_{original_index:04d}")
-            
-            if os.path.exists(os.path.join(output_path, "summary.json")):
-                logger.info(f"Skipping item {original_index} as it is already completed.")
-                continue
-                
-            inference.run_inference(
-                user_question=question,
-                ground_truth=ground_truth,
-                base_path=output_path
-            )
-        except Exception as e:
-            error_traceback = traceback.format_exc()
-            logger.error(f"FATAL ERROR processing item {original_index}: {e}\nTRACEBACK:\n{error_traceback}")
-            if output_path:
-                os.makedirs(output_path, exist_ok=True)
-                with open(os.path.join(output_path, "error.log"), 'w') as f:
-                    f.write(f"Error on question index {original_index}:\n{str(e)}\n\n{error_traceback}")
-
-    logger.info("Self-consistency inference completed.")
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Run Self-Consistency inference on dataset.")
-    parser.add_argument("--dataset", type=str, required=True, help="Path to input dataset.")
-    parser.add_argument("--output_dir", type=str, required=True, help="Directory to save results.")
-    parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-1.5B-Instruct", help="Model name for vLLM.")
-    
-    parser.add_argument("--num_samples", type=int, default=20, help="Number of samples for self-consistency.")
-    parser.add_argument("--max_new_tokens", type=int, default=500, help="Maximum new tokens to generate.")
-    parser.add_argument("--temperature", type=float, default=1.0, help="Generation temperature.")
-    parser.add_argument("--top_p", type=float, default=0.95, help="Top-p sampling parameter.")
-    parser.add_argument("--tensor_parallel_size", type=int, default=1, help="Tensor parallel size for vLLM.")
-    parser.add_argument("--gpu_memory_utilization", type=float, default=0.9, help="GPU memory utilization for vLLM.")
-    
-    parser.add_argument("--idx_start", type=int, default=None, help="Start index of the dataset split.")
-    parser.add_argument("--idx_end", type=int, default=None, help="End index of the dataset split.")
-    
-    args = parser.parse_args()
-    os.makedirs(args.output_dir, exist_ok=True)
-    run_self_consistency_on_dataset(args)
-
-
 if __name__ == "__main__":
-    main()
+    dataset = load_dataset("nlile/hendrycks-MATH-benchmark", split="test")
+    questions, ground_truths = [], []
+
+    for item in dataset:
+        questions.append(item["problem"])
+        ground_truths.append(item["answer"])
+
+    run_self_consistency(
+        user_questions=questions,
+        ground_truths=ground_truths,
+        config=SelfConsistencyConfig(
+            model_name="Qwen/Qwen2.5-1.5B-Instruct",
+            num_samples=32,
+            max_new_tokens=200000,
+            temperature=1.0
+        ),
+        output_dir="results/n_32",
+    )
