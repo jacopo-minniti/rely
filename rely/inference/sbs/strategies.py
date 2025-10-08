@@ -13,6 +13,42 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+def _distribute_samples_proportionally(scores: List[float], total_samples: int, num_beams: int) -> List[int]:
+    """Helper to distribute samples proportionally to a list of scores."""
+    total_score = sum(scores)
+    if total_score == 0:
+        # Fallback to even distribution
+        base_samples = total_samples // num_beams
+        remainder = total_samples % num_beams
+        distribution = [base_samples + (1 if i < remainder else 0) for i in range(num_beams)]
+        return distribution
+
+    normalized_scores = [score / total_score for score in scores]
+    sample_distribution = [int(norm_score * total_samples) for norm_score in normalized_scores]
+
+    total_assigned = sum(sample_distribution)
+    remainder = total_samples - total_assigned
+    if remainder > 0:
+        sorted_indices = sorted(range(num_beams), key=lambda k: scores[k], reverse=True)
+        for i in range(remainder):
+            sample_distribution[sorted_indices[i % num_beams]] += 1
+    
+    # Ensure no beam gets 0 samples if possible
+    zero_indices = [i for i, s in enumerate(sample_distribution) if s == 0]
+    if zero_indices:
+        for i in zero_indices:
+            # Find a beam with > 1 sample to donate
+            donatable_beams = sorted([(s, j) for j, s in enumerate(sample_distribution) if s > 1], reverse=True)
+            if donatable_beams:
+                donor_index = donatable_beams[0][1]
+                sample_distribution[donor_index] -= 1
+                sample_distribution[i] += 1
+            else:
+                # Cannot re-allocate, break to avoid infinite loops
+                break
+    return sample_distribution
+
+
 class SamplingStrategy:
     """Base class for sampling strategies."""
     def distribute_samples(self, sbs_instance: 'StepBeamSearch', question: str) -> List[int]:
@@ -48,8 +84,8 @@ class UniformStrategy(SamplingStrategy):
             
         return samples_per_beam
 
-class PumStrategy(SamplingStrategy):
-    """Distributes samples based on PUM uncertainty."""
+class PumBasedStrategy(SamplingStrategy):
+    """Base class for strategies that use the PUM uncertainty model."""
     def __init__(self, uncertainty_task_queue, uncertainty_result_queue):
         self.uncertainty_task_queue = uncertainty_task_queue
         self.uncertainty_result_queue = uncertainty_result_queue
@@ -68,6 +104,8 @@ class PumStrategy(SamplingStrategy):
             self.uncertainty_result_queue.put(response)
             time.sleep(0.01)
 
+class PumStrategy(PumBasedStrategy):
+    """Distributes samples based on PUM uncertainty."""
     def distribute_samples(self, sbs_instance: 'StepBeamSearch', question: str) -> List[int]:
         if not sbs_instance.active_beams:
             return []
@@ -80,40 +118,12 @@ class PumStrategy(SamplingStrategy):
             if i < len(uncertainty_scores):
                 beam.uncertainty = uncertainty_scores[i]
 
-        # 2. Calculate distribution (logic from sbs_pum.py)
-        num_beams = len(uncertainty_scores)
-        total_samples = sbs_instance.config.n_total_samples
-
-        total_uncertainty = sum(uncertainty_scores)
-        if total_uncertainty == 0:
-            # Fallback to even distribution
-            samples_per_beam = total_samples // num_beams
-            remainder = total_samples % num_beams
-            distribution = [samples_per_beam] * num_beams
-            for i in range(remainder):
-                distribution[i] += 1
-            return distribution
-
-        normalized_scores = [score / total_uncertainty for score in uncertainty_scores]
-        sample_distribution = [int(norm_score * total_samples) for norm_score in normalized_scores]
-
-        total_assigned = sum(sample_distribution)
-        remainder = total_samples - total_assigned
-        if remainder > 0:
-            sorted_indices = sorted(range(num_beams), key=lambda k: uncertainty_scores[k], reverse=True)
-            for i in range(remainder):
-                sample_distribution[sorted_indices[i % num_beams]] += 1
-        
-        zero_indices = [i for i, s in enumerate(sample_distribution) if s == 0]
-        if zero_indices:
-            for i in zero_indices:
-                donatable_beams = sorted([(s, j) for j, s in enumerate(sample_distribution) if s > 1], reverse=True)
-                if donatable_beams:
-                    max_index = donatable_beams[0][1]
-                    sample_distribution[max_index] -= 1
-                    sample_distribution[i] += 1
-                else:
-                    break
+        # 2. Calculate distribution
+        sample_distribution = _distribute_samples_proportionally(
+            uncertainty_scores,
+            sbs_instance.config.n_total_samples,
+            len(sbs_instance.active_beams)
+        )
         
         if sbs_instance.config.verbose:
             logger.info(f"[Rank {sbs_instance.worker_rank}] Uncertainty scores: {[f'{s:.3f}' for s in uncertainty_scores]}")
@@ -122,7 +132,7 @@ class PumStrategy(SamplingStrategy):
         return sample_distribution
 
 
-class PumPerValueStrategy(PumStrategy):
+class PumPerValueStrategy(PumBasedStrategy):
     """Distributes samples based on PUM uncertainty multiplied by beam value."""
     def distribute_samples(self, sbs_instance: 'StepBeamSearch', question: str) -> List[int]:
         if not sbs_instance.active_beams:
@@ -136,44 +146,16 @@ class PumPerValueStrategy(PumStrategy):
             if i < len(uncertainty_scores):
                 beam.uncertainty = uncertainty_scores[i]
 
-        # New part: multiply by value
+        # 2. Multiply by value to get distribution scores
         value_scores = [beam.value for beam in sbs_instance.active_beams]
         distribution_scores = [pum * val for pum, val in zip(uncertainty_scores, value_scores)]
 
-        # 2. Calculate distribution (logic from sbs_pum.py)
-        num_beams = len(distribution_scores)
-        total_samples = sbs_instance.config.n_total_samples
-
-        total_score = sum(distribution_scores)
-        if total_score == 0:
-            # Fallback to even distribution
-            samples_per_beam = total_samples // num_beams
-            remainder = total_samples % num_beams
-            distribution = [samples_per_beam] * num_beams
-            for i in range(remainder):
-                distribution[i] += 1
-            return distribution
-
-        normalized_scores = [score / total_score for score in distribution_scores]
-        sample_distribution = [int(norm_score * total_samples) for norm_score in normalized_scores]
-
-        total_assigned = sum(sample_distribution)
-        remainder = total_samples - total_assigned
-        if remainder > 0:
-            sorted_indices = sorted(range(num_beams), key=lambda k: distribution_scores[k], reverse=True)
-            for i in range(remainder):
-                sample_distribution[sorted_indices[i % num_beams]] += 1
-        
-        zero_indices = [i for i, s in enumerate(sample_distribution) if s == 0]
-        if zero_indices:
-            for i in zero_indices:
-                donatable_beams = sorted([(s, j) for j, s in enumerate(sample_distribution) if s > 1], reverse=True)
-                if donatable_beams:
-                    max_index = donatable_beams[0][1]
-                    sample_distribution[max_index] -= 1
-                    sample_distribution[i] += 1
-                else:
-                    break
+        # 3. Calculate distribution
+        sample_distribution = _distribute_samples_proportionally(
+            distribution_scores,
+            sbs_instance.config.n_total_samples,
+            len(sbs_instance.active_beams)
+        )
         
         if sbs_instance.config.verbose:
             logger.info(f"[Rank {sbs_instance.worker_rank}] Uncertainty scores: {[f'{s:.3f}' for s in uncertainty_scores]}")
@@ -230,42 +212,12 @@ class TokenEntropyStrategy(SamplingStrategy):
         # Use uncertainty from previous step
         uncertainty_scores = [beam.uncertainty for beam in sbs_instance.active_beams]
         
-        # Same distribution calculation as PUM
-        num_beams = len(uncertainty_scores)
-        total_samples = sbs_instance.config.n_total_samples
-        total_uncertainty = sum(uncertainty_scores)
-        if total_uncertainty == 0:
-            samples_per_beam = total_samples // num_beams
-            remainder = total_samples % num_beams
-            distribution = [samples_per_beam] * num_beams
-            for i in range(remainder):
-                distribution[i] += 1
-            return distribution
-
-        normalized_scores = [score / total_uncertainty for score in uncertainty_scores]
-        sample_distribution = [int(norm_score * total_samples) for norm_score in normalized_scores]
-
-        total_assigned = sum(sample_distribution)
-        remainder = total_samples - total_assigned
-        if remainder > 0:
-            sorted_indices = sorted(range(num_beams), key=lambda k: uncertainty_scores[k], reverse=True)
-            for i in range(remainder):
-                sample_distribution[sorted_indices[i % num_beams]] += 1
-        
-        while any(s == 0 for s in sample_distribution):
-            donor_idx = -1
-            max_samples = 1
-            for i, s in enumerate(sample_distribution):
-                if s > max_samples:
-                    max_samples = s
-                    donor_idx = i
-            if donor_idx == -1: break
-            try:
-                receiver_idx = sample_distribution.index(0)
-            except ValueError:
-                break
-            sample_distribution[donor_idx] -= 1
-            sample_distribution[receiver_idx] += 1
+        # Calculate distribution
+        sample_distribution = _distribute_samples_proportionally(
+            uncertainty_scores,
+            sbs_instance.config.n_total_samples,
+            len(sbs_instance.active_beams)
+        )
 
         if sbs_instance.config.verbose:
             logger.info(f"[Rank {sbs_instance.worker_rank}] Previous step uncertainties: {[f'{s:.3f}' for s in uncertainty_scores]}")
@@ -274,26 +226,11 @@ class TokenEntropyStrategy(SamplingStrategy):
         return sample_distribution
 
 
-class UCBStrategy(SamplingStrategy):
+class UCBStrategy(PumBasedStrategy):
     """UCB-like strategy: Uses uniform sampling but scores beams with value + c * uncertainty."""
     def __init__(self, uncertainty_task_queue, uncertainty_result_queue, c=1.0):
-        self.uncertainty_task_queue = uncertainty_task_queue
-        self.uncertainty_result_queue = uncertainty_result_queue
+        super().__init__(uncertainty_task_queue, uncertainty_result_queue)
         self.c = c  # UCB exploration parameter
-
-    def _get_uncertainties_from_server(self, sbs_instance, prompts: List[str]) -> List[float]:
-        if not prompts:
-            return []
-        request_id = str(uuid.uuid4())
-        payload = {"request_id": request_id, "worker_rank": sbs_instance.worker_rank, "prompts": prompts}
-        self.uncertainty_task_queue.put(payload)
-        
-        while True:
-            response = self.uncertainty_result_queue.get()
-            if response.get("request_id") == request_id:
-                return response["uncertainties"]
-            self.uncertainty_result_queue.put(response)
-            time.sleep(0.01)
 
     def distribute_samples(self, sbs_instance: 'StepBeamSearch', question: str) -> List[int]:
         """Uniform distribution - same as UniformStrategy."""
