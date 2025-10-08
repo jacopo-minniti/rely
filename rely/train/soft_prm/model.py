@@ -32,7 +32,7 @@ class SoftClassificationPRMModel(PreTrainedModel):
         self.hidden_size = self.transformer.config.hidden_size
             
         self.classification_head = nn.Linear(self.hidden_size, 1)
-        self.classification_head = self.classification_head.float()
+        # self.classification_head = self.classification_head.float()
         
         # Default loss type
         self.loss_type = "bce"
@@ -151,7 +151,7 @@ class SoftClassificationPRMModel(PreTrainedModel):
         # --- MODIFICATION ---
         # The final output (probabilities) is calculated from the original bfloat16 logits,
         # ensuring the inference path is fully bfloat16.
-        final_outputs = torch.sigmoid(logits)
+        final_outputs = torch.sigmoid(logits.float())
         
         return TokenClassifierOutput(
             loss=loss, # Loss is a float32 scalar (which is fine and expected)
