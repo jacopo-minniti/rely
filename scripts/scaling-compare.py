@@ -3,10 +3,16 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from matplotlib.lines import Line2D
 import json
+import sys
+import argparse
 
 
 ################# Configuration #################
-STRATEGY = "bon"  # bon or maj
+if len(sys.argv) > 1:
+    STRATEGY = sys.argv[1]
+else:
+    STRATEGY = 'bon'
+print(f"Using strategy: {STRATEGY}")
 SHOW_ALL_POINTS = True  # Set to True to show all points, not just Pareto frontier
 #################################################
 
