@@ -140,19 +140,21 @@ class SelfConsistencyInference:
             logger.debug(f"Sample {i + 1}/{self.config.num_samples} ⇒ {answer}")
 
         # Prepare solutions in the exact same format as SBS
+        base_prompt = format_prompt(user_question, system_prompt)
+        prompt_tokens = self._count_tokens(base_prompt)
+        
+        completion_texts = [text.replace(base_prompt, "", 1) for text in generated_texts]
+        completion_tokens = sum(self._count_tokens(comp) for comp in completion_texts)
+        total_tokens = prompt_tokens + completion_tokens
+
         solutions = []
-        total_tokens = 0
         for i, (answer, text) in enumerate(zip(answers, generated_texts)):
             # Extract just the assistant response part for solution_path (like SBS does)
             solution_path = text.split("<|im_start|>assistant\n")[-1] if "<|im_start|>assistant\n" in text else text
-            # Count tokens for this solution
-            solution_tokens = self._count_tokens(text)
-            total_tokens += solution_tokens
             
             termination_reason = "answer_found" if answer != "Not found" else "max_tokens"
             solution_data = {
                 "beam_index": i + 1,
-                "value": 1.0,  # Self-consistency doesn't have value scores, use uniform value
                 "final_answer": answer,
                 "depth": 1,  # Self-consistency is single-step, so depth is always 1
                 "termination_reason": termination_reason,
