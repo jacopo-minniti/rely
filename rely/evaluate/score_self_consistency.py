@@ -46,9 +46,7 @@ def get_trace_uncertainties(model, tokenizer, device, question, solutions):
 
     for solution in solutions:
         assistant_response = solution['solution_path']
-        steps = [s.strip() for s in assistant_response.split('''
-
-''') if s.strip()]
+        steps = [s.strip() for s in assistant_response.split("\n\n") if s.strip()]
         # Ensure there's at least one step for the <extra_0> token
         if not steps:
             steps = [""]
