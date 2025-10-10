@@ -36,6 +36,8 @@ class SoftClassificationPRMModel(PreTrainedModel):
         
         # Default loss type
         self.loss_type = "bce"
+        self.bce_pos_weight = None
+        self.bce_label_weight = None
         
         self.post_init()
     
@@ -71,6 +73,14 @@ class SoftClassificationPRMModel(PreTrainedModel):
         if loss_type not in ["bce", "mse"]:
             raise ValueError(f"loss_type must be either 'bce' or 'mse', got '{loss_type}'")
         self.loss_type = loss_type
+    
+    def set_bce_pos_weight(self, weight: float):
+        """Set the positive weight for BCE loss."""
+        self.bce_pos_weight = weight
+    
+    def set_bce_label_weight(self, weight: float):
+        """Set the label-based weight for BCE loss."""
+        self.bce_label_weight = weight
     
     def _set_gradient_checkpointing(self, module, value=False):
         if module is self.transformer:
@@ -133,7 +143,15 @@ class SoftClassificationPRMModel(PreTrainedModel):
                 filtered_labels = active_labels[loss_mask]
                 
                 if self.loss_type == "bce":
-                    loss_fct = nn.BCEWithLogitsLoss()
+                    pos_weight = torch.tensor(self.bce_pos_weight, device=filtered_logits.device) if self.bce_pos_weight is not None else None
+                    
+                    weights = None
+                    if self.bce_label_weight is not None:
+                        # Create weights based on labels. Higher labels get more weight.
+                        # Weights are 1 for label 0, and 1 + bce_label_weight for label 1.
+                        weights = 1 + filtered_labels * self.bce_label_weight
+                        
+                    loss_fct = nn.BCEWithLogitsLoss(pos_weight=pos_weight, weight=weights)
                     loss = loss_fct(filtered_logits, filtered_labels)
                 elif self.loss_type == "mse":
                     loss_fct = nn.MSELoss()

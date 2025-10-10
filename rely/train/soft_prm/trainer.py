@@ -96,6 +96,8 @@ class SoftClassificationPRMTrainer(Trainer):
             The function to use to preprocess the logits before computing the metrics.
         loss (`str`, *optional*, defaults to `"bce"`):
             The loss function to use. Can be either "bce" for Binary Cross-Entropy or "mse" for Mean Squared Error.
+        bce_pos_weight (`float`, *optional*):
+            The weight for positive samples in BCE loss. This is useful for imbalanced datasets.
     """
 
     _tag_names = ["trl", "prm", "soft-classification"]
@@ -119,6 +121,8 @@ class SoftClassificationPRMTrainer(Trainer):
         ),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         loss: str = "bce",
+        bce_pos_weight: Optional[float] = None,
+        bce_label_weight: Optional[float] = None,
     ):
 
         if args.disable_dropout:
@@ -203,6 +207,14 @@ class SoftClassificationPRMTrainer(Trainer):
         # Set the loss type on the model if it supports it
         if hasattr(self.model, "set_loss_type"):
             self.model.set_loss_type(self.loss_type)
+
+        # Set the bce_pos_weight on the model if it supports it
+        if bce_pos_weight is not None and hasattr(self.model, "set_bce_pos_weight"):
+            self.model.set_bce_pos_weight(bce_pos_weight)
+
+        # Set the bce_label_weight on the model if it supports it
+        if bce_label_weight is not None and hasattr(self.model, "set_bce_label_weight"):
+            self.model.set_bce_label_weight(bce_label_weight)
 
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
