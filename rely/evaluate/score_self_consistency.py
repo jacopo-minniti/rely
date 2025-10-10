@@ -23,6 +23,11 @@ def load_pum_model(model_path):
     print(f"Using device: {device}")
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    # PRM
+    # model = AutoModelForTokenClassification.from_pretrained(
+    #     model_path, dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
+    # )
+    # SOFT PRM
     model = SoftClassificationPRMModel.from_pretrained(
         model_path, dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
     )
@@ -37,9 +42,12 @@ def load_pum_model(model_path):
     return model, tokenizer, device
 
 @torch.no_grad()
-def get_trace_uncertainties(model, tokenizer, device, question, solutions):
+def get_trace_uncertainties(model, tokenizer, device, question, solutions, aggregation_method="product"):
     """
-    Calculates the mean uncertainty for a batch of solution traces.
+    Calculates the uncertainty for a batch of solution traces.
+    
+    Args:
+        aggregation_method: Either "product" or "max" to determine how to aggregate uncertainty scores
     """
     conversation_strs = []
     step_sep_id = tokenizer.encode("<extra_0>", add_special_tokens=False)[0]
@@ -72,21 +80,41 @@ def get_trace_uncertainties(model, tokenizer, device, question, solutions):
         try:
             inputs = tokenizer(batch_conversations, return_tensors="pt", padding=True, truncation=True, max_length=7000).to(device)
             outputs = model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask)
-            
-            # Direct sigmoid probabilities from the custom model
+
+            # PRM
+            # uncertainty_probs = torch.softmax(outputs.logits, dim=-1)[:, :, 1]
+            # SOFT PRM
             uncertainty_probs = outputs.logits
+            
+            print(f"DEBUG: Batch {i//batch_size + 1} - uncertainty_probs shape: {uncertainty_probs.shape}")
+            print(f"DEBUG: uncertainty_probs min/max: {uncertainty_probs.min().item():.4f}/{uncertainty_probs.max().item():.4f}")
+            
             token_masks = (inputs.input_ids == step_sep_id)
+            
+            print(f"DEBUG: step_sep_id: {step_sep_id}")
+            print(f"DEBUG: token_masks shape: {token_masks.shape}")
+            print(f"DEBUG: total separator tokens found: {token_masks.sum().item()}")
+            for seq_idx in range(token_masks.shape[0]):
+                sep_count = token_masks[seq_idx].sum().item()
+                print(f"DEBUG: Sequence {seq_idx}: {sep_count} separator tokens")
             
             has_separator = token_masks.any(dim=1)
             default_uncertainty = torch.tensor(0.5, device=device)
             
-            # Calculate mean uncertainty ("average" method)
-            masked_probs = uncertainty_probs * token_masks.float()
-            sums = masked_probs.sum(dim=1)
-            counts = token_masks.sum(dim=1).clamp(min=1)
-            calculated_uncertainties = sums / counts
+            # Calculate uncertainty based on aggregation method
+            if aggregation_method == "product":
+                masked_probs = uncertainty_probs * token_masks.float() + (1 - token_masks.float())
+                calculated_uncertainties = torch.prod(masked_probs, dim=1)
+                print(f"DEBUG: Product aggregation - calculated_uncertainties: {calculated_uncertainties.cpu().tolist()}")
+            elif aggregation_method == "max":
+                masked_probs = uncertainty_probs * token_masks.float()
+                calculated_uncertainties = torch.max(masked_probs, dim=1)[0]
+                print(f"DEBUG: Max aggregation - calculated_uncertainties: {calculated_uncertainties.cpu().tolist()}")
+            else:
+                raise ValueError(f"Unknown aggregation method: {aggregation_method}")
             
             final_uncertainties = torch.where(has_separator, calculated_uncertainties, default_uncertainty)
+            print(f"DEBUG: Final uncertainties for batch: {final_uncertainties.cpu().tolist()}")
             all_uncertainties.extend(final_uncertainties.cpu().tolist())
 
             del inputs, outputs
@@ -116,7 +144,7 @@ def get_majority_vote(solutions):
         
     return Counter(normalized_answers).most_common(1)[0][0]
 
-def process_json_file(path, pum_model, pum_tokenizer, pum_device, use_pum, top_k_percent):
+def process_json_file(path, pum_model, pum_tokenizer, pum_device, use_pum, top_k_percent, aggregation_method="product"):
     """
     Processes a single JSON file to check for correctness.
     """
@@ -151,18 +179,28 @@ def process_json_file(path, pum_model, pum_tokenizer, pum_device, use_pum, top_k
                 raise ValueError("PUM model and tokenizer must be loaded to use PUM-weighted scoring.")
             
             question = data.get('question')
-            uncertainties = get_trace_uncertainties(pum_model, pum_tokenizer, pum_device, question, solutions)
+            uncertainties = get_trace_uncertainties(pum_model, pum_tokenizer, pum_device, question, solutions, aggregation_method)
+            
+            print(f"DEBUG: Raw uncertainties: {uncertainties}")
             
             confidences = [1.0 - u for u in uncertainties]
+            print(f"DEBUG: Converted confidences: {confidences}")
             
             # Pair solutions with their confidence scores
             scored_solutions = sorted(zip(confidences, solutions), key=lambda x: x[0], reverse=True)
             
+            print(f"DEBUG: Solution ranking by confidence:")
+            for i, (conf, sol) in enumerate(scored_solutions[:5]):  # Show top 5
+                final_ans = sol.get('final_answer', 'N/A')
+                print(f"  Rank {i+1}: conf={conf:.4f}, final_answer={final_ans}")
+            
             # Keep only top-k percent
             num_to_keep = math.ceil(len(scored_solutions) * (top_k_percent / 100.0))
+            print(f"DEBUG: Keeping top {num_to_keep} out of {len(scored_solutions)} solutions ({top_k_percent}%)")
             top_k_solutions = [sol for conf, sol in scored_solutions[:num_to_keep]]
             
             pum_majority_vote = get_majority_vote(top_k_solutions)
+            print(f"DEBUG: PUM majority vote: {pum_majority_vote}")
             
             is_pum_correct = False
             if pum_majority_vote != "N/A":
@@ -176,12 +214,15 @@ def process_json_file(path, pum_model, pum_tokenizer, pum_device, use_pum, top_k
         print(f"Warning: Failed to process file {path}: {e}")
         return None, None
 
-def main():
+
+if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Evaluate self-consistency outputs with optional PUM-weighted majority voting.')
     parser.add_argument('input_dir', help='Directory containing result subfolders to process.')
     parser.add_argument('--use-pum', action='store_true', help='Enable PUM-weighted majority vote scoring.')
     parser.add_argument('--top-k-percent', type=int, default=50, help='Top k percent of traces to consider for PUM-weighted voting.')
     parser.add_argument('--uncertainty_model_path', type=str, help='Path to the PUM uncertainty model (required if --use-pum).')
+    parser.add_argument('--aggregation-method', type=str, default='product', choices=['product', 'max'], 
+                       help='Method to aggregate uncertainty scores within a trace: "product" or "max".')
     
     args = parser.parse_args()
 
@@ -212,7 +253,7 @@ def main():
 
     for path in tqdm(sorted(json_files), desc="Evaluating summaries"):
         is_normal_correct, is_pum_correct = process_json_file(
-            path, pum_model, pum_tokenizer, pum_device, args.use_pum, args.top_k_percent
+            path, pum_model, pum_tokenizer, pum_device, args.use_pum, args.top_k_percent, args.aggregation_method
         )
         
         if is_normal_correct is None:
@@ -252,9 +293,8 @@ def main():
     if pum_accuracy is not None:
         result["pum_maj_accuracy"] = round(pum_accuracy, 4)
         result["top_k_percent"] = args.top_k_percent
+        result["aggregation_method"] = args.aggregation_method
+        result["pum_model_path"] = args.uncertainty_model_path
 
     print("\nResults:")
     print(json.dumps(result, indent=4))
-
-if __name__ == '__main__':
-    main()
