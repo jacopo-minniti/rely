@@ -7,37 +7,34 @@ from typing import List, Dict, Any
 import numpy as np
 from rely.utils import load_dataset, save_dataset, extract_final_answer, normalize_answer
 
+# Hyperparameter for CWP calculation
+ALPHA = 0.2
 
-def calculate_cwe(completions: List[str], ground_truth: str) -> float:
+
+def calculate_cwp(completions: List[str], ground_truth: str) -> float:
     """
-    Calculate the Correctness-Weighted Entropy (CWE) metric.
-    CWE = P(Correct) × H(X)
+    Calculate the Correctness-Weighted Probability (CWP) metric.
+    CWP = p(1-p) + alpha * p
     Where:
-    - P(Correct) is the proportion of correct answers
-    - H(X) is the entropy of the full answer distribution
+    - p is the proportion of correct answers
+    - alpha is a hyperparameter
     
-    A high CWE indicates high correctness with high diversity in answers.
-    A low CWE indicates either low correctness or low diversity in answers.
+    A high CWP balances correctness with uncertainty/variance in answers.
     """
     if not completions:
         return 0.0
     
     normalized_ground_truth = normalize_answer(ground_truth)
     
-    # Collect all answers
-    all_answers = []
+    # Count correct answers
     correct_count = 0
     
     for completion in completions:
         extracted = extract_final_answer(completion)
         if extracted:
             normalized_extracted = normalize_answer(extracted)
-            all_answers.append(normalized_extracted)
             if normalized_extracted == normalized_ground_truth:
                 correct_count += 1
-        else:
-            # If no answer is extracted, treat as a specific answer
-            all_answers.append("<no_answer>")
     
     total_answers = len(completions)
     
@@ -46,27 +43,12 @@ def calculate_cwe(completions: List[str], ground_truth: str) -> float:
         return 0.0
     
     # Calculate correctness rate
-    correctness_rate = correct_count / total_answers
+    p = correct_count / total_answers
     
-    # If no diversity (all same answer), return 0
-    if len(set(all_answers)) <= 1:
-        return 0.0
+    # Calculate CWP: p(1-p) + alpha * p
+    cwp = p * (1 - p) + ALPHA * p
     
-    # Calculate entropy of all answers
-    answer_counts = {}
-    for answer in all_answers:
-        answer_counts[answer] = answer_counts.get(answer, 0) + 1
-    
-    entropy = 0.0
-    for count in answer_counts.values():
-        probability = count / total_answers
-        if probability > 0:
-            entropy -= probability * math.log(probability)
-    
-    # Calculate CWE
-    cwe = correctness_rate * entropy
-    
-    return cwe
+    return cwp
 
 
 def format_dataset_item(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -105,14 +87,14 @@ def format_dataset_item(item: Dict[str, Any]) -> Dict[str, Any]:
             cut_steps = cut_cot.split("\n\n")
             step_index = len(cut_steps) - 1  # Index of the last step in this cut
             
-            # Calculate CWE of completion final answers
-            cwe_score = calculate_cwe(completions, solution)
+            # Calculate CWP of completion final answers
+            cwp_score = calculate_cwp(completions, solution)
             
-            # Store the CWE for this step (use maximum if multiple samples for same step)
+            # Store the CWP for this step (use maximum if multiple samples for same step)
             if step_index not in step_variances:
-                step_variances[step_index] = cwe_score
+                step_variances[step_index] = cwp_score
             else:
-                step_variances[step_index] = max(step_variances[step_index], cwe_score)
+                step_variances[step_index] = max(step_variances[step_index], cwp_score)
     
     # Create variance values list matching the number of steps
     variance_values = []
@@ -122,7 +104,7 @@ def format_dataset_item(item: Dict[str, Any]) -> Dict[str, Any]:
     formatted_item = {
         "prompt": question.strip(),
         "completions": cot_steps,  # List of reasoning steps
-        "variance_values": variance_values  # List of raw CWE values for each step
+        "variance_values": variance_values  # List of raw CWP values for each step
     }
     
     return formatted_item
@@ -131,7 +113,7 @@ def format_dataset_item(item: Dict[str, Any]) -> Dict[str, Any]:
 def convert_dataset(input_file: str) -> List[Dict[str, Any]]:
     """
     Convert the entire dataset from completer format to process-reward format.
-    Normalizes CWE values to [0, 1] range across the entire dataset.
+    Normalizes CWP values to [0, 1] range across the entire dataset.
     
     Args:
         input_file: Path to the input JSONL file
@@ -143,7 +125,7 @@ def convert_dataset(input_file: str) -> List[Dict[str, Any]]:
         raise ValueError(f"Could not load data from {input_file}")
     
     print(f"Loaded {len(data)} items from the dataset")
-    print("Using CWE-based evaluation with continuous values")
+    print("Using CWP-based evaluation with continuous values")
     
     # First pass: convert all items and collect all variance values
     all_formatted_items = []
@@ -154,21 +136,28 @@ def convert_dataset(input_file: str) -> List[Dict[str, Any]]:
         all_formatted_items.append(formatted_item)
         all_variance_values.extend(formatted_item["variance_values"])
     
-    # Normalize CWE scores to [0, 1] range
+    # Min-max scale CWP scores to [0, 1] range
     if all_variance_values:
         min_variance = min(all_variance_values)
         max_variance = max(all_variance_values)
-        
-        print(f"CWE statistics: min={min_variance:.4f}, max={max_variance:.4f}")
-        
-        # Normalize variance values to [0, 1] range
         variance_range = max_variance - min_variance
+        
+        print(f"CWP statistics before scaling: min={min_variance:.4f}, max={max_variance:.4f}, range={variance_range:.4f}")
+        
+        # Min-max scale variance values to [0, 1] range
         for item in all_formatted_items:
             if variance_range > 0:
+                # Standard min-max scaling: (x - min) / (max - min)
                 item["labels"] = [(val - min_variance) / variance_range for val in item["variance_values"]]
             else:
-                item["labels"] = [0.0] * len(item["variance_values"])  # All values are the same
+                # All values are identical, set to 0.5 (middle of [0, 1])
+                item["labels"] = [0.5] * len(item["variance_values"])
             del item["variance_values"]  # Remove the temporary field
+        
+        # Verify scaling worked correctly
+        all_scaled_values = [label for item in all_formatted_items for label in item["labels"]]
+        if all_scaled_values:
+            print(f"CWP statistics after min-max scaling: min={min(all_scaled_values):.4f}, max={max(all_scaled_values):.4f}")
     else:
         print("Warning: No variance values found in the dataset")
         for item in all_formatted_items:
@@ -176,7 +165,7 @@ def convert_dataset(input_file: str) -> List[Dict[str, Any]]:
             if "variance_values" in item:
                 del item["variance_values"]
     
-    print(f"Converted to {len(all_formatted_items)} formatted items with normalized CWE labels")
+    print(f"Converted to {len(all_formatted_items)} formatted items with normalized CWP labels")
     return all_formatted_items
 
 
@@ -325,13 +314,9 @@ def split_dataset_without_contamination(
 
 if __name__ == "__main__":
     
-    # Wait for file operations to complete
-    print("Waiting for file operations to complete...")
-    time.sleep(30)
-    
-    # Step 1: Convert dataset format with CWE-based continuous labels
+    # Step 1: Convert dataset format with CWP-based continuous labels
     print("\n--- Step 1: Converting Dataset Format ---")
-    formatted_data = convert_dataset("data/math_completions.jsonl")
+    formatted_data = convert_dataset("data/merged_math_completions.jsonl")
     
     # Step 2: Remove outliers with excessively long reasoning chains
     cleaned_data = remove_outliers_by_steps(formatted_data)
@@ -355,9 +340,9 @@ if __name__ == "__main__":
     
     # Step 5: Save the datasets
     print(f"\n--- Step 5: Saving Datasets ---")
-    save_dataset(train_data, "data/math_cwe_train.jsonl")
-    save_dataset(test_data, "data/math_cwe_test.jsonl")
+    save_dataset(train_data, f"data/math_cwp_{ALPHA}_train.jsonl")
+    save_dataset(test_data, f"data/math_cwp_{ALPHA}_test.jsonl")
 
-    print(f"Training set saved to: data/math_cwe_train.jsonl")
-    print(f"Test set saved to: data/math_cwe_test.jsonl")
+    print(f"Training set saved to: data/math_cwp_{ALPHA}_train.jsonl")
+    print(f"Test set saved to: data/math_cwp_{ALPHA}_test.jsonl")
     print("\nPipeline complete! ✅")

@@ -72,7 +72,7 @@ def main():
     # --- 3. Configure Training Arguments ---
     print("Configuring training arguments...")
     training_args = PRMConfig(
-        output_dir="./.cache/variance_v2",
+        output_dir="./.cache/variance_downsample",
         hub_model_id="jacopo-minniti/Qwen2.5-Math-1.5B-PUM-variance",
         max_length=4096,
         train_on_last_step_only=False,
@@ -108,9 +108,9 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
-        loss="bce",  # Can be "bce" (default) or "mse"
-        bce_pos_weight=10.0,
-        bce_label_weight=5.0,
+        loss="mse",  # Can be "bce" (default) or "mse"
+        # bce_pos_weight=4.0,
+        # bce_label_weight=5.0,
     )
 
     # --- 5. Start Training ---

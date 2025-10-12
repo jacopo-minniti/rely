@@ -56,5 +56,5 @@ def main():
     upload_as_separate_files(args.repo_id, args.files, args.token)
 
 if __name__ == "__main__":
-    # python rely/scripts/upload_dataset.py jacopo-minniti/MATH-PUM-qwen2.5-1.5B --files data/math_variance_v2_train_binarized.jsonl data/math_variance_v2_test_binarized.jsonl
+    # .venv/bin/python rely/scripts/upload_dataset.py jacopo-minniti/MATH-PUM-qwen2.5-1.5B --files data/math_cwp_0.2_train.jsonl data/math_cwp_0.2_test.jsonl
     main()
