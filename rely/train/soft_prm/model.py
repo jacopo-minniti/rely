@@ -36,8 +36,7 @@ class SoftClassificationPRMModel(PreTrainedModel):
         
         # Default loss type
         self.loss_type = "bce"
-        self.bce_pos_weight = None
-        self.bce_label_weight = None
+        self.mask_zeros = False
         
         self.post_init()
     
@@ -74,13 +73,9 @@ class SoftClassificationPRMModel(PreTrainedModel):
             raise ValueError(f"loss_type must be either 'bce' or 'mse', got '{loss_type}'")
         self.loss_type = loss_type
     
-    def set_bce_pos_weight(self, weight: float):
-        """Set the positive weight for BCE loss."""
-        self.bce_pos_weight = weight
-    
-    def set_bce_label_weight(self, weight: float):
-        """Set the label-based weight for BCE loss."""
-        self.bce_label_weight = weight
+    def set_mask_zeros(self, mask_zeros: bool):
+        """Set whether to mask labels with values close to zero."""
+        self.mask_zeros = mask_zeros
     
     def _set_gradient_checkpointing(self, module, value=False):
         if module is self.transformer:
@@ -134,24 +129,24 @@ class SoftClassificationPRMModel(PreTrainedModel):
             
             active_loss = attention_mask.view(-1) == 1
             active_logits = logits.view(-1)[active_loss]
-            
             active_labels = labels.view(-1)[active_loss]
+            
+            # Standard mask for labels marked with -100.0
             loss_mask = active_labels != -100.0
             
+            # If mask_zeros is enabled, also mask labels with values < 0.01.
+            # This is to prevent the model from being penalized for predicting small values for steps
+            # that are effectively incorrect or have a score of 0. The 0.01 threshold is used
+            # to account for floating-point inaccuracies.
+            if self.mask_zeros:
+                loss_mask = loss_mask & (active_labels >= 0.01)
+
             if loss_mask.sum() > 0:
                 filtered_logits = active_logits[loss_mask]
                 filtered_labels = active_labels[loss_mask]
                 
                 if self.loss_type == "bce":
-                    pos_weight = torch.tensor(self.bce_pos_weight, device=filtered_logits.device) if self.bce_pos_weight is not None else None
-                    
-                    weights = None
-                    if self.bce_label_weight is not None:
-                        # Create weights based on labels. Higher labels get more weight.
-                        # Weights are 1 for label 0, and 1 + bce_label_weight for label 1.
-                        weights = 1 + filtered_labels * self.bce_label_weight
-                        
-                    loss_fct = nn.BCEWithLogitsLoss(pos_weight=pos_weight, weight=weights)
+                    loss_fct = nn.BCEWithLogitsLoss()
                     loss = loss_fct(filtered_logits, filtered_labels)
                 elif self.loss_type == "mse":
                     loss_fct = nn.MSELoss()

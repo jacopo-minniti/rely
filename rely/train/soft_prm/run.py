@@ -109,8 +109,7 @@ def main():
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
         loss="mse",  # Can be "bce" (default) or "mse"
-        # bce_pos_weight=4.0,
-        # bce_label_weight=5.0,
+        mask_zeros=True,
     )
 
     # --- 5. Start Training ---
