@@ -1,54 +1,53 @@
 import math
 import random
 import time
-from collections import defaultdict
+from collections import defaultdict, Counter
 from typing import List, Dict, Any
 
 import numpy as np
 from rely.utils import load_dataset, save_dataset, extract_final_answer, normalize_answer
 
-# Hyperparameter for CWP calculation
-ALPHA = 0.2
+# Threshold for binary entropy classification (in nats)
+ENTROPY_THRESHOLD = 1.385
 
 
-def calculate_cwp(completions: List[str], ground_truth: str) -> float:
+def calculate_entropy(completions: List[str]) -> float:
     """
-    Calculate the Correctness-Weighted Probability (CWP) metric.
-    CWP = p(1-p) + alpha * p
-    Where:
-    - p is the proportion of correct answers
-    - alpha is a hyperparameter
+    Calculate the entropy of the distribution of final answers in nats.
     
-    A high CWP balances correctness with uncertainty/variance in answers.
+    Args:
+        completions: List of completion strings
+    
+    Returns:
+        Entropy in nats (natural logarithm base)
     """
     if not completions:
         return 0.0
     
-    normalized_ground_truth = normalize_answer(ground_truth)
-    
-    # Count correct answers
-    correct_count = 0
-    
+    # Extract and normalize final answers
+    answers = []
     for completion in completions:
         extracted = extract_final_answer(completion)
         if extracted:
-            normalized_extracted = normalize_answer(extracted)
-            if normalized_extracted == normalized_ground_truth:
-                correct_count += 1
+            normalized = normalize_answer(extracted)
+            answers.append(normalized)
     
-    total_answers = len(completions)
-    
-    # If no answers, return 0
-    if total_answers == 0:
+    # If no valid answers extracted, return 0
+    if not answers:
         return 0.0
     
-    # Calculate correctness rate
-    p = correct_count / total_answers
+    # Count occurrences of each unique answer
+    answer_counts = Counter(answers)
+    total_answers = len(answers)
     
-    # Calculate CWP: p(1-p) + alpha * p
-    cwp = p * (1 - p) + ALPHA * p
+    # Calculate entropy in nats (using natural logarithm)
+    entropy = 0.0
+    for count in answer_counts.values():
+        probability = count / total_answers
+        if probability > 0:
+            entropy -= probability * math.log(probability)
     
-    return cwp
+    return entropy
 
 
 def format_dataset_item(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -87,14 +86,14 @@ def format_dataset_item(item: Dict[str, Any]) -> Dict[str, Any]:
             cut_steps = cut_cot.split("\n\n")
             step_index = len(cut_steps) - 1  # Index of the last step in this cut
             
-            # Calculate CWP of completion final answers
-            cwp_score = calculate_cwp(completions, solution)
+            # Calculate entropy of completion final answers
+            entropy_score = calculate_entropy(completions)
             
-            # Store the CWP for this step (use maximum if multiple samples for same step)
+            # Store the entropy for this step (use maximum if multiple samples for same step)
             if step_index not in step_variances:
-                step_variances[step_index] = cwp_score
+                step_variances[step_index] = entropy_score
             else:
-                step_variances[step_index] = max(step_variances[step_index], cwp_score)
+                step_variances[step_index] = max(step_variances[step_index], entropy_score)
     
     # Create variance values list matching the number of steps
     variance_values = []
@@ -104,7 +103,7 @@ def format_dataset_item(item: Dict[str, Any]) -> Dict[str, Any]:
     formatted_item = {
         "prompt": question.strip(),
         "completions": cot_steps,  # List of reasoning steps
-        "variance_values": variance_values  # List of raw CWP values for each step
+        "variance_values": variance_values  # List of raw entropy values for each step
     }
     
     return formatted_item
@@ -113,7 +112,7 @@ def format_dataset_item(item: Dict[str, Any]) -> Dict[str, Any]:
 def convert_dataset(input_file: str) -> List[Dict[str, Any]]:
     """
     Convert the entire dataset from completer format to process-reward format.
-    Normalizes CWP values to [0, 1] range across the entire dataset.
+    Normalizes entropy values to [0, 1] range across the entire dataset.
     
     Args:
         input_file: Path to the input JSONL file
@@ -125,7 +124,7 @@ def convert_dataset(input_file: str) -> List[Dict[str, Any]]:
         raise ValueError(f"Could not load data from {input_file}")
     
     print(f"Loaded {len(data)} items from the dataset")
-    print("Using CWP-based evaluation with continuous values")
+    print("Using entropy-based evaluation with continuous values")
     
     # First pass: convert all items and collect all variance values
     all_formatted_items = []
@@ -142,7 +141,7 @@ def convert_dataset(input_file: str) -> List[Dict[str, Any]]:
         max_variance = max(all_variance_values)
         variance_range = max_variance - min_variance
         
-        print(f"CWP statistics before scaling: min={min_variance:.4f}, max={max_variance:.4f}, range={variance_range:.4f}")
+        print(f"Entropy statistics before scaling: min={min_variance:.4f}, max={max_variance:.4f}, range={variance_range:.4f}")
         
         # Min-max scale variance values to [0, 1] range
         for item in all_formatted_items:
@@ -152,21 +151,57 @@ def convert_dataset(input_file: str) -> List[Dict[str, Any]]:
             else:
                 # All values are identical, set to 0.5 (middle of [0, 1])
                 item["labels"] = [0.5] * len(item["variance_values"])
+            # Keep raw entropy values for potential binary conversion
+            item["raw_entropy"] = item["variance_values"][:]
             del item["variance_values"]  # Remove the temporary field
         
         # Verify scaling worked correctly
         all_scaled_values = [label for item in all_formatted_items for label in item["labels"]]
         if all_scaled_values:
-            print(f"CWP statistics after min-max scaling: min={min(all_scaled_values):.4f}, max={max(all_scaled_values):.4f}")
+            print(f"Entropy statistics after min-max scaling: min={min(all_scaled_values):.4f}, max={max(all_scaled_values):.4f}")
     else:
         print("Warning: No variance values found in the dataset")
         for item in all_formatted_items:
             item["labels"] = [0.0] * len(item.get("variance_values", []))
+            item["raw_entropy"] = [0.0] * len(item.get("variance_values", []))
             if "variance_values" in item:
                 del item["variance_values"]
     
-    print(f"Converted to {len(all_formatted_items)} formatted items with normalized CWP labels")
+    print(f"Converted to {len(all_formatted_items)} formatted items with normalized entropy labels")
     return all_formatted_items
+
+
+def create_binary_dataset(data: List[Dict[str, Any]], threshold: float = ENTROPY_THRESHOLD) -> List[Dict[str, Any]]:
+    """
+    Create a binary version of the dataset using entropy threshold.
+    
+    Args:
+        data: The original dataset with raw entropy values
+        threshold: Entropy threshold in nats for binary classification
+    
+    Returns:
+        Dataset with binary labels (True/False) based on entropy threshold
+    """
+    binary_data = []
+    
+    for item in data:
+        binary_item = {
+            "prompt": item["prompt"],
+            "completions": item["completions"],
+            "labels": [entropy >= threshold for entropy in item["raw_entropy"]]
+        }
+        binary_data.append(binary_item)
+    
+    # Print statistics
+    all_binary_labels = [label for item in binary_data for label in item["labels"]]
+    true_count = sum(all_binary_labels)
+    total_count = len(all_binary_labels)
+    
+    print(f"Binary dataset statistics (threshold={threshold:.2f} nats):")
+    print(f"  - True labels: {true_count}/{total_count} ({true_count/total_count*100:.1f}%)")
+    print(f"  - False labels: {total_count-true_count}/{total_count} ({(total_count-true_count)/total_count*100:.1f}%)")
+    
+    return binary_data
 
 
 def remove_outliers_by_steps(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -179,7 +214,8 @@ def remove_outliers_by_steps(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 
     print("\n--- Removing Outliers based on Step Count ---")
     
-    step_lengths = [len(item['labels']) for item in data]
+    # Use completions length since that's the actual number of reasoning steps
+    step_lengths = [len(item['completions']) for item in data]
     
     if not step_lengths:
         print("No items with labels to process for outlier removal.")
@@ -196,7 +232,7 @@ def remove_outliers_by_steps(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     print(f"  - Upper bound for outliers (Q3 + 1.5*IQR): {upper_bound:.2f} steps")
     
     original_count = len(data)
-    filtered_data = [item for item in data if len(item['labels']) <= upper_bound]
+    filtered_data = [item for item in data if len(item['completions']) <= upper_bound]
     removed_count = original_count - len(filtered_data)
     
     if removed_count > 0:
@@ -316,7 +352,7 @@ if __name__ == "__main__":
     
     # Step 1: Convert dataset format with CWP-based continuous labels
     print("\n--- Step 1: Converting Dataset Format ---")
-    formatted_data = convert_dataset("data/merged_math_completions.jsonl")
+    formatted_data = convert_dataset("data/merged/merged_math_completions.jsonl")
     
     # Step 2: Remove outliers with excessively long reasoning chains
     cleaned_data = remove_outliers_by_steps(formatted_data)
@@ -338,11 +374,20 @@ if __name__ == "__main__":
     print("\nWaiting before saving datasets...")
     time.sleep(2)
     
-    # Step 5: Save the datasets
-    print(f"\n--- Step 5: Saving Datasets ---")
-    save_dataset(train_data, f"data/math_cwp_{ALPHA}_train.jsonl")
-    save_dataset(test_data, f"data/math_cwp_{ALPHA}_test.jsonl")
+    # Step 5: Create binary datasets
+    print(f"\n--- Step 5: Creating Binary Datasets ---")
+    train_binary = create_binary_dataset(train_data, threshold=ENTROPY_THRESHOLD)
+    test_binary = create_binary_dataset(test_data, threshold=ENTROPY_THRESHOLD)
+    
+    # Step 6: Save the datasets
+    print(f"\n--- Step 6: Saving Datasets ---")
+    save_dataset(train_data, f"data/merged/math_entropy_train.jsonl")
+    save_dataset(test_data, f"data/merged/math_entropy_test.jsonl")
+    save_dataset(train_binary, f"data/merged/math_entropy_train_binary.jsonl")
+    save_dataset(test_binary, f"data/merged/math_entropy_test_binary.jsonl")
 
-    print(f"Training set saved to: data/math_cwp_{ALPHA}_train.jsonl")
-    print(f"Test set saved to: data/math_cwp_{ALPHA}_test.jsonl")
+    print(f"Training set saved to: data/merged/math_entropy_train.jsonl")
+    print(f"Test set saved to: data/merged/math_entropy_test.jsonl")
+    print(f"Binary training set saved to: data/merged/math_entropy_train_binary.jsonl")
+    print(f"Binary test set saved to: data/merged/math_entropy_test_binary.jsonl")
     print("\nPipeline complete! ✅")

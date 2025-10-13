@@ -35,12 +35,12 @@ model.resize_token_embeddings(len(tokenizer))
 # Load the training and testing datasets as specified in the YAML
 train_dataset = load_dataset(
     "jacopo-minniti/MATH-PUM-qwen2.5-1.5B",
-    name="cwp_binary",
+    name="half_entropy",
     split="train",
 )
 test_dataset = load_dataset(
     "jacopo-minniti/MATH-PUM-qwen2.5-1.5B",
-    name="cwp_binary",
+    name="half_entropy",
     split="test",
 )
 
@@ -91,13 +91,13 @@ training_args = PRMConfig(
     group_by_length=False,
 
     # --- Hub Upload ---
-    push_to_hub=True,
-    hub_model_id="jacopo-minniti/Qwen2.5-Math-1.5B-PUM-cwp_binary",
-    hub_strategy="end",
+    push_to_hub=False,
+    # hub_model_id="jacopo-minniti/Qwen2.5-Math-1.5B-PUM-cwp_binary",
+    # hub_strategy="end",
 
     # --- W&B Reporting ---
     report_to="wandb",
-    run_name="Math-Qwen2.5-1.5B-cwp", # Corresponds to `wandb_name`
+    run_name="Math-Qwen2.5-1.5B-entropy", # Corresponds to `wandb_name`
 )
 
 
