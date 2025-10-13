@@ -156,7 +156,8 @@ class SoftClassificationPRMModel(PreTrainedModel):
                 else:
                     raise ValueError(f"Unsupported loss type: {self.loss_type}")
             else:
-                loss = torch.tensor(0.0, device=logits.device, requires_grad=True)
+                # Return a zero loss that is connected to the graph to avoid issues with gradient accumulation
+                loss = (logits.sum() * 0.0)
         
         final_outputs = torch.sigmoid(logits)
         
