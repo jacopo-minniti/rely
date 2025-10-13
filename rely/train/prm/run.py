@@ -58,7 +58,7 @@ os.environ["WANDB_PROJECT"] = "pum"
 # This would require a custom data collator for similar functionality.
 training_args = PRMConfig(
     # --- File Paths & Data Handling ---
-    output_dir="./outputs/out",
+    output_dir="models",
     remove_unused_columns=False,
     max_length=4096,  # Corresponds to `sequence_len`
     step_separator="<extra_0>",

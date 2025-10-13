@@ -1,4 +1,4 @@
-base_model: Qwen/Qwen2.5-Math-1.5B-Instruct
+base_model: Qwen/Qwen2.5-Math-7B-Instruct
 model_type: AutoModelForTokenClassification
 num_labels: 2
 tokenizer_type: AutoTokenizer
@@ -11,7 +11,7 @@ process_reward_model: true
 
 datasets:
   - path: jacopo-minniti/MATH-PUM-qwen2.5-1.5B 
-    name: cwp_binary
+    name: half_entropy
     type: stepwise_supervised
     step_separator: "<extra_0>"
     train_on_last_step_only: false
@@ -19,7 +19,7 @@ datasets:
 
 test_datasets:
   - path: jacopo-minniti/MATH-PUM-qwen2.5-1.5B
-    name: cwp_binary
+    name: half_entropy
     type: stepwise_supervised
     step_separator: "<extra_0>"
     train_on_last_step_only: false
@@ -29,7 +29,7 @@ special_tokens:
   additional_special_tokens:
     - "<extra_0>"
 
-output_dir: ./outputs/out
+output_dir: models/entropy-7B
 remove_unused_columns: false
 
 sequence_len: 4096
@@ -40,13 +40,13 @@ pad_to_sequence_len: true
 wandb_project: pum
 wandb_entity:
 wandb_watch:
-wandb_name: Math-Qwen2.5-1.5B-cwp
+wandb_name: Math-Qwen2.5-7B-entropy
 wandb_log_model:
 
 
 gradient_accumulation_steps: 4
-micro_batch_size: 8
-eval_batch_size: 8
+micro_batch_size: 4
+eval_batch_size: 4
 num_epochs: 3
 optimizer: adamw_torch_fused
 lr_scheduler: cosine
@@ -76,10 +76,10 @@ saves_per_epoch: 1
 evals_per_epoch: 1
 
 debug:
-# deepspeed: /home/jacopo04/rely/deepspeed_configs/zero1.json
+deepspeed: configs/deepspeed_config.json
 weight_decay: 0.1
 fsdp:
 fsdp_config:
 
-hub_model_id: jacopo-minniti/Qwen2.5-Math-1.5B-PUM-cwp_binary
+hub_model_id: jacopo-minniti/Qwen2.5-Math-1.5B-PUM-entropy_binary
 hub_strategy: "end"

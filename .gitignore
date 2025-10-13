@@ -16,6 +16,7 @@ uats_*/
 sbs_results_*/
 rely.egg-info
 results/
+models/
 
 *.pdf
 *.jsonl
