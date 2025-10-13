@@ -1,4 +1,4 @@
-base_model: Qwen/Qwen2.5-Math-7B
+base_model: Qwen/Qwen2.5-Math-1.5B-Instruct
 model_type: AutoModelForTokenClassification
 num_labels: 2
 tokenizer_type: AutoTokenizer
@@ -10,16 +10,16 @@ strict: false
 process_reward_model: true
 
 datasets:
-  - path: jacopo-minniti/MATH-PUM-qwen2.5-1.5B # axolotl-ai-co/prm800k_phase_1
-    name: cwe_binary
+  - path: jacopo-minniti/MATH-PUM-qwen2.5-1.5B 
+    name: cwp_binary
     type: stepwise_supervised
     step_separator: "<extra_0>"
     train_on_last_step_only: false
     split: train
 
 test_datasets:
-  - path: jacopo-minniti/MATH-PUM-qwen2.5-1.5B # axolotl-ai-co/prm800k_phase_1
-    name: cwe_binary
+  - path: jacopo-minniti/MATH-PUM-qwen2.5-1.5B
+    name: cwp_binary
     type: stepwise_supervised
     step_separator: "<extra_0>"
     train_on_last_step_only: false
@@ -28,8 +28,6 @@ test_datasets:
 special_tokens:
   additional_special_tokens:
     - "<extra_0>"
-    # - "<|im_start|>"
-    # - "<|im_end|>"
 
 output_dir: ./outputs/out
 remove_unused_columns: false
@@ -42,7 +40,7 @@ pad_to_sequence_len: true
 wandb_project: pum
 wandb_entity:
 wandb_watch:
-wandb_name: Math-Qwen2.5-1.5B-half_entropy
+wandb_name: Math-Qwen2.5-1.5B-cwp
 wandb_log_model:
 
 
@@ -78,10 +76,10 @@ saves_per_epoch: 1
 evals_per_epoch: 1
 
 debug:
-deepspeed: /home/jacopo04/rely/deepspeed_configs/zero1.json
+# deepspeed: /home/jacopo04/rely/deepspeed_configs/zero1.json
 weight_decay: 0.1
 fsdp:
 fsdp_config:
 
-hub_model_id: jacopo-minniti/Qwen2.5-Math-7B-PUM-half_entropy-v2
+hub_model_id: jacopo-minniti/Qwen2.5-Math-1.5B-PUM-cwp_binary
 hub_strategy: "end"
