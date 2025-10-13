@@ -33,7 +33,7 @@ if is_wandb_available():
 
 def compute_soft_classification_metrics(eval_pred: EvalPrediction):
     """
-    Computes metrics for soft classification tasks (MSE, R2, Accuracy, AUROC, F1).
+    Computes R2 score for soft classification tasks.
     Filters out predictions where the label is -100.
     """
     predictions, labels = eval_pred
@@ -41,26 +41,9 @@ def compute_soft_classification_metrics(eval_pred: EvalPrediction):
     active_predictions = predictions[labels != -100]
     active_labels = labels[labels != -100]
     
-    mse = mean_squared_error(active_labels, active_predictions)
     r2 = r2_score(active_labels, active_predictions)
     
-    # For classification metrics, we need to binarize the labels and predictions.
-    # Let's use a 0.5 threshold.
-    pred_class = (active_predictions > 0.5).astype(int)
-    label_class = (active_labels > 0.5).astype(int)
-    
-    accuracy = accuracy_score(label_class, pred_class)
-    
-    # AUROC can be calculated with soft predictions (probabilities)
-    try:
-        auroc = roc_auc_score(label_class, active_predictions)
-    except ValueError:
-        # This can happen if only one class is present in the labels.
-        auroc = 0.5
-
-    f1 = f1_score(label_class, pred_class, zero_division=0)
-    
-    return {"mse": mse, "r2": r2, "accuracy": accuracy, "auroc": auroc, "f1": f1}
+    return {"r2": r2}
 
 
 class SoftClassificationPRMTrainer(Trainer):
