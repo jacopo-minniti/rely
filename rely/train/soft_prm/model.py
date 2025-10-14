@@ -161,9 +161,8 @@ class SoftClassificationPRMModel(PreTrainedModel):
                     loss = loss_fct(filtered_logits, filtered_labels)
                 elif self.loss_type == "mse":
                     loss_fct = nn.MSELoss()
-                    # For MSE loss, we need to apply sigmoid to logits first to get probabilities
-                    filtered_probs = torch.sigmoid(filtered_logits)
-                    loss = loss_fct(filtered_probs, filtered_labels)
+                    # For MSE loss, we directly compare logits with labels
+                    loss = loss_fct(filtered_logits, filtered_labels)
                 else:
                     raise ValueError(f"Unsupported loss type: {self.loss_type}")
             else:
