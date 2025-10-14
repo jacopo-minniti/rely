@@ -1,4 +1,4 @@
-base_model: Qwen/Qwen2.5-Math-7B-Instruct
+base_model: Qwen/Qwen2.5-Math-1.5B-Instruct
 model_type: AutoModelForTokenClassification
 num_labels: 2
 tokenizer_type: AutoTokenizer
@@ -11,7 +11,7 @@ process_reward_model: true
 
 datasets:
   - path: jacopo-minniti/MATH-PUM-qwen2.5-1.5B 
-    name: half_entropy
+    name: entropy_binary
     type: stepwise_supervised
     step_separator: "<extra_0>"
     train_on_last_step_only: false
@@ -19,7 +19,7 @@ datasets:
 
 test_datasets:
   - path: jacopo-minniti/MATH-PUM-qwen2.5-1.5B
-    name: half_entropy
+    name: entropy_binary
     type: stepwise_supervised
     step_separator: "<extra_0>"
     train_on_last_step_only: false
@@ -29,7 +29,7 @@ special_tokens:
   additional_special_tokens:
     - "<extra_0>"
 
-output_dir: models/entropy-7B
+output_dir: models/entropy-1.5B
 remove_unused_columns: false
 
 sequence_len: 4096
@@ -40,7 +40,7 @@ pad_to_sequence_len: true
 wandb_project: pum
 wandb_entity:
 wandb_watch:
-wandb_name: Math-Qwen2.5-7B-entropy
+wandb_name: Qwen2.5-1.5B-entropy-binary
 wandb_log_model:
 
 
