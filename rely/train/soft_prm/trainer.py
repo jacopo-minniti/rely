@@ -1,5 +1,6 @@
 import os
 import textwrap
+from functools import partial
 from itertools import chain
 from pathlib import Path
 from typing import Callable, Optional, Union
@@ -31,7 +32,7 @@ if is_wandb_available():
     import wandb
 
 
-def compute_soft_classification_metrics(eval_pred: EvalPrediction):
+def compute_soft_classification_metrics(eval_pred: EvalPrediction, mask_zeros: bool = False):
     """
     Computes R2 score for soft classification tasks.
     Filters out predictions where the label is -100.
@@ -40,6 +41,14 @@ def compute_soft_classification_metrics(eval_pred: EvalPrediction):
     # Filter out ignored indices
     active_predictions = predictions[labels != -100]
     active_labels = labels[labels != -100]
+
+    if mask_zeros:
+        mask = active_labels >= 0.001
+        active_predictions = active_predictions[mask]
+        active_labels = active_labels[mask]
+
+    if len(active_labels) == 0:
+        return {"r2": 0.0}
     
     r2 = r2_score(active_labels, active_predictions)
     
@@ -113,7 +122,7 @@ class SoftClassificationPRMTrainer(Trainer):
             disable_dropout_in_model(model)
         
         if compute_metrics is None:
-            compute_metrics = compute_soft_classification_metrics
+            compute_metrics = partial(compute_soft_classification_metrics, mask_zeros=mask_zeros)
 
         if data_collator is None:
             if tokenizer is None:
