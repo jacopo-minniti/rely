@@ -7,15 +7,15 @@ from transformers.modeling_outputs import TokenClassifierOutput
 from typing import Optional, Union
 
 
-class SoftClassificationPRMModel(PreTrainedModel):
+class RegressionPRMModel(PreTrainedModel):
     config_class = AutoConfig
     _supports_sdpa = True
     supports_gradient_checkpointing = True
     _no_split_modules = ["Qwen2DecoderLayer"]
     """
-    A soft classification model that wraps a base transformer model with a linear head.
+    A regression model that wraps a base transformer model with a linear head.
     
-    This model outputs continuous values between 0 and 1 for each token, suitable for 
+    This model outputs continuous values for each token, suitable for 
     Process Reward Model (PRM) tasks with normalized scores.
     """
     
@@ -31,11 +31,9 @@ class SoftClassificationPRMModel(PreTrainedModel):
             
         self.hidden_size = self.transformer.config.hidden_size
             
-        self.classification_head = nn.Linear(self.hidden_size, 1)
-        self.classification_head = self.classification_head.float()
+        self.regression_head = nn.Linear(self.hidden_size, 1)
+        self.regression_head = self.regression_head.float()
         
-        # Default loss type
-        self.loss_type = "bce"
         self.mask_zeros = False
         
         self.post_init()
@@ -43,7 +41,7 @@ class SoftClassificationPRMModel(PreTrainedModel):
     @classmethod
     def from_base_model(cls, base_model_name: str, **kwargs):
         """
-        Load a SoftClassificationPRMModel from a pretrained base model for initial training.
+        Load a RegressionPRMModel from a pretrained base model for initial training.
         """
         config = AutoConfig.from_pretrained(base_model_name, trust_remote_code=True)
         
@@ -58,20 +56,11 @@ class SoftClassificationPRMModel(PreTrainedModel):
             **kwargs
         )
         
-        # Initialize with default loss type
-        model.loss_type = "bce"
-        
         return model
     
     def resize_token_embeddings(self, new_num_tokens: int):
         if self.transformer:
             self.transformer.resize_token_embeddings(new_num_tokens)
-    
-    def set_loss_type(self, loss_type: str):
-        """Set the loss type for training."""
-        if loss_type not in ["bce", "mse"]:
-            raise ValueError(f"loss_type must be either 'bce' or 'mse', got '{loss_type}'")
-        self.loss_type = loss_type
     
     def set_mask_zeros(self, mask_zeros: bool):
         """Set whether to mask labels with values close to zero."""
@@ -106,7 +95,7 @@ class SoftClassificationPRMModel(PreTrainedModel):
         **kwargs
     ) -> TokenClassifierOutput:
         """
-        Forward pass of the soft classification model.
+        Forward pass of the regression model.
         """
         outputs = self.transformer(
             input_ids=input_ids,
@@ -116,7 +105,7 @@ class SoftClassificationPRMModel(PreTrainedModel):
         
         hidden_states = outputs.last_hidden_state
         
-        logits = self.classification_head(hidden_states)
+        logits = self.regression_head(hidden_states)
         logits = logits.squeeze(-1)
         
         if logits.dtype != torch.float32:
@@ -145,27 +134,15 @@ class SoftClassificationPRMModel(PreTrainedModel):
                 filtered_logits = active_logits[loss_mask]
                 filtered_labels = active_labels[loss_mask]
                 
-                if self.loss_type == "bce":
-                    loss_fct = nn.BCEWithLogitsLoss()
-                    loss = loss_fct(filtered_logits, filtered_labels)
-                elif self.loss_type == "mse":
-                    loss_fct = nn.MSELoss()
-                    # For MSE loss, we directly compare logits with labels
-                    loss = loss_fct(filtered_logits, filtered_labels)
-                else:
-                    raise ValueError(f"Unsupported loss type: {self.loss_type}")
+                loss_fct = nn.MSELoss()
+                loss = loss_fct(filtered_logits, filtered_labels)
             else:
                 # Return a zero loss that is connected to the graph to avoid issues with gradient accumulation
                 loss = (logits.sum() * 0.0)
         
-        if self.loss_type == "mse":
-            final_outputs = logits
-        else:
-            final_outputs = torch.sigmoid(logits)
-        
         return TokenClassifierOutput(
             loss=loss,
-            logits=final_outputs,
+            logits=logits,
             hidden_states=outputs.hidden_states if hasattr(outputs, 'hidden_states') else None,
             attentions=outputs.attentions if hasattr(outputs, 'attentions') else None,
         )

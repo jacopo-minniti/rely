@@ -3,8 +3,8 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 from accelerate import Accelerator
 from accelerate.utils import DummyOptim, DummyScheduler
-from trainer import SoftClassificationPRMTrainer
-from model import SoftClassificationPRMModel
+from trainer import RegressionPRMTrainer
+from model import RegressionPRMModel
 from trl import PRMConfig
 import random
 
@@ -25,11 +25,10 @@ def main():
     
     # Load model - DeepSpeed will handle initialization
     print("Loading model...")
-    model = SoftClassificationPRMModel.from_base_model(model_name, torch_dtype=torch.bfloat16)
+    model = RegressionPRMModel.from_base_model(model_name, torch_dtype=torch.bfloat16)
     
     # Resize token embeddings if needed
-    if step_separator_token not in tokenizer.get_vocab():
-        model.resize_token_embeddings(len(tokenizer))
+    model.resize_token_embeddings(len(tokenizer))
 
     # --- 2. Load Dataset ---
     print("Loading dataset...")
@@ -77,13 +76,12 @@ def main():
 
     # --- 4. Initialize Trainer ---
     print("Initializing Trainer...")
-    trainer = SoftClassificationPRMTrainer(
+    trainer = RegressionPRMTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
-        loss="mse",  # Can be "bce" (default) or "mse"
         mask_zeros=True,
     )
 

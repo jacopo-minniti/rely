@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 from accelerate import PartialState
 from datasets import Dataset, features
-from sklearn.metrics import mean_squared_error, r2_score, accuracy_score, roc_auc_score, f1_score
+from sklearn.metrics import mean_squared_error, r2_score
 from transformers import (
     BaseImageProcessor,
     DataCollator,
@@ -32,9 +32,9 @@ if is_wandb_available():
     import wandb
 
 
-def compute_soft_classification_metrics(eval_pred: EvalPrediction, mask_zeros: bool = False):
+def compute_regression_metrics(eval_pred: EvalPrediction, mask_zeros: bool = False):
     """
-    Computes R2 score for soft classification tasks.
+    Computes R2 and MSE scores for regression tasks.
     Filters out predictions where the label is -100.
     """
     predictions, labels = eval_pred
@@ -47,24 +47,35 @@ def compute_soft_classification_metrics(eval_pred: EvalPrediction, mask_zeros: b
         active_predictions = active_predictions[mask]
         active_labels = active_labels[mask]
 
-    if len(active_labels) == 0:
-        return {"r2": 0.0}
-    
+    active_labels_count = len(active_labels)
+    if active_labels_count == 0:
+        return {"r2": 0.0, "mse": 0.0, "active_labels_count": 0}
+
+    # --- Debugging Prints ---
+    print("\n--- METRICS DEBUGGING ---")
+    print(f"Sample labels: {active_labels[:10]}")
+    print(f"Sample predictions: {active_predictions[:10]}")
+    print(f"Label mean: {np.mean(active_labels):.4f}, std: {np.std(active_labels):.4f}")
+    print(f"Prediction mean: {np.mean(active_predictions):.4f}, std: {np.std(active_predictions):.4f}")
+    print("-------------------------\\n")
+    # --- End Debugging Prints ---
+
     r2 = r2_score(active_labels, active_predictions)
-    
-    return {"r2": r2}
+    mse = mean_squared_error(active_labels, active_predictions)
+
+    return {"r2": r2, "mse": mse, "active_labels_count": active_labels_count}
 
 
-class SoftClassificationPRMTrainer(Trainer):
+class RegressionPRMTrainer(Trainer):
     """
-    Initialize SoftClassificationPRMTrainer.
+    Initialize RegressionPRMTrainer.
 
-    This trainer is adapted for PRM-style (Process Reward Model) training for **soft classification** tasks.
-    It expects continuous, real-valued labels between 0 and 1.
+    This trainer is adapted for PRM-style (Process Reward Model) training for regression tasks.
+    It expects continuous, real-valued labels.
 
     Args:
         model (`transformers.PreTrainedModel`):
-            The model to train, preferably a `SoftClassificationPRMModel` or similar model.
+            The model to train, preferably a `RegressionPRMModel` or similar model.
         args (`PRMConfig`):
             The arguments to use for training.
         data_collator (`transformers.DataCollator`):
@@ -78,23 +89,19 @@ class SoftClassificationPRMTrainer(Trainer):
             Tokenizer used to process the data.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training.
-        compute_metrics (`Callable[[transformers.EvalPrediction], dict]`, *optional*, defaults to `compute_soft_classification_metrics`):
-            The metrics to use for evaluation. Defaults to MSE, R2, Accuracy, AUROC, and F1 score for soft classification.
+        compute_metrics (`Callable[[transformers.EvalPrediction], dict]`, *optional*, defaults to `compute_regression_metrics`):
+            The metrics to use for evaluation. Defaults to MSE and R2 for regression.
         callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
-        loss (`str`, *optional*, defaults to `"bce"`):
-            The loss function to use. Can be either "bce" for Binary Cross-Entropy or "mse" for Mean Squared Error.
-        loss (`str`, *optional*, defaults to `"bce"`):
-            The loss function to use. Can be either "bce" for Binary Cross-Entropy or "mse" for Mean Squared Error.
         mask_zeros (`bool`, *optional*, defaults to `False`):
-            Whether to mask labels with values close to zero (< 0.01) during loss calculation.
+            Whether to mask labels with values close to zero (< 0.001) during loss calculation.
     """
 
-    _tag_names = ["trl", "prm", "soft-classification"]
+    _tag_names = ["trl", "prm", "regression"]
 
     def __init__(
         self,
@@ -114,7 +121,6 @@ class SoftClassificationPRMTrainer(Trainer):
             None,
         ),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        loss: str = "bce",
         mask_zeros: bool = False,
     ):
 
@@ -122,7 +128,7 @@ class SoftClassificationPRMTrainer(Trainer):
             disable_dropout_in_model(model)
         
         if compute_metrics is None:
-            compute_metrics = partial(compute_soft_classification_metrics, mask_zeros=mask_zeros)
+            compute_metrics = partial(compute_regression_metrics, mask_zeros=mask_zeros)
 
         if data_collator is None:
             if tokenizer is None:
@@ -177,29 +183,19 @@ class SoftClassificationPRMTrainer(Trainer):
                         ),
                     )
 
-        # Validate loss parameter
-        if loss not in ["bce", "mse"]:
-            raise ValueError(f"loss must be either 'bce' or 'mse', got '{loss}'")
-        
-        self.loss_type = loss
-        
         super().__init__(
             model=model,
             args=args,
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            processing_class=tokenizer,  # Use processing_class instead of tokenizer
+            tokenizer=tokenizer,
             model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
-
-        # Set the loss type on the model if it supports it
-        if hasattr(self.model, "set_loss_type"):
-            self.model.set_loss_type(self.loss_type)
 
         # Set the mask_zeros on the model if it supports it
         if hasattr(self.model, "set_mask_zeros"):
