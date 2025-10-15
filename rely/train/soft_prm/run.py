@@ -35,12 +35,12 @@ def main():
     print("Loading dataset...")
     train_dataset = load_dataset(
         "jacopo-minniti/MATH-PUM-qwen2.5-1.5B", 
-        name="cwp", 
+        name="variance", 
         split="train"
     )
     eval_dataset = load_dataset(
         "jacopo-minniti/MATH-PUM-qwen2.5-1.5B",
-        name="cwp",
+        name="variance",
         split="test"
     )
     
@@ -72,12 +72,12 @@ def main():
     # --- 3. Configure Training Arguments ---
     print("Configuring training arguments...")
     training_args = PRMConfig(
-        output_dir="./.cache/cwp",
-        hub_model_id="jacopo-minniti/Qwen2.5-Math-1.5B-PUM-cwp",
+        output_dir="./.cache/variance-regression-1.5B",
+        hub_model_id="jacopo-minniti/Qwen2.5-Math-1.5B-PUM-variance",
         max_length=4096,
         train_on_last_step_only=False,
         step_separator=step_separator_token,
-        num_train_epochs=3, 
+        num_train_epochs=5, 
         learning_rate=1e-4,
         lr_scheduler_type="cosine",
         warmup_ratio=0.15,
@@ -88,7 +88,7 @@ def main():
         gradient_accumulation_steps=4,
         gradient_checkpointing=False,    # Enable gradient checkpointing for memory savings
         bf16=True,
-        logging_steps=10,  
+        logging_steps=5,  
         save_strategy="epoch",
         eval_strategy="epoch",
         push_to_hub=False,
