@@ -43,31 +43,6 @@ def main():
         name="variance",
         split="test"
     )
-    
-    print(f"Original train dataset size: {len(train_dataset)}")
-    print("Downsampling all-0.0 label trajectories...")
-
-    # Split into all-0.0 and rest
-    all_zero_indices = []
-    rest_indices = []
-    for i, example in enumerate(train_dataset):
-        labels = example['labels']
-        if sum(labels) < 0.01:
-            all_zero_indices.append(i)
-        else:
-            rest_indices.append(i)
-
-    # Downsample all-0.0 to match the number of rest (or use all if fewer available)
-    random.seed(42)
-    sample_size = min(len(all_zero_indices), len(rest_indices))
-    downsampled_zero_indices = random.sample(all_zero_indices, sample_size)
-
-    # Combine and sort indices for reproducibility
-    final_indices = sorted(downsampled_zero_indices + rest_indices)
-    train_dataset = train_dataset.select(final_indices)
-    
-    print(f"Filtered train dataset size: {len(train_dataset)}")
-    print(f"Eval dataset size: {len(eval_dataset)}")
 
     # --- 3. Configure Training Arguments ---
     print("Configuring training arguments...")
@@ -77,7 +52,7 @@ def main():
         max_length=4096,
         train_on_last_step_only=False,
         step_separator=step_separator_token,
-        num_train_epochs=5, 
+        num_train_epochs=3, 
         learning_rate=1e-4,
         lr_scheduler_type="cosine",
         warmup_ratio=0.15,
