@@ -43,6 +43,9 @@ def compute_regression_metrics(eval_pred: EvalPrediction, mask_zeros: bool = Fal
     active_labels = labels[labels != -100]
 
     if mask_zeros:
+        print("\n--- PRE-MASK DEBUGGING ---")
+        print(f"Unique labels before masking: {np.unique(active_labels)}")
+        print("--------------------------\n")
         mask = active_labels >= 0.001
         active_predictions = active_predictions[mask]
         active_labels = active_labels[mask]
@@ -231,6 +234,11 @@ class RegressionPRMTrainer(Trainer):
             `dict[str, list]`:
                 Tokenized sequences with "input_ids" and "labels".
         """
+        if not hasattr(RegressionPRMTrainer.tokenize_row, "has_printed"):
+            print("\n--- TOKENIZER DEBUG ---")
+            print(f"Features for one sample: {features}")
+            RegressionPRMTrainer.tokenize_row.has_printed = True
+
         # Apply chat template to the prompt if tokenizer has one
         if hasattr(tokenizer, 'chat_template') and tokenizer.chat_template is not None:
             # Format prompt as a user message for instruct models
