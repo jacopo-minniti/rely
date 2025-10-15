@@ -45,9 +45,9 @@ wandb_log_model:
 
 
 gradient_accumulation_steps: 4
-micro_batch_size: 4
-eval_batch_size: 4
-num_epochs: 3
+micro_batch_size: 8
+eval_batch_size: 8
+num_epochs: 5
 optimizer: adamw_torch_fused
 lr_scheduler: cosine
 learning_rate: 5e-4
@@ -70,7 +70,7 @@ logging_steps: 5
 xformers_attention:
 # flash_attention: true
 
-warmup_ratio: 0.3
+warmup_ratio: 0.4
 save_strategy: "epoch"
 saves_per_epoch: 1
 evals_per_epoch: 1
