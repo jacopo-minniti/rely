@@ -158,7 +158,10 @@ class SoftClassificationPRMModel(PreTrainedModel):
                 # Return a zero loss that is connected to the graph to avoid issues with gradient accumulation
                 loss = (logits.sum() * 0.0)
         
-        final_outputs = torch.sigmoid(logits)
+        if self.loss_type == "mse":
+            final_outputs = logits
+        else:
+            final_outputs = torch.sigmoid(logits)
         
         return TokenClassifierOutput(
             loss=loss,
