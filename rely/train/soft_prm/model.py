@@ -127,17 +127,6 @@ class SoftClassificationPRMModel(PreTrainedModel):
             if labels.dtype != torch.float32:
                 labels = labels.float()
 
-            if self.mask_zeros:
-                # When mask_zeros is True, samples where all labels are effectively zero are ignored.
-                # A label is considered zero if it's < 0.001.
-                # We identify samples that have labels, but all of them are zero, and set their labels to -100.
-                non_zero_label_exists = torch.any((labels >= 0.001) & (attention_mask == 1), dim=1)
-                any_label_exists = torch.any((labels != -100.0) & (attention_mask == 1), dim=1)
-                samples_to_ignore = ~non_zero_label_exists & any_label_exists
-                
-                if samples_to_ignore.any():
-                    labels[samples_to_ignore] = -100.0
-            
             active_loss = attention_mask.view(-1) == 1
             active_logits = logits.view(-1)[active_loss]
             active_labels = labels.view(-1)[active_loss]
@@ -146,7 +135,7 @@ class SoftClassificationPRMModel(PreTrainedModel):
             loss_mask = active_labels != -100.0
             
             # If mask_zeros is enabled, also mask labels with values < 0.001.
-            # This is to prevent the model from being penalized for predicting small values for steps
+            # This prevents the model from being penalized for predicting small values for steps
             # that are effectively incorrect or have a score of 0. The 0.001 threshold is used
             # to account for floating-point inaccuracies.
             if self.mask_zeros:
