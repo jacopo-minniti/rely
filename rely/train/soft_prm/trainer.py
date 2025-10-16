@@ -225,13 +225,15 @@ class RegressionPRMTrainer(Trainer):
         """
         Tokenize a row of the dataset for regression.
 
+        This simplified version applies the chat template to the full conversation
+        and then aligns labels with separator tokens.
+
         Args:
             features (`dict[str, str]`):
                 Row of the dataset, should contain "prompt", "completions", and "labels".
-                Labels should be continuous float values.
             tokenizer (`PreTrainedTokenizerBase`):
                 Tokenizer used to process the data.
-            # ... (other args are the same)
+            # ... (other args)
 
         Returns:
             `dict[str, list]`:
@@ -242,60 +244,44 @@ class RegressionPRMTrainer(Trainer):
             print(f"Features for one sample: {features}")
             RegressionPRMTrainer.tokenize_row.has_printed = True
 
-        # Apply chat template to the prompt if tokenizer has one
-        if hasattr(tokenizer, 'chat_template') and tokenizer.chat_template is not None:
-            # Format prompt as a user message for instruct models
-            messages = [{"role": "user", "content": features["prompt"]}]
-            formatted_prompt = tokenizer.apply_chat_template(
-                messages, 
-                tokenize=False, 
-                add_generation_prompt=True
-            )
-            prompt_ids = tokenizer(formatted_prompt, add_special_tokens=False)["input_ids"]
-        else:
-            # Fallback to original behavior if no chat template
-            prompt_ids = tokenizer(features["prompt"], add_special_tokens=False)["input_ids"]
+        # Construct assistant response, adding separator after each step
+        assistant_response = "".join([comp + step_separator for comp in features["completions"]])
         
-        # Tokenize the completions
-        completions_ids = [
-            tokenizer(completion, add_special_tokens=False)["input_ids"] for completion in features["completions"]
+        # Format conversation using chat template
+        messages = [
+            {"role": "user", "content": features["prompt"]},
+            {"role": "assistant", "content": assistant_response},
         ]
+
+        # Tokenize the whole conversation
+        input_ids = tokenizer.apply_chat_template(
+            messages,
+            max_length=max_length,
+            truncation=True,
+            add_generation_prompt=False,
+        )
+
+        # Create labels, aligning them with the separator token
+        labels = [-100.0] * len(input_ids)
         
-        # MODIFIED: Cast labels to float instead of int
+        separator_token_id = tokenizer.convert_tokens_to_ids(step_separator)
+
+        separator_indices = [i for i, token_id in enumerate(input_ids) if token_id == separator_token_id]
+
+        original_labels = [float(label) for label in features["labels"]]
+
+        # The number of separators should match the number of labels.
+        # Truncation might cut some off.
+        num_steps = min(len(separator_indices), len(original_labels))
+
         if train_on_last_step_only and not is_eval:
-            labels = [-100.0] * (len(features["labels"]) - 1) + [float(features["labels"][-1])]
+            if num_steps > 0:
+                last_label_idx = separator_indices[num_steps - 1]
+                labels[last_label_idx] = original_labels[num_steps - 1]
         else:
-            labels = [float(label) for label in features["labels"]]
-
-        # Get the ID of the separator token and add it to the completions
-        separator_ids = tokenizer.encode(step_separator, add_special_tokens=False)
-        completions_ids = [completion + separator_ids for completion in completions_ids]
-
-        # Create the label
-        # Use -100.0 for float compatibility
-        labels = [[-100.0] * (len(completion) - 1) + [label] for completion, label in zip(completions_ids, labels)]
-
-        # Join the completions and labels steps
-        completion_ids = list(chain(*completions_ids))
-        labels = list(chain(*labels))
-
-        if tokenizer.bos_token_id is not None:
-            prompt_ids = [tokenizer.bos_token_id] + prompt_ids
-
-        # Truncate prompt and completion sequences
-        if max_prompt_length is not None:
-            prompt_ids = prompt_ids[-max_prompt_length:]
-        if max_completion_length is not None:
-            completion_ids = completion_ids[:max_completion_length]
-            labels = labels[:max_completion_length]
-
-        input_ids = prompt_ids + completion_ids
-        # Use -100.0 for float compatibility
-        labels = [-100.0] * len(prompt_ids) + labels
-
-        if max_length is not None:
-            input_ids = input_ids[:max_length]
-            labels = labels[:max_length]
+            for i in range(num_steps):
+                label_idx = separator_indices[i]
+                labels[label_idx] = original_labels[i]
 
         return {"input_ids": input_ids, "labels": labels}
 
