@@ -34,6 +34,7 @@ def main():
     print("Loading dataset...")
     train_dataset = load_dataset("jacopo-minniti/MATH-PUM-qwen2.5-1.5B", "variance", split="train")
     eval_dataset = load_dataset("jacopo-minniti/MATH-PUM-qwen2.5-1.5B", "variance", split="test")
+    print(f"Original data samples\n{eval_dataset[0]['labels']}\n{eval_dataset[1]['labels']}")
 
     # --- 3. Configure Training Arguments ---
     print("Configuring training arguments...")

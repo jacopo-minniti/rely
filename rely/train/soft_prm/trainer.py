@@ -200,6 +200,9 @@ class RegressionPRMTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
+        print("AFTER PREPROCESSING")
+        print(f"{eval_dataset[0]['labels']}\n{eval_dataset[1]['labels']}")
+
         # Set the mask_zeros on the model if it supports it
         if hasattr(self.model, "set_mask_zeros"):
             self.model.set_mask_zeros(mask_zeros)
@@ -338,15 +341,6 @@ class RegressionPRMTrainer(Trainer):
 
         tags.update(self._tag_names)
 
-        # docstyle-ignore
-        citation = textwrap.dedent('''
-        @article{uesato2022solving,
-            title        = {{Solving Math Word Problems With Process- and Outcome-Based Feedback}},
-            author       = {Uesato, Jonathan and Kushman, Nate and Kumar, Ramana and Song, Francis and Siegel, Noah and Wang, Lisa and Creswell, Antonia and Irving, Geoffrey and Higgins, Irina},
-            year         = 2022,
-            journal      = {arXiv preprint arXiv:2211.14275}
-        }''')
-
         model_card = generate_model_card(
             base_model=base_model,
             model_name=model_name,
@@ -355,8 +349,6 @@ class RegressionPRMTrainer(Trainer):
             tags=tags,
             wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             trainer_name="PRM",
-            trainer_citation=citation,
-            paper_title="Solving math word problems with process-and outcome-based feedback",
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
