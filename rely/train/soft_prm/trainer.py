@@ -24,6 +24,7 @@ from transformers import (
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
+from dataclasses import dataclass
 
 from trl import PRMConfig
 from trl.trainer.utils import disable_dropout_in_model, generate_model_card
@@ -55,6 +56,50 @@ def compute_regression_metrics(eval_pred: EvalPrediction, mask_zeros: bool = Fal
     mse = mean_squared_error(active_labels, active_predictions)
 
     return {"r2": r2, "mse": mse, "active_labels_count": active_labels_count}
+
+
+@dataclass
+class DataCollatorForRegression(DataCollatorForTokenClassification):
+    """
+    Data collator for regression tasks that corrects the label type.
+    Inherits from DataCollatorForTokenClassification but ensures labels are floats.
+    """
+    def torch_call(self, features: list[dict[str, Any]]) -> dict[str, Any]:
+        import torch
+
+        label_name = "label" if "label" in features[0].keys() else "labels"
+        labels = [feature[label_name] for feature in features] if label_name in features[0].keys() else None
+        batch = self.tokenizer.pad(
+            features,
+            padding=self.padding,
+            max_length=self.max_length,
+            pad_to_multiple_of=self.pad_to_multiple_of,
+            # Conversion to tensors will fail if we have labels as they are not of the same length yet.
+            return_tensors="pt" if labels is None else None,
+        )
+
+        if labels is None:
+            return batch
+
+        sequence_length = torch.tensor(batch["input_ids"]).shape[1]
+        padding_side = self.tokenizer.padding_side
+        if padding_side == "right":
+            batch[label_name] = [
+                list(label) + [self.label_pad_token_id] * (sequence_length - len(label)) for label in labels
+            ]
+        else:
+            batch[label_name] = [
+                [self.label_pad_token_id] * (sequence_length - len(label)) + list(label) for label in labels
+            ]
+
+        # Corrected part: handle dtypes properly
+        final_batch = {}
+        for k, v in batch.items():
+            if k == label_name:
+                final_batch[k] = torch.tensor(v, dtype=torch.float32)
+            else:
+                final_batch[k] = torch.tensor(v, dtype=torch.int64)
+        return final_batch
 
 
 class RegressionPRMTrainer(Trainer):
@@ -126,7 +171,7 @@ class RegressionPRMTrainer(Trainer):
                 raise ValueError(
                     "A tokenizer must be specified when using the default DataCollatorForTokenClassification"
                 )
-            data_collator = DataCollatorForTokenClassification(
+            data_collator = DataCollatorForRegression(
                 tokenizer, 
                 padding=True,
                 pad_to_multiple_of=8,
