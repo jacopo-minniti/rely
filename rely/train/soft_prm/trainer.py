@@ -43,9 +43,6 @@ def compute_regression_metrics(eval_pred: EvalPrediction, mask_zeros: bool = Fal
     active_labels = labels[labels != -100]
 
     if mask_zeros:
-        print("\n--- PRE-MASK DEBUGGING ---")
-        print(f"Unique labels before masking: {np.unique(active_labels)}")
-        print("--------------------------\n")
         mask = active_labels >= 0.001
         active_predictions = active_predictions[mask]
         active_labels = active_labels[mask]
@@ -53,22 +50,6 @@ def compute_regression_metrics(eval_pred: EvalPrediction, mask_zeros: bool = Fal
     active_labels_count = len(active_labels)
     if active_labels_count == 0:
         return {"r2": 0.0, "mse": 0.0, "active_labels_count": 0}
-
-    # --- Debugging Prints ---
-    print("\n--- METRICS DEBUGGING ---")
-    print(f"Total active labels: {active_labels_count}")
-    print(f"Sample labels:      {active_labels[:20]}")
-    print(f"Sample predictions: {active_predictions[:20]}")
-    print(f"Label stats:      mean={np.mean(active_labels):.4f}, std={np.std(active_labels):.4f}, min={np.min(active_labels):.4f}, max={np.max(active_labels):.4f}")
-    print(f"Prediction stats: mean={np.mean(active_predictions):.4f}, std={np.std(active_predictions):.4f}, min={np.min(active_predictions):.4f}, max={np.max(active_predictions):.4f}")
-    
-    # Add histograms for distribution
-    label_hist, bin_edges = np.histogram(active_labels, bins=10, range=(0,1))
-    pred_hist, _ = np.histogram(active_predictions, bins=10, range=(0,1))
-    print(f"Label distribution (bins {np.round(bin_edges, 2)}): {label_hist}")
-    print(f"Pred. distribution (bins {np.round(bin_edges, 2)}): {pred_hist}")
-    print("-------------------------\\n")
-    # --- End Debugging Prints ---
 
     r2 = r2_score(active_labels, active_predictions)
     mse = mean_squared_error(active_labels, active_predictions)
@@ -217,6 +198,46 @@ class RegressionPRMTrainer(Trainer):
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
+
+    def training_step(self, model: nn.Module, inputs: dict[str, Union[torch.Tensor, "Any"]]) -> torch.Tensor:
+        # Default training step behavior to get the loss
+        loss = super().training_step(model, inputs)
+
+        # Log every `logging_steps`
+        if self.state.global_step > 0 and self.state.global_step % self.args.logging_steps == 0:
+            # Perform a forward pass in eval mode to get logits
+            model.eval()
+            with torch.no_grad():
+                outputs = model(**inputs)
+                logits = outputs.logits
+                labels = inputs["labels"]
+
+                # Filter out ignored indices
+                active_logits = logits[labels != -100]
+                active_labels = labels[labels != -100]
+
+                # Apply mask_zeros if enabled on the model
+                if hasattr(model, "mask_zeros") and model.mask_zeros:
+                    mask = active_labels >= 0.001
+                    active_logits = active_logits[mask]
+                    active_labels = active_labels[mask]
+
+                if active_labels.numel() > 0:
+                    # Move to CPU and convert to numpy for printing
+                    active_labels_np = active_labels.detach().cpu().numpy()
+                    active_logits_np = active_logits.detach().cpu().numpy()
+
+                    print("\n--- TRAINING STEP DEBUG ---")
+                    print(f"Step: {self.state.global_step}")
+                    print(f"Sample labels:      {active_labels_np[:15]}")
+                    print(f"Sample predictions: {active_logits_np[:15]}")
+                    print(f"Label stats:      mean={np.mean(active_labels_np):.4f}, std={np.std(active_labels_np):.4f}")
+                    print(f"Prediction stats: mean={np.mean(active_logits_np):.4f}, std={np.std(active_logits_np):.4f}")
+                    print("---------------------------\n")
+            # Switch back to train mode
+            model.train()
+
+        return loss
 
     @staticmethod
     def tokenize_row(
