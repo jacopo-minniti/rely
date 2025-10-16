@@ -3,7 +3,7 @@ import textwrap
 from functools import partial
 from itertools import chain
 from pathlib import Path
-from typing import Callable, Optional, Union
+from typing import Any, Callable, Optional, Union
 import numpy as np
 
 import torch
@@ -199,7 +199,7 @@ class RegressionPRMTrainer(Trainer):
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
 
-    def training_step(self, model: nn.Module, inputs: dict[str, Union[torch.Tensor, "Any"]]) -> torch.Tensor:
+    def training_step(self, model: nn.Module, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch: int) -> torch.Tensor:
         # Default training step behavior to get the loss
         loss = super().training_step(model, inputs)
 
