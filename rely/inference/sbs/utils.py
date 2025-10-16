@@ -10,7 +10,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForTokenClassification, AutoModel
 
 from rely.utils import prompt_pattern
-from rely.train.soft_prm.model import SoftClassificationPRMModel
+from rely.train.soft_prm.model import RegressionPRMModel
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ def _uncertainty_model_server(args: argparse.Namespace, task_queue: Queue, resul
     # )
     
     # NEW custom SoftClassificationPRMModel loading
-    model = SoftClassificationPRMModel.from_pretrained(
+    model = RegressionPRMModel.from_pretrained(
         args.uncertainty_model_path, dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
     )
     

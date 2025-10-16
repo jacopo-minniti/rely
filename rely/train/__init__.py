@@ -1,15 +1,15 @@
 from .soft_prm.model import (
-    SoftClassificationPRMModel,
+    RegressionPRMModel,
 )
 
 from .soft_prm.trainer import (
-    SoftClassificationPRMTrainer,
+    RegressionPRMTrainer,
 )
 
 __all__ = [
     # SoftPRM Model
-    "SoftClassificationPRMModel",
-    "SoftClassificationPRMTrainer",
+    "RegressionPRMModel",
+    "RegressionPRMTrainer",
 ]
 
 __version__ = "1.0.0" 
