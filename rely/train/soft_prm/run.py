@@ -34,7 +34,6 @@ def main():
     print("Loading dataset...")
     train_dataset = load_dataset("jacopo-minniti/MATH-PUM-qwen2.5-1.5B", "variance", split="train")
     eval_dataset = load_dataset("jacopo-minniti/MATH-PUM-qwen2.5-1.5B", "variance", split="test")
-    print(f"Original data samples\n{eval_dataset[0]['labels']}\n{eval_dataset[1]['labels']}")
 
     # --- 3. Configure Training Arguments ---
     print("Configuring training arguments...")
@@ -50,8 +49,8 @@ def main():
         warmup_ratio=0.15,
         weight_decay=0.1,
         optim="adamw_torch",  # Changed from adamw_torch_fused to avoid compilation issues
-        per_device_train_batch_size=4,
-        per_device_eval_batch_size=4, 
+        per_device_train_batch_size=2,
+        per_device_eval_batch_size=2, 
         gradient_accumulation_steps=4,
         gradient_checkpointing=False,    # Enable gradient checkpointing for memory savings
         bf16=True,
@@ -75,7 +74,7 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
-        mask_zeros=True,
+        mask_zeros=False,
     )
 
     # --- 5. Start Training ---
