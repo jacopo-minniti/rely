@@ -61,6 +61,7 @@ class RegressionPRMModel(PreTrainedModel):
     def resize_token_embeddings(self, new_num_tokens: int):
         if self.transformer:
             self.transformer.resize_token_embeddings(new_num_tokens)
+            self.config.vocab_size = self.transformer.config.vocab_size
     
     def set_mask_zeros(self, mask_zeros: bool):
         """Set whether to mask labels with values close to zero."""
