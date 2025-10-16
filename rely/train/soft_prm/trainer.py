@@ -56,10 +56,17 @@ def compute_regression_metrics(eval_pred: EvalPrediction, mask_zeros: bool = Fal
 
     # --- Debugging Prints ---
     print("\n--- METRICS DEBUGGING ---")
-    print(f"Sample labels: {active_labels[:10]}")
-    print(f"Sample predictions: {active_predictions[:10]}")
-    print(f"Label mean: {np.mean(active_labels):.4f}, std: {np.std(active_labels):.4f}")
-    print(f"Prediction mean: {np.mean(active_predictions):.4f}, std: {np.std(active_predictions):.4f}")
+    print(f"Total active labels: {active_labels_count}")
+    print(f"Sample labels:      {active_labels[:20]}")
+    print(f"Sample predictions: {active_predictions[:20]}")
+    print(f"Label stats:      mean={np.mean(active_labels):.4f}, std={np.std(active_labels):.4f}, min={np.min(active_labels):.4f}, max={np.max(active_labels):.4f}")
+    print(f"Prediction stats: mean={np.mean(active_predictions):.4f}, std={np.std(active_predictions):.4f}, min={np.min(active_predictions):.4f}, max={np.max(active_predictions):.4f}")
+    
+    # Add histograms for distribution
+    label_hist, bin_edges = np.histogram(active_labels, bins=10, range=(0,1))
+    pred_hist, _ = np.histogram(active_predictions, bins=10, range=(0,1))
+    print(f"Label distribution (bins {np.round(bin_edges, 2)}): {label_hist}")
+    print(f"Pred. distribution (bins {np.round(bin_edges, 2)}): {pred_hist}")
     print("-------------------------\\n")
     # --- End Debugging Prints ---
 
