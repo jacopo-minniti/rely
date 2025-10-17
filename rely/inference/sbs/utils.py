@@ -228,7 +228,7 @@ def _value_model_server(args: argparse.Namespace, task_queue: Queue, result_queu
         for i in range(0, len(conversation_strs), batch_size):
             batch_conversations = conversation_strs[i:i + batch_size]
             try:
-                inputs = tokenizer(batch_conversations, return_tensors="pt", padding=True, truncation=True, max_length=7000).to(value_device)
+                inputs = tokenizer(batch_conversations, return_tensors="pt", padding=True, truncation=True, max_length=4096).to(value_device)
                 base_model_output = model.model(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask, use_cache=False)
                 logits = model.score(base_model_output.last_hidden_state)
                 

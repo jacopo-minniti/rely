@@ -13,7 +13,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForTokenClassification
 
 from rely.utils import normalize_answer, MATH_SYSTEM_PROMPT, prompt_pattern
-from rely.train.soft_prm.model import SoftClassificationPRMModel
+from rely.train.soft_prm.model import RegressionPRMModel
 
 # --- PUM Model Loading and Uncertainty Calculation ---
 
@@ -28,7 +28,7 @@ def load_pum_model(model_path):
     #     model_path, dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
     # )
     # SOFT PRM
-    model = SoftClassificationPRMModel.from_pretrained(
+    model = RegressionPRMModel.from_pretrained(
         model_path, dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
     )
     model = model.to(dtype=torch.bfloat16)
