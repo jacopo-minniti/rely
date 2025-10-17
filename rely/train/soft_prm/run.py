@@ -32,14 +32,14 @@ def main():
 
     # --- 2. Load Dataset ---
     print("Loading dataset...")
-    train_dataset = load_dataset("jacopo-minniti/MATH-PUM-qwen2.5-1.5B", "cwp", split="train")
-    eval_dataset = load_dataset("jacopo-minniti/MATH-PUM-qwen2.5-1.5B", "cwp", split="test")
+    train_dataset = load_dataset("jacopo-minniti/MATH-PUM-qwen2.5-1.5B", "variance", split="train")
+    eval_dataset = load_dataset("jacopo-minniti/MATH-PUM-qwen2.5-1.5B", "variance", split="test")
 
     # --- 3. Configure Training Arguments ---
     print("Configuring training arguments...")
     training_args = PRMConfig(
-        output_dir="./.cache/cwp-regression-1.5B",
-        hub_model_id="jacopo-minniti/Qwen2.5-Math-1.5B-PUM-cwp",
+        output_dir="./.cache/variance-regression-masked-1.5B",
+        hub_model_id="jacopo-minniti/Qwen2.5-Math-1.5B-PUM-variance",
         max_length=4096,
         train_on_last_step_only=False,
         step_separator=step_separator_token,
@@ -74,7 +74,7 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
-        mask_zeros=False,
+        mask_zeros=True,
     )
 
     # --- 5. Start Training ---

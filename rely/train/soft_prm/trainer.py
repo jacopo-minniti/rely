@@ -177,6 +177,10 @@ class RegressionPRMTrainer(Trainer):
                 pad_to_multiple_of=8,
                 return_tensors="pt"
             )
+        
+        if hasattr(model, "set_mask_zeros"):
+            model.set_mask_zeros(mask_zeros)
+            print("SET MASK!")
 
         if "input_ids" not in train_dataset.column_names:
             with PartialState().main_process_first():
@@ -235,10 +239,6 @@ class RegressionPRMTrainer(Trainer):
 
         print("AFTER PREPROCESSING")
         print(f"{eval_dataset[0]['labels']}\n{eval_dataset[1]['labels']}")
-
-        # Set the mask_zeros on the model if it supports it
-        if hasattr(self.model, "set_mask_zeros"):
-            self.model.set_mask_zeros(mask_zeros)
 
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):

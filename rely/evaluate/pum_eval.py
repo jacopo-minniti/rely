@@ -10,8 +10,7 @@ from tqdm import tqdm
 import argparse
 from pathlib import Path
 
-from rely.train import SoftClassificationPRMModel
-from rely.train import SoftClassificationPRMTrainer
+from rely.train import RegressionPRMModel, RegressionPRMTrainer
 
 
 def load_model_and_tokenizer(checkpoint_path: str):
@@ -20,7 +19,7 @@ def load_model_and_tokenizer(checkpoint_path: str):
     
     # Load tokenizer from checkpoint
     tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
-    model = SoftClassificationPRMModel.from_pretrained(checkpoint_path, dtype=torch.bfloat16)
+    model = RegressionPRMModel.from_pretrained(checkpoint_path, dtype=torch.bfloat16)
     
     return model, tokenizer
 
@@ -28,7 +27,7 @@ def load_model_and_tokenizer(checkpoint_path: str):
 def tokenize_example(example, tokenizer, step_separator, max_length):
     """Tokenize a single example in the same format as training."""
     # Get the tokenization function from trainer
-    tokenized = SoftClassificationPRMTrainer.tokenize_row(
+    tokenized = RegressionPRMTrainer.tokenize_row(
         features=example,
         tokenizer=tokenizer,
         step_separator=step_separator,
