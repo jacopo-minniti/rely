@@ -20,6 +20,7 @@ def load_model_and_tokenizer(checkpoint_path: str):
     # Load tokenizer from checkpoint
     tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
     model = RegressionPRMModel.from_pretrained(checkpoint_path, dtype=torch.bfloat16)
+    model = model.to(torch.bfloat16)
     
     return model, tokenizer
 
