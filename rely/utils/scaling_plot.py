@@ -111,7 +111,7 @@ ax.legend(fontsize=11, loc='upper left')
 
 # Adjust layout and save
 plt.tight_layout()
-plt.savefig(f"sbs-pareto-comparison-{STRATEGY}.png", dpi=300, bbox_inches='tight')
+plt.savefig(f"assets/figures/sbs-pareto-comparison-{STRATEGY}.png", dpi=300, bbox_inches='tight')
 plt.show()
 
 # --- 6. Print Pareto Analysis ---
