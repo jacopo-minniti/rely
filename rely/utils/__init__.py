@@ -17,7 +17,7 @@ from .load import (
 from .merge import merge
 
 # Import from show.py
-from .show import (
+from .dataset_summary import (
     show_fields,
     show_first_n,
     show_summary
