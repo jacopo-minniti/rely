@@ -41,6 +41,37 @@ def tokenize_example(example, tokenizer, step_separator, max_length):
     return tokenized
 
 
+def evaluate_first_positive_detection(predictions, labels):
+    """
+    Evaluate if the model correctly identifies the first positive (>0.5) step.
+    
+    Returns:
+        int: 1 if correct, 0 if incorrect, -1 if no positive labels (skip this example)
+    """
+    # Find first positive label (>0.5)
+    positive_labels = labels > 0.5
+    
+    if not positive_labels.any():
+        # No positive labels in this chain - model should never predict positive
+        # Return -1 to indicate we should skip this example in percentage calculation
+        return -1 if not (predictions > 0.5).any() else 0
+    
+    # Find the index of the first positive label
+    first_positive_idx = np.argmax(positive_labels)
+    
+    # Check if model's first positive prediction matches
+    positive_predictions = predictions > 0.5
+    
+    if not positive_predictions.any():
+        # Model never predicted positive, but there was a positive label
+        return 0
+    
+    first_positive_pred_idx = np.argmax(positive_predictions)
+    
+    # Return 1 if indices match, 0 otherwise
+    return 1 if first_positive_idx == first_positive_pred_idx else 0
+
+
 def evaluate_model(model, tokenizer, dataset, device, max_length, step_separator, max_examples=None):
     """Evaluate the model on the dataset and return predictions and labels."""
     model.eval()
@@ -48,6 +79,7 @@ def evaluate_model(model, tokenizer, dataset, device, max_length, step_separator
     
     all_predictions = []
     all_labels = []
+    first_positive_results = []  # Track first positive detection per example
     
     # Limit examples if specified
     if max_examples is not None:
@@ -89,12 +121,16 @@ def evaluate_model(model, tokenizer, dataset, device, max_length, step_separator
                     
                     all_predictions.extend(valid_predictions.tolist())
                     all_labels.extend(valid_labels.tolist())
+                    
+                    # Track first positive detection for this example
+                    first_positive_correct = evaluate_first_positive_detection(valid_predictions, valid_labels)
+                    first_positive_results.append(first_positive_correct)
                 
             except Exception as e:
                 print(f"Error processing example {i}: {e}")
                 continue
     
-    return np.array(all_predictions), np.array(all_labels)
+    return np.array(all_predictions), np.array(all_labels), first_positive_results
 
 
 def main():
@@ -164,7 +200,7 @@ def main():
     print(f"Test dataset size: {len(test_dataset)}")
     
     # Evaluate model
-    predictions, labels = evaluate_model(
+    predictions, labels, first_positive_results = evaluate_model(
         model=model,
         tokenizer=tokenizer, 
         dataset=test_dataset,
@@ -206,6 +242,19 @@ def main():
         print("\n--- Hard Metrics (threshold @ 0.5) ---")
         print(f"Accuracy: {accuracy:.4f}")
         print(f"F1 Score: {f1:.4f}")
+        
+        # First positive detection metric
+        if first_positive_results:
+            # Filter out -1 values (chains with no positive labels)
+            valid_first_positive = [x for x in first_positive_results if x != -1]
+            if valid_first_positive:
+                first_positive_accuracy = np.mean(valid_first_positive)
+                print(f"\n--- First Positive Detection ---")
+                print(f"First Positive Accuracy: {first_positive_accuracy:.4f} ({len(valid_first_positive)}/{len(first_positive_results)} chains evaluated)")
+            else:
+                print(f"\n--- First Positive Detection ---")
+                print("No chains with positive labels found")
+        
         print("="*60)
         
         # Additional statistics

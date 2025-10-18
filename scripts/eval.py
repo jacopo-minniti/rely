@@ -27,22 +27,50 @@ def process_json_file(path):
         # Get total tokens
         total_tokens = int(data.get('total_tokens', 0))
 
-        # --- 1. Majority Vote Calculation (Original Logic) ---
-        majority_vote = data.get('majority_vote')
-        accuracy = data.get('accuracy')
-        
-        # Skip entries where accuracy or majority_vote is "N/A"
-        if accuracy == "N/A" or majority_vote == "N/A":
-            return None, False, False, total_tokens
-            
+        # --- 1. Fair Majority Vote Calculation ---
         is_majority_correct = False
-        if ground_truth is not None and majority_vote is not None:
-            # Skip if majority_vote is empty string
-            if str(majority_vote).strip():
-                normalized_gt = normalize_answer(str(ground_truth))
-                normalized_mv = normalize_answer(str(majority_vote))
-                if (normalized_gt == normalized_mv or ground_truth == majority_vote) and normalized_gt != "":
-                    is_majority_correct = True
+        
+        # Calculate majority vote from solutions directly
+        solutions = data.get('solutions')
+        if isinstance(solutions, list) and solutions and ground_truth is not None:
+            # Extract all answers from solutions
+            answers = []
+            for sol in solutions:
+                if isinstance(sol, dict):
+                    # Accept either 'answer' or 'final_answer' as the answer key
+                    answer = None
+                    if 'answer' in sol:
+                        answer = sol.get('answer')
+                    elif 'final_answer' in sol:
+                        answer = sol.get('final_answer')
+                    
+                    # Only consider non-empty answers
+                    if answer is not None and str(answer).strip():
+                        answers.append(str(answer).strip())
+            
+            if answers:
+                # Count occurrences of each unique answer
+                answer_counts = {}
+                for answer in answers:
+                    normalized_answer = normalize_answer(answer)
+                    answer_counts[normalized_answer] = answer_counts.get(normalized_answer, 0) + 1
+                
+                # Find the maximum count
+                max_count = max(answer_counts.values())
+                
+                # Get all answers with maximum count
+                most_frequent_answers = [ans for ans, count in answer_counts.items() if count == max_count]
+                
+                # If there's a clear majority (no tie), check if it's correct
+                if len(most_frequent_answers) == 1:
+                    majority_answer = most_frequent_answers[0]
+                    normalized_gt = normalize_answer(str(ground_truth))
+                    if majority_answer == normalized_gt and normalized_gt != "":
+                        is_majority_correct = True
+                # If there's a tie, count as incorrect (is_majority_correct remains False)
+        else:
+            # If no valid solutions, skip this sample
+            return None, False, False, total_tokens
 
         # --- 2. Best of N Calculation ---
         best_of_n_applicable = False
@@ -120,7 +148,7 @@ if __name__ == '__main__':
     for path in sorted(json_files):
         is_majority_correct, best_of_n_applicable, is_best_of_n_correct, total_tokens = process_json_file(path)
         
-        # Skip entries that should not be considered (accuracy or majority_vote is "N/A")
+        # Skip entries that should not be considered (no valid solutions)
         if is_majority_correct is None:
             continue
             
@@ -143,7 +171,6 @@ if __name__ == '__main__':
     majority_percent_correct = (majority_correct_count / total_files) if total_files > 0 else 0.0
     
     # Best-of-N is only applicable when solutions have meaningful value scores
-    # For self-consistency, this will be 0 since all solutions have value=1.0
     if best_of_n_applicable_count > 0:
         best_of_n_percent_correct = (best_of_n_correct_count / best_of_n_applicable_count)
     else:

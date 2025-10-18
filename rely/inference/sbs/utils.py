@@ -166,9 +166,6 @@ def _uncertainty_model_server(args: argparse.Namespace, task_queue: Queue, resul
                             last_idx = torch.where(token_mask)[0][-1]
                             score = uncertainty_probs[last_idx].item()
                         
-                        ##### TEMPORARY: Inverse the uncertainty score so lowest scores become highest
-                        score = 1.0 - score
-                        
                         all_uncertainties.append(score)
 
                         del single_inputs, outputs
