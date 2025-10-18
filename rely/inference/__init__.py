@@ -22,7 +22,7 @@ from .budget_forcing import (
     save_budget_forcing_result
 )
 
-from .self_consistency import (
+from .majority_voting import (
     SelfConsistencyConfig,
     SelfConsistencyResult,
     SelfConsistencyInference,
