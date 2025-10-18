@@ -1,22 +1,18 @@
+# custom
 rely/train/runs
-test.py
-value-head-s1/
-data/
-other/
 unsloth_compiled_cache
-self_consistency_results/
-sbs_results/
-tests/
-prm-v1/
-prm-v2/
-last_run_prepared/
 wandb/
-outputs/
-uats_*/
-sbs_results_*/
 rely.egg-info
-results/
 models/
+test.py
+data/
+.cache/
+results/
+logs/
+jobs/
+
+
+
 
 *.pdf
 *.jsonl
